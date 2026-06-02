@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.transforms import blended_transform_factory
+from matplotlib.transforms import blended_transform_factory, offset_copy
+from matplotlib.ticker import LogLocator
 
 def _split_counts_str(h):
     if h in ('', 'init'):
@@ -10,7 +11,18 @@ def _split_counts_str(h):
     return (parts[0], parts[1] if len(parts) > 1 else '')
 
 
-def _add_group_brackets(ax, hs, line_y=-0.5, label_y=-0.55):
+def _add_group_brackets(ax, hs, line_offset_pts=None, label_offset_pts=None,
+                        char_drop_pts=5.0, padding_pts=22):
+    """Draw a labelled bracket beneath each contiguous run of histories
+    sharing the same first count-pair (their "top"). Anchored at a fixed
+    pixel offset below the axis rather than in axes-fraction, so the
+    position is stable across rows of different heights.
+
+    When line_offset_pts is None, each group's offset is sized to the
+    longest leaf label in that group (drop = max_chars * char_drop_pts +
+    padding_pts), so short-labelled groups sit close to the axis while
+    long-labelled groups get pushed further down.
+    """
     if not hs:
         return
     groups = []
@@ -22,13 +34,29 @@ def _add_group_brackets(ax, hs, line_y=-0.5, label_y=-0.55):
             groups.append((cur_top, cur_start, i - 1))
             cur_top, cur_start = top_i, i
     groups.append((cur_top, cur_start, len(hs) - 1))
-    trans = ax.get_xaxis_transform()
+    base = ax.get_xaxis_transform()
+    ## ax.plot updates data limits even via a blended transform, which breaks
+    ## log-scale axes when y is negative. Save/restore ylim to neutralise.
+    ylim = ax.get_ylim()
     for top, s, e in groups:
-        ax.plot([s - 0.35, e + 0.35], [line_y, line_y],
-                color='k', lw=1, transform=trans, clip_on=False)
-        ax.text((s + e) / 2, label_y, top + '-',
-                ha='center', va='top', transform=trans, rotation=45,
+        if line_offset_pts is None:
+            grp_max = max(len(_split_counts_str(hs[k])[1])
+                          for k in range(s, e + 1))
+            drop = grp_max * char_drop_pts + padding_pts
+            l_off = -drop
+            lbl_off = -(drop + 3)
+        else:
+            l_off = line_offset_pts
+            lbl_off = (label_offset_pts if label_offset_pts is not None
+                       else line_offset_pts - 3)
+        line_trans = offset_copy(base, fig=ax.figure, y=l_off, units='points')
+        label_trans = offset_copy(base, fig=ax.figure, y=lbl_off, units='points')
+        ax.plot([s - 0.35, e + 0.35], [0, 0],
+                color='k', lw=1, transform=line_trans, clip_on=False)
+        ax.text((s + e) / 2, 0, top + '-',
+                ha='center', va='top', transform=label_trans, rotation=45,
                 fontsize=9, fontweight='bold')
+    ax.set_ylim(ylim)
 
 
 def plot_history_panels(
@@ -262,3 +290,443 @@ def plot_history_panels(
         fig.suptitle(suptitle, fontsize=11)
     plt.tight_layout()
     return fig, axes
+
+
+def plot_tipping_points(
+    tip_df,
+    n_arms,
+    n_plot_trials=None,
+    skip_t0=True,
+    group_brackets=True,
+    arm_colors=None,
+    log_scale=True,
+    y_range=None,
+    figsize=(14, 9),
+    suptitle=None,
+    bar_width=0.85,
+    legend=True,
+    last_trial_own_row=True,
+):
+    """Plot per-(canonical history, arm) preferred-ell intervals from
+    `enumerate_tipping_intervals`. Columns are trial indices t; within each
+    column the x-axis is the canonical history (lex-sorted, matching
+    `plot_history_panels`), and the y-axis is ell. Each row in `tip_df` is
+    drawn as a coloured vertical bar from `ell_lo` to `ell_hi`, coloured by
+    `arm`. When `last_trial_own_row=True` the largest-t panel gets its own
+    full-width row beneath the rest so its histories aren't squeezed.
+    """
+
+    df = tip_df.copy()
+    df = df[df['history_str'].astype(str) != '']
+
+    max_trials = int(df['t'].max()) + 1
+    n_plot_trials = min(n_plot_trials, max_trials) if n_plot_trials is not None else max_trials
+
+    ts_all = sorted(int(t) for t in df['t'].unique() if int(t) < n_plot_trials)
+    if skip_t0:
+        ts_all = [t for t in ts_all if t > 0]
+
+    hist_by_t = {}
+    x_local = {}
+    for t in ts_all:
+        hs = sorted(df[df['t'] == t]['history_str'].unique().tolist())
+        hist_by_t[t] = hs
+        for i, h in enumerate(hs):
+            x_local[(t, h)] = i
+
+    arms_in_df = sorted({int(a) for a in df['arm'].unique()})
+    if arm_colors is None:
+        default_cycle = ['tab:blue', 'tab:orange', 'tab:red',
+                         'tab:green', 'tab:purple', 'tab:brown']
+        arm_colors = {a: default_cycle[a % len(default_cycle)] for a in range(n_arms)}
+        arm_colors[n_arms] = 'tab:grey'
+
+    ## fixed slot layout: every history reserves one sub-column per arm that
+    ## ever appears, so arm k sits at the same horizontal offset everywhere.
+    n_slots = max(1, len(arms_in_df))
+    slot_w = bar_width / n_slots
+    arm_slot = {a: i for i, a in enumerate(arms_in_df)}
+
+    split_rows = last_trial_own_row and len(ts_all) >= 2
+    if split_rows:
+        top_ts = ts_all[:-1]
+        bot_t = ts_all[-1]
+    else:
+        top_ts = ts_all
+        bot_t = None
+
+    n_top = max(1, len(top_ts))
+    top_widths = [max(1, len(hist_by_t.get(t, []))) for t in top_ts] or [1]
+
+    fig = plt.figure(figsize=figsize)
+    if split_rows:
+        gs = fig.add_gridspec(
+            2, n_top, width_ratios=top_widths,
+            height_ratios=[1, 1.1], hspace=1.4,
+        )
+        ax0 = fig.add_subplot(gs[0, 0])
+        axes_top = [ax0] + [fig.add_subplot(gs[0, j], sharey=ax0)
+                            for j in range(1, n_top)]
+        ax_bot = fig.add_subplot(gs[1, :], sharey=ax0)
+        plotted = list(zip(top_ts, axes_top)) + [(bot_t, ax_bot)]
+        all_axes = axes_top + [ax_bot]
+    else:
+        gs = fig.add_gridspec(1, n_top, width_ratios=top_widths)
+        ax0 = fig.add_subplot(gs[0, 0])
+        axes_top = [ax0] + [fig.add_subplot(gs[0, j], sharey=ax0)
+                            for j in range(1, n_top)]
+        plotted = list(zip(top_ts, axes_top))
+        all_axes = axes_top
+
+    for t, ax in plotted:
+        hs = hist_by_t[t]
+        sub_t = df[df['t'] == t]
+        for _, row in sub_t.iterrows():
+            h = row['history_str']
+            if (t, h) not in x_local:
+                continue
+            x = x_local[(t, h)]
+            arm = int(row['arm'])
+            lo = float(row['ell_lo'])
+            hi = float(row['ell_hi'])
+            color = arm_colors.get(arm, 'tab:grey')
+            slot = arm_slot.get(arm, 0)
+            x_pos = x + (slot - (n_slots - 1) / 2) * slot_w
+            ax.bar(
+                x_pos, hi - lo, bottom=lo, width=slot_w * 0.95,
+                color=color, alpha=0.9,
+                edgecolor='k', linewidth=0.4,
+            )
+
+        if log_scale:
+            ax.set_yscale('log')
+        if y_range is not None:
+            ax.set_ylim(y_range)
+        ax.axhline(1.0, color='k', linewidth=1.3, alpha=0.7, zorder=1.5)
+
+        ax.set_title(f't = {t}')
+        ax.set_xticks(list(range(len(hs))))
+        leaf_labels = [_split_counts_str(h)[1] for h in hs]
+        ax.set_xticklabels(leaf_labels, rotation=80, ha='right', fontsize=9)
+        ax.grid(alpha=0.2, which='both', axis='y')
+        if group_brackets:
+            _add_group_brackets(ax, hs)
+
+    axes_top[0].set_ylabel(r'$\ell$')
+    if split_rows:
+        ax_bot.set_ylabel(r'$\ell$')
+
+    if legend:
+        handles, labels = [], []
+        for a in arms_in_df:
+            lbl = 'terminate' if a == n_arms else f'arm {a}'
+            handles.append(plt.Rectangle((0, 0), 1, 1,
+                                         color=arm_colors.get(a, 'tab:grey')))
+            labels.append(lbl)
+        fig.legend(handles, labels, loc='upper right',
+                   ncol=len(labels), framealpha=0.9)
+
+    if suptitle is not None:
+        fig.suptitle(suptitle, fontsize=11, y=1.0)
+    plt.tight_layout()
+    return fig, all_axes
+
+
+def plot_curves(
+    df_curves,
+    n_arms,
+    df_tip=None,
+    termination_arm=True,
+    y='Q',
+    arm_colors=None,
+    log_x=True,
+    ncols=4,
+    panel_size=(3.2, 2.6),
+    eps_tie=1e-8,
+    suptitle=None,
+    save = True
+):
+    """Plot Q-value (or softmax-prob) curves across ell for each (history, t)
+    in `df_curves` (output of `enumerate_curves`). Returns one figure per
+    trial t; each figure has a grid of panels for that trial's histories.
+
+    `y='Q'` plots Q_a vs ell; `y='p'` plots softmax choice probabilities.
+
+    Each panel gets a short strip beneath the curve plot showing which
+    action(s) is the argmax across ell. When `df_tip` is provided, the strip
+    is built from `df_tip`'s per-arm preferred intervals — horizontal bars
+    coloured by arm and stacked by arm slot. When `df_tip` is not provided,
+    the strip is derived directly from the curves in `df_curves`: at each
+    sampled ell, plot a `|` marker at the arm slot of every action whose Q
+    is within `eps_tie` of the max for that ell. Match `eps_tie` to the
+    value used when building `df_tip` to make the two strips agree.
+
+    Returns a dict mapping t -> (fig, main_axes) where main_axes is a 2D
+    numpy array of main axes for that trial's grid.
+    """
+    if 'history_str' not in df_curves.columns or len(df_curves) == 0:
+        raise ValueError("df_curves is empty or missing 'history_str'")
+
+    panels_by_t = {}
+    for t, history_str in (df_curves[['t', 'history_str']]
+                           .drop_duplicates()
+                           .sort_values(['t', 'history_str'])
+                           .itertuples(index=False, name=None)):
+        panels_by_t.setdefault(int(t), []).append(history_str)
+
+    ts = sorted(panels_by_t.keys())
+
+    if arm_colors is None:
+        default_cycle = ['tab:blue', 'tab:orange', 'tab:red',
+                         'tab:green', 'tab:purple', 'tab:brown']
+        arm_colors = {a: default_cycle[a % len(default_cycle)] for a in range(n_arms)}
+        if termination_arm:
+            arm_colors[n_arms] = 'tab:grey'
+
+    ell_lo = df_curves['ell'].min()
+    ell_hi = df_curves['ell'].max()
+
+    panel_h = panel_size[1] * 1.25
+    figs_by_t = {}
+
+    for t in ts:
+        histories = panels_by_t[t]
+        n_p = len(histories)
+        nr = (n_p + ncols - 1) // ncols
+        figsize = (panel_size[0] * ncols, nr * panel_h + 0.6)
+
+        fig = plt.figure(figsize=figsize, constrained_layout=False)
+        outer = fig.add_gridspec(nr, ncols, hspace=0.55, wspace=0.3)
+        main_axes = np.empty((nr, ncols), dtype=object)
+        strip_axes = np.empty((nr, ncols), dtype=object)
+        for i in range(nr):
+            for j in range(ncols):
+                inner = outer[i, j].subgridspec(
+                    2, 1, height_ratios=[4, 1.2], hspace=0.08)
+                ax_main = fig.add_subplot(inner[0])
+                ax_strip = fig.add_subplot(inner[1], sharex=ax_main)
+                main_axes[i, j] = ax_main
+                strip_axes[i, j] = ax_strip
+
+        ax_flat = main_axes.flat
+        strip_flat = strip_axes.flat
+
+        for i, history_str in enumerate(histories):
+            ax = ax_flat[i]
+            sub = (df_curves[(df_curves['history_str'] == history_str)
+                           & (df_curves['t'] == t)]
+                   .sort_values('ell'))
+            for a in range(n_arms):
+                ax.plot(sub['ell'], sub[f'{y}_{a}'], '-',
+                        color=arm_colors[a], label=f'arm {a}', alpha=0.9)
+            if termination_arm and f'{y}_terminate' in sub.columns:
+                ax.plot(sub['ell'], sub[f'{y}_terminate'], '-',
+                        color=arm_colors[n_arms], label='terminate', alpha=0.9)
+            if log_x:
+                ax.set_xscale('log')
+                decades = np.log10(ell_hi) - np.log10(ell_lo)
+                log_ticks = np.logspace(np.ceil(np.log10(ell_lo)), np.floor(np.log10(ell_hi)), num=int(decades) + 1)
+                ax.set_xticks(log_ticks)
+            ax.set_title(history_str, fontsize=8)
+            ax.grid(alpha=0.25, which='both')
+            if i % ncols == 0:
+                ax.set_ylabel(y)
+
+            chance = 1 / (n_arms + (1 if termination_arm else 0))
+            if y == 'p':
+                ax.axhline(chance, color='k', 
+                           linestyle='--', 
+                           linewidth=1, 
+                        #    alpha=0.7,
+                        zorder=1.5)
+            
+            ## let's also plot info_p_a and info_p_terminate as coloured dotted lines
+            if 'info_p_0' in sub.columns:
+                for a in range(n_arms):
+                    ax.plot(sub['ell'], sub[f'info_p_{a}'], ':',
+                            color=arm_colors[a], label=f'Info-seeker: arm {a}', 
+                            linewidth=2,
+                            # alpha=0.7
+                            )
+                if termination_arm and 'info_p_terminate' in sub.columns:
+                    ax.plot(sub['ell'], sub['info_p_terminate'], ':',
+                            color=arm_colors[n_arms], label='Info-seeker: terminate', 
+                            linewidth=2,
+                            # alpha=0.7
+                            )
+
+            strip_ax = strip_flat[i]
+            arms_present = []
+            if df_tip is not None:
+                sub_tip = df_tip[(df_tip['history_str'] == history_str)
+                                 & (df_tip['t'] == t)]
+                arms_present = sorted({int(a) for a in sub_tip['arm'].unique()})
+                for slot, arm in enumerate(arms_present):
+                    arm_rows = sub_tip[sub_tip['arm'] == arm]
+                    for _, r in arm_rows.iterrows():
+                        strip_ax.barh(
+                            slot, r['ell_hi'] - r['ell_lo'], left=r['ell_lo'],
+                            height=0.8, color=arm_colors.get(arm, 'tab:grey'),
+                            alpha=0.9, edgecolor='k', linewidth=0.4,
+                        )
+            else:
+                arm_labels = list(range(n_arms))
+                Q_cols = [f'Q_{a}' for a in range(n_arms)]
+                p_cols = [f'p_{a}' for a in range(n_arms)]
+                if termination_arm and 'Q_terminate' in sub.columns:
+                    Q_cols.append('Q_terminate')
+                    p_cols.append('p_terminate')
+                    arm_labels.append(n_arms)
+                Q_matrix = sub[Q_cols].values
+                p_matrix = sub[p_cols].values
+                ells_arr = sub['ell'].values
+                # max_per_row = Q_matrix.max(axis=1, keepdims=True)
+                max_per_row = p_matrix.max(axis=1, keepdims=True)
+                # co_argmax = np.abs(Q_matrix - max_per_row) < eps_tie
+                co_argmax = np.abs(p_matrix - max_per_row) < eps_tie
+                arms_present = [arm_labels[k] for k in range(len(arm_labels))
+                                if co_argmax[:, k].any()]
+                for slot, arm in enumerate(arms_present):
+                    k = arm_labels.index(arm)
+                    ells_for_arm = ells_arr[co_argmax[:, k]]
+                    strip_ax.scatter(
+                        ells_for_arm, np.full(len(ells_for_arm), slot),
+                        color=arm_colors.get(arm, 'tab:grey'),
+                        marker='|', s=80, linewidths=1.2,
+                    )
+
+            if arms_present:
+                strip_ax.set_yticks(range(len(arms_present)))
+                strip_ax.set_yticklabels(
+                    ['T' if a == n_arms else str(a) for a in arms_present],
+                    fontsize=7)
+                strip_ax.set_ylim(-0.5, len(arms_present) - 0.5)
+            strip_ax.grid(alpha=0.2, axis='x', which='both')
+            ax.tick_params(labelbottom=False)
+            if i // ncols == nr - 1:
+                strip_ax.set_xlabel(r'$\ell$')
+
+        for j in range(n_p, nr * ncols):
+            ax_flat[j].set_visible(False)
+            strip_flat[j].set_visible(False)
+
+        handles, labels = main_axes.flat[0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc='upper right',
+                   ncol=len(labels), framealpha=0.9)
+        title = f't = {t+1}' if suptitle is None else f'{suptitle}  |  t = {t}'
+        fig.suptitle(title, fontsize=12, fontweight='bold')
+        figs_by_t[t] = (fig, main_axes)
+    
+
+    return figs_by_t
+
+
+def plot_heatmap(
+    df_curves,
+    max_n_cols=4,
+    cmap='RdBu',
+    panel_size=(3.0, 3.0),
+    suptitle=None,
+):
+    """Plot 2D heatmaps of p_0 - p_1 over (ell, alpha) grid for each (history, t).
+    Returns one figure per trial t; each figure has a grid of panels for that
+    trial's histories.
+
+    Expected input: df_curves output from enumerate_curves with both ell and alpha
+    columns (i.e., run with alpha_lo and alpha_hi set).
+
+    Returns a dict mapping t -> (fig, axes_array) where axes_array is a 2D numpy
+    array of axes for that trial's grid.
+    """
+    if 'history_str' not in df_curves.columns or len(df_curves) == 0:
+        raise ValueError("df_curves is empty or missing 'history_str'")
+    if 'alpha' not in df_curves.columns:
+        raise ValueError("df_curves missing 'alpha' column — run enumerate_curves with alpha_lo/alpha_hi")
+
+    panels_by_t = {}
+    for t, history_str in (df_curves[['t', 'history_str']]
+                           .drop_duplicates()
+                           .sort_values(['t', 'history_str'])
+                           .itertuples(index=False, name=None)):
+        panels_by_t.setdefault(int(t), []).append(history_str)
+
+    ts = sorted(panels_by_t.keys())
+
+    panel_h = panel_size[1]
+    figs_by_t = {}
+
+    for t in ts:
+        ncols = min(max_n_cols, len(panels_by_t[t]))
+        # Calculate per-trial vmin/vmax to normalize color scale across all histories in this trial
+        trial_diffs = (df_curves[df_curves['t'] == t]['p_0'] -
+                       df_curves[df_curves['t'] == t]['p_1']).values
+        vmax_abs = max(abs(np.nanmin(trial_diffs)), abs(np.nanmax(trial_diffs)))
+        ## if close to zero, set a minimum scale to avoid a flat colorbar
+        if vmax_abs < 1e-3:
+            vmax_abs = 1e-3
+        vmin = -vmax_abs
+        vmax = vmax_abs
+
+        histories = panels_by_t[t]
+        n_p = len(histories)
+        nr = (n_p + ncols - 1) // ncols
+        figsize = (panel_size[0] * ncols, nr * panel_h)
+
+        fig = plt.figure(figsize=figsize, constrained_layout=True)
+        outer = fig.add_gridspec(nr, ncols)
+        axes = np.empty((nr, ncols), dtype=object)
+        for i in range(nr):
+            for j in range(ncols):
+                ax = fig.add_subplot(outer[i, j])
+                axes[i, j] = ax
+
+        ax_flat = axes.flat
+
+        for i, history_str in enumerate(histories):
+            ax = ax_flat[i]
+            sub = (df_curves[(df_curves['history_str'] == history_str)
+                           & (df_curves['t'] == t)])
+
+            if len(sub) == 0:
+                ax.text(0.5, 0.5, 'no data', ha='center', va='center',
+                        transform=ax.transAxes, color='grey', fontsize=10)
+                ax.set_title(history_str, fontsize=8)
+                continue
+
+            pivot = sub.pivot_table(index='alpha', columns='ell',
+                                    values=['p_0', 'p_1'], aggfunc='first')
+            if pivot.empty or 'p_0' not in pivot.columns:
+                ax.text(0.5, 0.5, 'pivot error', ha='center', va='center',
+                        transform=ax.transAxes, color='grey', fontsize=10)
+                ax.set_title(history_str, fontsize=8)
+                continue
+
+            heat = (pivot['p_0'] - pivot['p_1']).values
+            ells = pivot['p_0'].columns.values
+            alphas = pivot['p_0'].index.values
+
+            ax.pcolormesh(ells, alphas, heat, cmap=cmap, vmin=vmin, vmax=vmax,
+                          shading='auto')
+            ax.set_xscale('log')
+            ax.set_title(history_str, fontsize=8)
+
+            if i % ncols == 0:
+                ax.set_ylabel('α')
+            if i // ncols == nr - 1:
+                ax.set_xlabel(r'$\ell$')
+            ax.grid(alpha=0.25, which='both')
+
+        for j in range(n_p, nr * ncols):
+            ax_flat[j].set_visible(False)
+
+        # Add a single shared colorbar for the entire trial
+        norm = plt.Normalize(vmin=vmin, vmax=vmax)
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        sm.set_array([])
+        fig.colorbar(sm, ax=axes[0, -1], label='p₀ − p₁', pad=0.02)
+
+        title = f't = {t}' if suptitle is None else f'{suptitle}  |  t = {t}'
+        fig.suptitle(title, fontsize=12, fontweight='bold')
+        figs_by_t[t] = (fig, axes)
+
+    return figs_by_t
