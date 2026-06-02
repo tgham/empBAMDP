@@ -111,40 +111,64 @@ def bellman_emp_Q(current_alphas, n_arms, n_outcomes, h, termination_arm, ell, v
         Q[-1] = float(np.sum(np.max(posterior_p, axis=0) ** ell))
     return Q
 
+def bellman_info_V(alphas, n_arms, n_outcomes, depth, termination_arm):
+    """Bayes-adaptive *minimal* end-state posterior variance with `depth` pulls remaining.
 
-def uniform_tail_emp_Q(current_alphas, n_arms, n_outcomes, h, ell):
-    """Q per first action by exhaustive (a, o) enumeration with PPD weights.
+    The info-seeking agent wants to reduce uncertainty, so it MINIMISES the final
+    posterior variance:
 
-    Equivalent to assuming a uniform random policy over subsequent actions
-    a_2, ..., a_h and weighting outcome sequences by their posterior-predictive
-    probability under env.alphas. A lower bound on Bayes-adaptive optimal Q;
-    kept alongside bellman_emp_Q for empirical comparison.
+    V(h, 0)   = MSE(h), i.e. the total variance of the agent's posterior
+    V(h, d>0) = min_a sum_o p(o|a, h) * V(h u (a,o), d-1)
+
+    `alphas` is the running Dirichlet posterior; mutated in place and restored.
     """
-    Q = np.zeros(n_arms)
-    Z = np.zeros(n_arms)
-    pairs = list(itertools.product(range(n_arms), range(n_outcomes)))
-
-    for seq in itertools.product(pairs, repeat=h):
-        a_1 = seq[0][0]
-        seq_counts = np.zeros((n_arms, n_outcomes), dtype=int)
-        log_w = 0.0
-        for (a, o) in seq:
-            num = current_alphas[a, o] + seq_counts[a, o]
-            den = current_alphas[a].sum() + seq_counts[a].sum()
-            log_w += np.log(num) - np.log(den)
-            seq_counts[a, o] += 1
-
-        final_alphas = current_alphas + seq_counts
-        posterior_p = final_alphas / final_alphas.sum(axis=1, keepdims=True)
-        emp = float(np.sum(np.max(posterior_p, axis=0) ** ell))
-
-        w = np.exp(log_w)
-        Q[a_1] += w * emp
-        Z[a_1] += w
-
-    return Q / Z
+    a0 = alphas.sum(axis=1, keepdims=True)
+    if depth == 0:
+        return float(np.sum(alphas * (a0 - alphas) / (a0**2 * (a0 + 1))))
+    if termination_arm:
+        ## value of terminating now: keep the current variance, take no more samples
+        best = float(np.sum(alphas * (a0 - alphas) / (a0**2 * (a0 + 1))))
+    else:
+        best = np.inf
+    for a in range(n_arms):
+        denom = alphas[a].sum()
+        ev = 0.0
+        for o in range(n_outcomes):
+            p_o = alphas[a, o] / denom
+            alphas[a, o] += 1
+            ev += p_o * bellman_info_V(alphas, n_arms, n_outcomes, depth - 1, termination_arm)
+            alphas[a, o] -= 1
+        if ev < best:
+            best = ev
+    return best
 
 
+def bellman_info_Q(current_alphas, n_arms, n_outcomes, h, termination_arm, verbose=False):
+    """Per-first-action Bayes-adaptive info-seeking Q with horizon h.
+
+    Q[a_1] is the expected end-state posterior variance after pulling arm a_1 now and
+    acting variance-minimally thereafter (via bellman_info_V). LOWER IS BETTER -- the
+    info-seeking agent prefers the action that drives the final posterior variance down.
+    Not parameterised by ell.
+    """
+    Q = np.zeros(n_arms + termination_arm)
+    work = current_alphas.astype(float).copy()
+    for a in range(n_arms):
+        denom = work[a].sum()
+        for o in range(n_outcomes):
+            p_o = work[a, o] / denom
+            work[a, o] += 1
+            V = bellman_info_V(work, n_arms, n_outcomes, h - 1, termination_arm)
+            Q[a] += p_o * V
+            if verbose:
+                print(f"action {a}, outcome {o}, p(o|a,h)={p_o:.4f}, V(h u (a,o), h-1)={V:.4f}")
+            work[a, o] -= 1
+
+    ## Q(terminate) is just the current posterior variance, no future pulls
+    if termination_arm:
+        a0 = current_alphas.sum(axis=1, keepdims=True)
+        Q[-1] = float(np.sum(current_alphas * (a0 - current_alphas) / (a0**2 * (a0 + 1))))
+    return Q
 
 
 
@@ -214,6 +238,41 @@ def orbit_sequence_count(canon_C):
     for c in canon_C.flatten():
         multinom //= factorial(int(c))
     return orbit_size(canon_C) * multinom
+
+
+def canonical_states(n_arms, n_outcomes, n_trials):
+    """Enumerate canonical (a, o) histories of length 0..n_trials-1.
+
+    Histories are canonicalised under arm-relabel x outcome-relabel
+    (S_{n_arms} x S_{n_outcomes} acting on the count matrix). Returns a flat
+    list of (t, canon_C, canon_counts, history_str, orbit_size) tuples — one
+    entry per canonical history at each trial, ready to feed into a parallel map.
+    """
+    zero_C = np.zeros((n_arms, n_outcomes), dtype=int)
+    states = [{tuple(zero_C.flatten().tolist()): zero_C}]
+    for t in range(1, n_trials):
+        next_states = {}
+        for prev_C in states[t - 1].values():
+            for a in range(n_arms):
+                for o in range(n_outcomes):
+                    new_C = prev_C.copy()
+                    new_C[a, o] += 1
+                    canon_C, key = canonical_count_matrix(new_C)
+                    if key not in next_states:
+                        next_states[key] = canon_C
+        states.append(next_states)
+
+    tasks = []
+    for t, st in enumerate(states):
+        for canon_C in st.values():
+            canon_counts = tuple(
+                ((int(a), int(o)), int(canon_C[a, o]))
+                for a in range(n_arms) for o in range(n_outcomes)
+                if canon_C[a, o] > 0
+            )
+            history_str = '-'.join(f'a{a}o{o}:{c}' for ((a, o), c) in canon_counts) or 'init'
+            tasks.append((t, canon_C, canon_counts, history_str, orbit_sequence_count(canon_C)))
+    return tasks
 
 
 

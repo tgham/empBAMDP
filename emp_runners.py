@@ -1,8 +1,17 @@
-import itertools
+import importlib.util as _ilu
 import numpy as np
 import pandas as pd
 from emp_utils import *
 from scipy.optimize import bisect, brentq
+from scipy.special import softmax as _softmax
+from joblib import Parallel, delayed
+
+## EmpBandit lives in a sibling repo and is loaded dynamically. Done once at
+## import time so worker processes don't re-import per task.
+_spec = _ilu.spec_from_file_location("bandit", "../context_exploration/gym_bandits/bandit.py")
+_mod = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+EmpBandit = _mod.EmpBandit
 
 def run_emp_bamcp(agent, env, verbose=True):
     """Run an agent on the empowerment bandit task for n_trials."""
@@ -181,187 +190,370 @@ def run_emp(agent, env, horizon=None, policy='bellman', termination_arm=None, ve
         'terminated_early': terminated and (action == terminate_idx) if termination_arm else False,
     }
 
-def enumerate_emp_histories(n_arms=2, n_outcomes=2, n_trials=3, alpha=1.0, termination_arm = True,
-                            ells=(0.33, 1.0, 3.0), temp=1.0):
-    """Enumerate canonical (a, o) histories of length 0..n_trials-1.
+def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size,
+                          n_arms, n_outcomes, n_trials, alpha, termination_arm, ells, temp):
+    """Per-(canonical history, ell) empowerment / Q / probs / deltas rows."""
+    init_alphas = np.full((n_arms, n_outcomes), float(alpha))
+    alphas = init_alphas + canon_C
+    h_remaining = n_trials - t
 
-    Histories are canonicalised under arm-relabel x outcome-relabel
-    (S_{n_arms} x S_{n_outcomes} acting on the count matrix). One row per
-    equivalence class per ell — the dominant cost (`_bellman_emp_Q`) runs
-    once per orbit instead of once per raw sequence.
-
-    For each canonical history h and each ell, computes:
-      - current_emp: empowerment of the posterior implied by h
-      - Q[a]: Bayes-adaptive optimal value of taking arm a from h with the
-        remaining horizon n_trials - len(h)
-      - probs[a]: softmax(Q / temp) — the agent's choice probabilities
-      - delta_emp[a]: 1-step expected empowerment gain
-            E_o~p(o|a,h)[Emp(h u (a,o))] - Emp(h)
-      - orbit_size: number of raw (a, o) sequences that canonicalise to h.
-        Sum over rows at trial t equals (n_arms * n_outcomes) ** t.
-
-    Note: `prev_action` and `p_repeat` are not emitted — they depend on
-    sequence order, which is undefined for a canonical count matrix.
-
-    Returns a long-format DataFrame with one row per (ell, canonical history).
-    """
-    import importlib.util as _ilu
-    from scipy.special import softmax as _softmax
-
-    _spec = _ilu.spec_from_file_location("bandit", "../context_exploration/gym_bandits/bandit.py")
-    _mod = _ilu.module_from_spec(_spec)
-    _spec.loader.exec_module(_mod)
-    EmpBandit = _mod.EmpBandit
+    ## info-seeking agent: Bayes-adaptive minimisation of end-state posterior variance (ell-free)
+    a0 = alphas.sum(axis=1, keepdims=True)
+    current_var = float(np.sum(alphas * (a0 - alphas) / (a0**2 * (a0 + 1))))
+    info_Q = bellman_info_Q(alphas.copy(), n_arms, n_outcomes,
+                            h_remaining, termination_arm)        # lower = better
+    info_best_a = int(np.argmin(info_Q))
+    info_probs = _softmax(-info_Q / temp)                        # negate: minimisation
 
     rows = []
-    init_alphas = np.full((n_arms, n_outcomes), float(alpha))
-
-    ## Build canonical states incrementally: at each trial t, extend every
-    ## canonical history of length t-1 by every (a, o) pair, canonicalise the
-    ## resulting count matrix, and dedupe. canon_states[t] maps canonical key
-    ## -> canonical count matrix.
-    zero_C = np.zeros((n_arms, n_outcomes), dtype=int)
-    canon_states = [{tuple(zero_C.flatten().tolist()): zero_C}]
-    for t in range(1, n_trials):
-        next_states = {}
-        for prev_C in canon_states[t - 1].values():
-            for a in range(n_arms):
-                for o in range(n_outcomes):
-                    new_C = prev_C.copy()
-                    new_C[a, o] += 1
-                    canon_C, key = canonical_count_matrix(new_C)
-                    if key not in next_states:
-                        next_states[key] = canon_C
-        canon_states.append(next_states)
-
     for ell in ells:
-        for t in range(n_trials):
-            for key, canon_C in canon_states[t].items():
-                alphas = init_alphas + canon_C
-                orbit_size = orbit_sequence_count(canon_C)
+        current_p = alphas / alphas.sum(axis=1, keepdims=True)
+        current_emp = EmpBandit.empowerment(current_p, ell)
+        max_reach = np.max(current_p, axis=0)
 
-                current_p = alphas / alphas.sum(axis=1, keepdims=True)
-                current_emp = EmpBandit.empowerment(current_p, ell)
+        Q = bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
+                          h_remaining, termination_arm, ell, verbose=False)
+        best_a = np.argmax(Q)
 
-                ## calculate max reachabilities
-                max_reach = np.max(current_p, axis=0)
+        probs = _softmax(Q / temp)
+        policy_entropy = -np.sum(probs * np.log(probs + 1e-12))
 
-                h_remaining = n_trials - t
-                Q = bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
-                                   h_remaining, termination_arm, ell, verbose=False)
-                best_a = np.argmax(Q)
+        delta_emp = np.zeros(n_arms)
+        entropy = np.zeros(n_arms)
+        for a in range(n_arms):
+            denom = alphas[a].sum()
+            expected = 0.0
+            for o in range(n_outcomes):
+                p_o = alphas[a, o] / denom
+                next_alphas = alphas.copy()
+                next_alphas[a, o] += 1
+                next_p = next_alphas / next_alphas.sum(axis=1, keepdims=True)
+                expected += p_o * EmpBandit.empowerment(next_p, ell)
+            delta_emp[a] = expected - current_emp
+            entropy[a] = EmpBandit.entropy(alphas[a])
 
-                probs = _softmax(Q / temp)
-                policy_entropy = -np.sum(probs * np.log(probs + 1e-12))
+        chosen_entropy = entropy[best_a] if best_a < n_arms else np.nan
+        chosen_prob = probs[best_a]
 
-                delta_emp = np.zeros(n_arms)
-                entropy = np.zeros(n_arms)
-                for a in range(n_arms):
-                    denom = alphas[a].sum()
-                    expected = 0.0
-                    for o in range(n_outcomes):
-                        p_o = alphas[a, o] / denom
-                        next_alphas = alphas.copy()
-                        next_alphas[a, o] += 1
-                        next_p = next_alphas / next_alphas.sum(axis=1, keepdims=True)
-                        expected += p_o * EmpBandit.empowerment(next_p, ell)
-                    delta_emp[a] = expected - current_emp
-                    entropy[a] = EmpBandit.entropy(alphas[a])
+        n_untried_arms = np.sum(alphas.sum(axis=1) == init_alphas.sum(axis=1).min())
+        n_unobserved_outcomes = np.sum(alphas.sum(axis=0) == init_alphas.sum(axis=0).min())
 
-                if best_a < n_arms:
-                    chosen_entropy = entropy[best_a]
-                else:
-                    chosen_entropy = np.nan
-                chosen_prob = probs[best_a]
+        least_sampled = np.where(alphas.sum(axis=1) == alphas.sum(axis=1).min())[0]
+        if len(least_sampled) > 1:
+            p_choose_least_sampled = probs[least_sampled].max()
+        else:
+            p_choose_least_sampled = probs[least_sampled[0]]
 
-                ## get number of untried arms or unobserved outcomes
-                n_untried_arms = np.sum(alphas.sum(axis=1) == init_alphas.sum(axis=1).min())
-                n_unobserved_outcomes = np.sum(alphas.sum(axis=0) == init_alphas.sum(axis=0).min())
+        row = {
+            'ell': ell,
+            't': t,
+            'history': canon_counts,
+            'history_str': history_str,
+            'orbit_size': orbit_size,
+            'current_emp': current_emp,
+            'current_var': current_var,
+            'p_choose_least_sampled': p_choose_least_sampled,
+            'best_a': best_a,
+            'info_best_a': info_best_a,
+            'policy_entropy': policy_entropy,
+            'chosen_prob': chosen_prob,
+            'chosen_entropy': chosen_entropy,
+            'total_entropy': np.sum(entropy),
+            'n_untried_arms': n_untried_arms,
+            'n_unobserved_outcomes': n_unobserved_outcomes,
+        }
+        for a in range(n_arms):
+            row[f'Q_{a}'] = Q[a]
+            row[f'p_{a}'] = probs[a]
+            row[f'delta_emp_{a}'] = delta_emp[a]
+            row[f'entropy_{a}'] = entropy[a]
+            row[f'info_Q_{a}'] = info_Q[a]
+            row[f'info_p_{a}'] = info_probs[a]
+        for o in range(n_outcomes):
+            row[f'max_reach__{o}'] = max_reach[o]
+        if termination_arm:
+            row['Q_terminate'] = Q[-1]
+            row['p_terminate'] = probs[-1]
+            row['info_Q_terminate'] = info_Q[-1]
+            row['info_p_terminate'] = info_probs[-1]
+        rows.append(row)
+    return rows
 
-                ## prob of choose least sampled (if there are ties, choose the max)
-                least_sampled = np.where(alphas.sum(axis=1) == alphas.sum(axis=1).min())[0]
-                if len(least_sampled) > 1:
-                    p_choose_least_sampled = probs[least_sampled].max()
-                else:
-                    p_choose_least_sampled = probs[least_sampled[0]]
 
-                ## canonical "history" representation: list of (a, o, count)
-                ## tuples sorted by (a, o), and a stringified version matching
-                ## the format used by get_history_counts / filter_histories.
-                canon_counts = tuple(
-                    ((int(a), int(o)), int(canon_C[a, o]))
-                    for a in range(n_arms) for o in range(n_outcomes)
-                    if canon_C[a, o] > 0
+def _tipping_rows_for_history(t, canon_C, history_str,
+                              n_arms, n_outcomes, n_trials, alpha, termination_arm,
+                              ell_lo=0.001, ell_hi=100, n_ell_samples=200, n_check_samples = 50, eps_tie=1e-8,
+                              n_jobs=1):
+    """Per-(canonical history, arm, interval) preferred ell-range rows.
+
+    `n_jobs` parallelises the inner n_ell_samples-wide bellman_emp_Q sweep (the
+    dominant cost when n_trials is large), not the outer history loop.
+    """
+    init_alphas = np.full((n_arms, n_outcomes), float(alpha))
+    alphas = init_alphas + canon_C
+    h_remaining = n_trials - t
+
+    ## info-seeking agent: ell-free verdict for this history, stamped on every tip row
+    info_Q = bellman_info_Q(alphas.copy(), n_arms, n_outcomes, h_remaining, termination_arm)
+    info_best_a = int(np.argmin(info_Q))
+
+    ### 1. detect argmax transitions by coarse sampling + bisect within each bracket
+    sample_ells = np.logspace(np.log10(ell_lo), np.log10(ell_hi), n_ell_samples)
+    if n_jobs == 1:
+        sample_Qs = [bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
+                                   h_remaining, termination_arm, e, verbose=False)
+                     for e in sample_ells]
+    else:
+        sample_Qs = Parallel(n_jobs=n_jobs)(
+            delayed(bellman_emp_Q)(alphas.copy(), n_arms, n_outcomes,
+                                   h_remaining, termination_arm, e, verbose=False)
+            for e in sample_ells
+        )
+    ## per-sample co-argmax SET: every arm within eps_tie of the row max. Using
+    ## the set (rather than the integer argmax) catches transitions where a
+    ## tied arm joins/leaves the co-best set without flipping the argmax index.
+    sample_coargmax = [frozenset(int(a) for a in
+                                 np.flatnonzero(np.abs(Q - Q.max()) < eps_tie))
+                       for Q in sample_Qs]
+
+    transitions = set()
+    for i in range(len(sample_ells) - 1):
+        s_lo = sample_coargmax[i]
+        s_hi = sample_coargmax[i + 1]
+        if s_lo == s_hi:
+            continue
+        union = s_lo | s_hi
+        sym_diff = s_lo ^ s_hi
+        for a in sorted(union):
+            for b in sorted(union):
+                if a >= b:
+                    continue
+                if a not in sym_diff and b not in sym_diff:
+                    ## both arms stay co-best across the bracket; any internal
+                    ## crossing wouldn't change the set on either side.
+                    continue
+                def pref_diff(ell_, _a1=a, _a2=b):
+                    Q = bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
+                                      h_remaining, termination_arm, ell_, verbose=False)
+                    return Q[_a1] - Q[_a2]
+                try:
+                    trans = bisect(pref_diff, sample_ells[i], sample_ells[i + 1])
+
+                    ## validity check: only keep if (a, b) actually swap co-best
+                    ## status across trans (rejects roots between two suboptimal arms)
+                    Q_lo = bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
+                                         h_remaining, termination_arm, trans - 1e-5, verbose=False)
+                    Q_hi = bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
+                                         h_remaining, termination_arm, trans + 1e-5, verbose=False)
+                    pref_lo = np.flatnonzero(np.abs(Q_lo - Q_lo.max()) < eps_tie)
+                    pref_hi = np.flatnonzero(np.abs(Q_hi - Q_hi.max()) < eps_tie)
+                    if not (a in pref_lo and b in pref_hi) and not (b in pref_lo and a in pref_hi):
+                        continue
+                    transitions.add(trans)
+                except ValueError:
+                    continue
+
+    ### 2. partition [ell_lo, ell_hi] into segments and label each by its co-argmax set
+    breakpoints = sorted({ell_lo, ell_hi, *transitions})
+    segments = []
+    for lo, hi in zip(breakpoints[:-1], breakpoints[1:]):
+        mid = np.sqrt(lo * hi)
+        Q_mid = bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
+                              h_remaining, termination_arm, mid, verbose=False)
+        co_best = frozenset(int(a) for a in
+                            np.flatnonzero(np.abs(Q_mid - Q_mid.max()) < eps_tie))
+        segments.append((lo, hi, co_best))
+
+    ### 3. merge adjacent segments with the same co-argmax set
+    merged = []
+    for lo, hi, arms in segments:
+        if merged and merged[-1][2] == arms:
+            merged[-1] = (merged[-1][0], hi, arms)
+        else:
+            merged.append((lo, hi, arms))
+
+    ### 4. per arm, collect every merged segment in which it is co-argmax (with tie flag)
+    per_arm = {}
+    for lo, hi, arms in merged:
+        is_tied = len(arms) > 1
+        for arm in arms:
+            per_arm.setdefault(arm, []).append((lo, hi, is_tied))
+
+    ### 5. per arm, fuse contiguous segments into a single preferred interval;
+    ###    has_ties is True if ANY sub-segment of the fused interval had a tie.
+    ###    Truly disjoint intervals (gap between them) remain separate rows.
+    tip_rows = []
+    for arm, intervals in per_arm.items():
+        fused = []
+        for lo, hi, is_tied in intervals:
+            if fused and fused[-1][1] == lo:
+                prev_lo, _, prev_tied = fused[-1]
+                fused[-1] = (prev_lo, hi, prev_tied or is_tied)
+            else:
+                fused.append((lo, hi, is_tied))
+
+        for idx, (lo, hi, has_ties) in enumerate(fused):
+            tip_row = {
+                'history_str': history_str,
+                't': t,
+                'arm': arm,
+                'ell_lo': lo,
+                'ell_hi': hi,
+                'interval_idx': idx,
+                'has_ties': has_ties,
+                'info_best_a': info_best_a,
+            }
+            for a in range(n_arms):
+                tip_row[f'info_Q_{a}'] = info_Q[a]
+            if termination_arm:
+                tip_row['info_Q_terminate'] = info_Q[-1]
+            tip_rows.append(tip_row)
+
+            ## debug: scan ells inside the saved interval and flag any where this arm
+            ## is no longer in the co-argmax set (signals a missed transition).
+            for ell_ in np.geomspace(lo, hi, n_check_samples):
+                Q_ = bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
+                                   h_remaining, termination_arm, ell_, verbose=False)
+                if np.abs(Q_[arm] - Q_.max()) >= eps_tie:
+                    print(f"*** TIE VIOLATION: history={history_str}, lo={lo}, hi={hi}, ell={ell_}, arm={arm}, Q={Q_}")
+    return tip_rows
+
+
+def enumerate_emp_rows(n_arms=2, n_outcomes=2, n_trials=3, alpha=1.0, termination_arm=True,
+                       ells=(0.33, 1.0, 3.0), temp=1.0, n_jobs=1):
+    """Enumerate per-(canonical history, ell) empowerment / Q / probs / deltas.
+
+    One row per (ell, canonical history). `n_jobs` controls parallel evaluation
+    across canonical histories (joblib); n_jobs=1 runs serially.
+    """
+    tasks = canonical_states(n_arms, n_outcomes, n_trials)
+    if n_jobs == 1:
+        print("Running serially...")
+        batches = [_emp_rows_for_history(t, C, cc, hs, os,
+                                         n_arms, n_outcomes, n_trials, alpha,
+                                         termination_arm, ells, temp)
+                   for (t, C, cc, hs, os) in tasks]
+    else:
+        print(f"Running in parallel with n_jobs={n_jobs}...")
+        batches = Parallel(n_jobs=n_jobs)(
+            delayed(_emp_rows_for_history)(t, C, cc, hs, os,
+                                           n_arms, n_outcomes, n_trials, alpha,
+                                           termination_arm, ells, temp)
+            for (t, C, cc, hs, os) in tasks
+        )
+    df = pd.DataFrame([r for batch in batches for r in batch])
+    df['history_counts'] = df['history']
+    df['history_counts_str'] = df['history_str']
+    return df
+
+
+def enumerate_tipping_intervals(n_arms=2, n_outcomes=2, n_trials=3, alpha=1.0, termination_arm=True,
+                                ell_lo=0.001, ell_hi=100, n_ell_samples=200, n_check_samples=50, eps_tie=1e-8, n_jobs=1):
+    """Enumerate per-(canonical history, arm) preferred ell intervals.
+
+    One row per (canonical history, arm, contiguous preferred interval), with
+    `has_ties=True` if any sub-segment of the fused interval has multiple
+    co-argmax arms.
+
+    `n_jobs` parallelises the inner n_samples-wide bellman_emp_Q sweep within
+    each history, not the outer history loop. This targets the t=0 / small-t
+    bottleneck where one history's deep-horizon sweep dominates wall time.
+    """
+    tasks = canonical_states(n_arms, n_outcomes, n_trials)
+    batches = [_tipping_rows_for_history(t, C, hs,
+                                         n_arms, n_outcomes, n_trials, alpha,
+                                         termination_arm, ell_lo, ell_hi, n_ell_samples, n_check_samples, eps_tie,
+                                         n_jobs=n_jobs)
+               for (t, C, _, hs, _) in tasks]
+    return pd.DataFrame([r for batch in batches for r in batch])
+
+
+def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
+                     df_tip=None, termination_arm=True, temp=1.0,
+                     ell_lo=0.001, ell_hi=100,
+                     n_ell_samples=50, 
+                     tied_only=False, n_jobs=1):
+    """Q / softmax-prob curves over ell for canonical histories.
+
+    Two modes, switched by whether `df_tip` is provided:
+
+    - `df_tip is None`: enumerate ALL canonical histories at all trials,
+      sampling `n_ell_samples` log-spaced ells in `[ell_lo, ell_hi]` for each.
+      Coarse but exhaustive picture of how Q/p vary with ell.
+
+    - `df_tip is not None`: iterate only the (history, t) pairs present in
+      `df_tip`, and for each, sample `n_ell_samples` log-spaced ells between
+      `min(ell_lo)` and `max(ell_hi)` of that history's df_tip rows. Focuses
+      the sweep on each history's interesting range. With `tied_only=True`,
+      restrict to histories that have at least one `has_ties=True` row.
+
+    sweeps over alphas
+
+    Returns a long-format DataFrame with one row per (history_str, t, ell, alpha),
+    columns: alpha, Q_0, Q_1, ..., Q_terminate (if applicable), p_0, p_1, ...,
+    p_terminate (if applicable). `n_jobs` parallelises the inner ell sweep.
+    """
+    states = canonical_states(n_arms, n_outcomes, n_trials)
+    states_by_th = {(int(t), hs): C for (t, C, _, hs, _) in states}
+
+    if df_tip is None:
+        ## sweep all canonical histories with the predefined range
+        sweep_tasks = [(int(t), history_str, ell_lo, ell_hi)
+                       for (t, _, _, history_str, _) in states]
+    else:
+        df_tmp = df_tip[df_tip['has_ties']] if tied_only else df_tip
+        if len(df_tmp) == 0:
+            return pd.DataFrame()
+        ranges = (df_tmp.groupby(['history_str', 't'])
+                  .agg(ell_min=('ell_lo', 'min'),
+                       ell_max=('ell_hi', 'max'))
+                  .reset_index())
+        sweep_tasks = [(int(r['t']), r['history_str'],
+                        float(r['ell_min']), float(r['ell_max']))
+                       for _, r in ranges.iterrows()]
+    rows = []
+    for alpha_val in alphas:
+        init_alphas = np.full((n_arms, n_outcomes), alpha_val)
+        for i in tqdm(range(len(sweep_tasks)), desc=f"Enumerating curves (alpha={alpha_val:.3g})"):
+            t, history_str, e_lo, e_hi = sweep_tasks[i]
+            canon_C = states_by_th[(t, history_str)]
+            alphas = init_alphas + canon_C
+            h_remaining = n_trials - t
+            sample_ells = np.logspace(np.log10(e_lo), np.log10(e_hi), n_ell_samples)
+
+            ## info-seeking agent: ell-free, same across all sampled ells for this history
+            info_Q = bellman_info_Q(alphas.copy(), n_arms, n_outcomes,
+                                    h_remaining, termination_arm)
+            info_best_a = int(np.argmin(info_Q))
+            info_probs = _softmax(-info_Q / temp)
+
+            if n_jobs == 1:
+                Qs = [bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
+                                    h_remaining, termination_arm, e, verbose=False)
+                      for e in sample_ells]
+            else:
+                Qs = Parallel(n_jobs=n_jobs)(
+                    delayed(bellman_emp_Q)(alphas.copy(), n_arms, n_outcomes,
+                                           h_remaining, termination_arm, e, verbose=False)
+                    for e in sample_ells
                 )
-                history_str = '-'.join(
-                    f'a{a}o{o}:{c}' for ((a, o), c) in canon_counts
-                ) or 'init'
 
-                ## find tipping point - i.e. ell at which argmax changes 
-                action_pairs = list(itertools.combinations(range(n_arms +1), 2))
-                tipping_points = []
-                for ai, (a1, a2) in enumerate(action_pairs):
-                    if a1 != a2:
-                        def pref_diff(ell_):
-                            Q = bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
-                                               h_remaining, termination_arm, ell_, verbose=False)
-                            diff = Q[a1] - Q[a2]
-                            return diff
-                        try:
-                            ell_switch = bisect(pref_diff, 0.01, 100)
-                        except ValueError:
-                            continue
-
-                        ## only keep if this is a switch between best actions
-                        _eps = 1e-6
-                        argmax_lo = np.argmax(bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
-                                                             h_remaining, termination_arm,
-                                                             ell_switch - _eps, verbose=False))
-                        argmax_hi = np.argmax(bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
-                                                             h_remaining, termination_arm,
-                                                             ell_switch + _eps, verbose=False))
-                        if argmax_lo == argmax_hi:
-                            continue
-
-                        print(f"Tipping point for history {history_str}: arms {a1} and {a2}: {ell_switch}")
-                        tipping_points.append((ell_switch, a1, a2))
-                        
-                row = {
-                    'ell': ell,
-                    't': t,
-                    'history': canon_counts,
-                    'history_str': history_str,
-                    'orbit_size': orbit_size,
-                    'current_emp': current_emp,
-                    'p_choose_least_sampled': p_choose_least_sampled,
-                    'best_a': best_a,
-                    'policy_entropy': policy_entropy,
-                    'chosen_prob': chosen_prob,
-                    'chosen_entropy': chosen_entropy,
-                    'total_entropy': np.sum(entropy),
-                    'n_untried_arms': n_untried_arms,
-                    'n_unobserved_outcomes': n_unobserved_outcomes,
-                }
+            for e, Q in zip(sample_ells, Qs):
+                probs = _softmax(Q / temp)
+                row = {'alpha': alpha_val, 'history_str': history_str, 't': t, 'ell': e,
+                       'info_best_a': info_best_a}
                 for a in range(n_arms):
                     row[f'Q_{a}'] = Q[a]
                     row[f'p_{a}'] = probs[a]
-                    row[f'delta_emp_{a}'] = delta_emp[a]
-                    row[f'entropy_{a}'] = entropy[a]
-                for o in range(n_outcomes):
-                    row[f'max_reach__{o}'] = max_reach[o]
+                    row[f'info_Q_{a}'] = info_Q[a]
+                    row[f'info_p_{a}'] = info_probs[a]
                 if termination_arm:
                     row['Q_terminate'] = Q[-1]
                     row['p_terminate'] = probs[-1]
+                    row['info_Q_terminate'] = info_Q[-1]
+                    row['info_p_terminate'] = info_probs[-1]
                 rows.append(row)
-        print()
-            
 
-    df = pd.DataFrame(rows)
-    ## history_counts / history_counts_str: already canonical here, but kept
-    ## for compatibility with filter_histories and downstream notebooks.
-    df['history_counts'] = df['history']
-    df['history_counts_str'] = df['history_str']
-
-    return df
+    return pd.DataFrame(rows)
 
 
