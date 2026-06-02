@@ -469,7 +469,7 @@ def enumerate_tipping_intervals(n_arms=2, n_outcomes=2, n_trials=3, alpha=1.0, t
 
 
 def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
-                     df_tip=None, termination_arm=True, temp=0.1,
+                     df_tip=None, termination_arm=True, temp=1,
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50, 
                      tied_only=False, n_jobs=1):
