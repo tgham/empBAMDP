@@ -444,6 +444,7 @@ def plot_curves(
     panel_size=(3.2, 2.6),
     eps_tie=1e-8,
     suptitle=None,
+    info_seeker=False,
     save = True
 ):
     """Plot Q-value (or softmax-prob) curves across ell for each (history, t)
@@ -541,7 +542,7 @@ def plot_curves(
                         zorder=1.5)
             
             ## let's also plot info_p_a and info_p_terminate as coloured dotted lines
-            if 'info_p_0' in sub.columns:
+            if info_seeker:
                 for a in range(n_arms):
                     ax.plot(sub['ell'], sub[f'info_p_{a}'], ':',
                             color=arm_colors[a], label=f'Info-seeker: arm {a}', 
@@ -613,7 +614,7 @@ def plot_curves(
         handles, labels = main_axes.flat[0].get_legend_handles_labels()
         fig.legend(handles, labels, loc='upper right',
                    ncol=len(labels), framealpha=0.9)
-        title = f't = {t+1}' if suptitle is None else f'{suptitle}  |  t = {t}'
+        title = f't = {t}' if suptitle is None else f'{suptitle}  |  t = {t}'
         fig.suptitle(title, fontsize=12, fontweight='bold')
         figs_by_t[t] = (fig, main_axes)
     
@@ -627,6 +628,8 @@ def plot_heatmap(
     cmap='RdBu',
     panel_size=(3.0, 3.0),
     suptitle=None,
+    shared_colorbar=True,
+    plot_info_seeker=True,
 ):
     """Plot 2D heatmaps of p_0 - p_1 over (ell, alpha) grid for each (history, t).
     Returns one figure per trial t; each figure has a grid of panels for that
@@ -657,33 +660,48 @@ def plot_heatmap(
 
     for t in ts:
         ncols = min(max_n_cols, len(panels_by_t[t]))
-        # Calculate per-trial vmin/vmax to normalize color scale across all histories in this trial
-        trial_diffs = (df_curves[df_curves['t'] == t]['p_0'] -
-                       df_curves[df_curves['t'] == t]['p_1']).values
-        vmax_abs = max(abs(np.nanmin(trial_diffs)), abs(np.nanmax(trial_diffs)))
-        ## if close to zero, set a minimum scale to avoid a flat colorbar
-        if vmax_abs < 1e-3:
-            vmax_abs = 1e-3
-        vmin = -vmax_abs
-        vmax = vmax_abs
+
+        # Calculate vmin/vmax based on shared_colorbar setting
+        if shared_colorbar:
+            # Shared colorbar: normalize across all histories in this trial
+            trial_diffs = (df_curves[df_curves['t'] == t]['p_0'] -
+                           df_curves[df_curves['t'] == t]['p_1']).values
+            vmax_abs = max(abs(np.nanmin(trial_diffs)), abs(np.nanmax(trial_diffs)))
+            ## if close to zero, set a minimum scale to avoid a flat colorbar
+            if vmax_abs < 1e-3:
+                vmax_abs = 1e-3
+            vmin = -vmax_abs
+            vmax = vmax_abs
+            vmin_per_history = None  # will be set per history if needed
+        else:
+            # Per-history colorbars: will compute for each history in the loop
+            vmin = None
+            vmax = None
+            vmin_per_history = {}
 
         histories = panels_by_t[t]
         n_p = len(histories)
         nr = (n_p + ncols - 1) // ncols
         figsize = (panel_size[0] * ncols, nr * panel_h)
 
-        fig = plt.figure(figsize=figsize, constrained_layout=True)
+        fig = plt.figure(figsize=figsize, constrained_layout=False)
         outer = fig.add_gridspec(nr, ncols)
         axes = np.empty((nr, ncols), dtype=object)
+        info_axes = np.empty((nr, ncols), dtype=object)
         for i in range(nr):
             for j in range(ncols):
-                ax = fig.add_subplot(outer[i, j])
-                axes[i, j] = ax
+                inner = outer[i, j].subgridspec(1, 2, width_ratios=[20, 1], wspace=0)
+                ax_main = fig.add_subplot(inner[0])
+                ax_info = fig.add_subplot(inner[1], sharey=ax_main)
+                axes[i, j] = ax_main
+                info_axes[i, j] = ax_info
 
         ax_flat = axes.flat
+        info_flat = info_axes.flat
 
         for i, history_str in enumerate(histories):
             ax = ax_flat[i]
+            ax_info = info_flat[i]
             sub = (df_curves[(df_curves['history_str'] == history_str)
                            & (df_curves['t'] == t)])
 
@@ -691,23 +709,38 @@ def plot_heatmap(
                 ax.text(0.5, 0.5, 'no data', ha='center', va='center',
                         transform=ax.transAxes, color='grey', fontsize=10)
                 ax.set_title(history_str, fontsize=8)
+                ax_info.set_visible(False)
                 continue
 
             pivot = sub.pivot_table(index='alpha', columns='ell',
-                                    values=['p_0', 'p_1'], aggfunc='first')
+                                    values=['p_0', 'p_1', 'info_p_0', 'info_p_1'], aggfunc='first')
             if pivot.empty or 'p_0' not in pivot.columns:
                 ax.text(0.5, 0.5, 'pivot error', ha='center', va='center',
                         transform=ax.transAxes, color='grey', fontsize=10)
                 ax.set_title(history_str, fontsize=8)
+                ax_info.set_visible(False)
                 continue
 
             heat = (pivot['p_0'] - pivot['p_1']).values
             ells = pivot['p_0'].columns.values
             alphas = pivot['p_0'].index.values
 
-            ax.pcolormesh(ells, alphas, heat, cmap=cmap, vmin=vmin, vmax=vmax,
-                          shading='auto')
+            # Compute per-history vmin/vmax if not using shared colorbar
+            if not shared_colorbar:
+                hist_vmax = max(abs(np.nanmin(heat)), abs(np.nanmax(heat)))
+                if hist_vmax < 1e-3:
+                    hist_vmax = 1e-3
+                hist_vmin = -hist_vmax
+                hist_vmax_final = hist_vmax
+            else:
+                hist_vmin = vmin
+                hist_vmax_final = vmax
+
+            pm = ax.pcolormesh(ells, alphas, heat, cmap=cmap, vmin=hist_vmin, vmax=hist_vmax_final,
+                               shading='auto')
             ax.set_xscale('log')
+            # Set x-axis ticks to show each decade
+            ax.xaxis.set_major_locator(LogLocator(base=10, numticks=15))
             ax.set_title(history_str, fontsize=8)
 
             if i % ncols == 0:
@@ -716,14 +749,45 @@ def plot_heatmap(
                 ax.set_xlabel(r'$\ell$')
             ax.grid(alpha=0.25, which='both')
 
+            # Plot info-seeker panel (vertical bar)
+            if plot_info_seeker and 'info_p_0' in pivot.columns and 'info_p_1' in pivot.columns:
+                info_heat = (pivot['info_p_0'] - pivot['info_p_1']).values
+                # Average across ell (should be constant for info_p)
+                info_col = info_heat.mean(axis=1, keepdims=True)
+                im = ax_info.imshow(info_col, aspect='auto', cmap=cmap, vmin=hist_vmin, vmax=hist_vmax_final,
+                                    extent=[0, 1, alphas[0], alphas[-1]], origin='lower', interpolation='none')
+                ax_info.tick_params(labelleft=False, labelbottom=False)
+                if i // ncols == nr - 1:
+                    ax_info.set_xlabel('info-seeker', fontsize=7)
+
+                # Add per-panel colorbar if not using shared colorbar
+                if not shared_colorbar:
+                    fig.colorbar(im, ax=ax_info, label='p₀ − p₁', pad=0.02, aspect=20)
+            else:
+                ax_info.set_visible(False)
+                # If not plotting info-seeker but using per-panel colorbars, add colorbar to main axis
+                if not shared_colorbar:
+                    fig.colorbar(pm, ax=ax, label='p₀ − p₁', pad=0.02)
+
         for j in range(n_p, nr * ncols):
             ax_flat[j].set_visible(False)
+            info_flat[j].set_visible(False)
 
-        # Add a single shared colorbar for the entire trial
-        norm = plt.Normalize(vmin=vmin, vmax=vmax)
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-        sm.set_array([])
-        fig.colorbar(sm, ax=axes[0, -1], label='p₀ − p₁', pad=0.02)
+        # Apply tight layout before adding colorbar to prevent width adjustments
+        # Reserve space at the top for the suptitle
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+        # Add a single shared colorbar for the entire trial (only when shared_colorbar=True)
+        if shared_colorbar:
+            norm = plt.Normalize(vmin=vmin, vmax=vmax)
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+            sm.set_array([])
+            # Attach colorbar to info axis if plotting info-seeker, otherwise to main axis
+            cbar_ax = info_axes[0, -1] if plot_info_seeker else axes[0, -1]
+            cbar_kwargs = {'label': 'p₀ − p₁', 'pad': 0.08}
+            if plot_info_seeker:
+                cbar_kwargs['aspect'] = 20  # Make it taller when attached to narrow info axis
+            fig.colorbar(sm, ax=cbar_ax, **cbar_kwargs)
 
         title = f't = {t}' if suptitle is None else f'{suptitle}  |  t = {t}'
         fig.suptitle(title, fontsize=12, fontweight='bold')
