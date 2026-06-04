@@ -12,6 +12,7 @@ def main():
     parser.add_argument('--n_ell_samples', type=int, default=100)
     parser.add_argument('--ell_lo', type=float, default=0.01)
     parser.add_argument('--ell_hi', type=float, default=100)
+    parser.add_argument('--horizon', type=int, default=None)
     parser.add_argument('--alphas', type=float, nargs='+', default=[0.1, 0.5, 1])
     parser.add_argument('--termination_arm', action='store_true')
     args = parser.parse_args()

@@ -190,12 +190,12 @@ def run_emp(agent, env, horizon=None, policy='bellman', termination_arm=None, ve
         'terminated_early': terminated and (action == terminate_idx) if termination_arm else False,
     }
 
-def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size,
+def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size, horizon,
                           n_arms, n_outcomes, n_trials, alpha, termination_arm, ells, temp):
     """Per-(canonical history, ell) empowerment / Q / probs / deltas rows."""
     init_alphas = np.full((n_arms, n_outcomes), float(alpha))
     alphas = init_alphas + canon_C
-    h_remaining = n_trials - t
+    h_remaining = np.min([horizon, n_trials - t])
 
     ## info-seeking agent: Bayes-adaptive minimisation of end-state posterior variance (ell-free)
     a0 = alphas.sum(axis=1, keepdims=True)
@@ -282,6 +282,7 @@ def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size,
 
 def _tipping_rows_for_history(t, canon_C, history_str,
                               n_arms, n_outcomes, n_trials, alpha, termination_arm,
+                              horizon=None,
                               ell_lo=0.001, ell_hi=100, n_ell_samples=200, n_check_samples = 50, eps_tie=1e-8,
                               n_jobs=1):
     """Per-(canonical history, arm, interval) preferred ell-range rows.
@@ -291,7 +292,9 @@ def _tipping_rows_for_history(t, canon_C, history_str,
     """
     init_alphas = np.full((n_arms, n_outcomes), float(alpha))
     alphas = init_alphas + canon_C
-    h_remaining = n_trials - t
+    if horizon is None:
+        horizon = n_trials
+    h_remaining = np.min([horizon, n_trials - t])
 
     ## info-seeking agent: ell-free verdict for this history, stamped on every tip row
     info_Q = bellman_info_Q(alphas.copy(), n_arms, n_outcomes, h_remaining, termination_arm)
@@ -470,6 +473,7 @@ def enumerate_tipping_intervals(n_arms=2, n_outcomes=2, n_trials=3, alpha=1.0, t
 
 def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      df_tip=None, termination_arm=True, temp=1,
+                     horizons = None,
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50, 
                      tied_only=False, n_jobs=1):
@@ -496,6 +500,10 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     states = canonical_states(n_arms, n_outcomes, n_trials)
     states_by_th = {(int(t), hs): C for (t, C, _, hs, _) in states}
 
+    ## set horizon 
+    if horizons is None:
+        horizons = [n_trials]
+
     if df_tip is None:
         ## sweep all canonical histories with the predefined range
         sweep_tasks = [(int(t), history_str, ell_lo, ell_hi)
@@ -514,45 +522,47 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     rows = []
     for alpha_val in alphas:
         init_alphas = np.full((n_arms, n_outcomes), alpha_val)
-        for i in tqdm(range(len(sweep_tasks)), desc=f"Enumerating curves (alpha={alpha_val:.3g})"):
-            t, history_str, e_lo, e_hi = sweep_tasks[i]
-            canon_C = states_by_th[(t, history_str)]
-            alphas = init_alphas + canon_C
-            h_remaining = n_trials - t
-            sample_ells = np.logspace(np.log10(e_lo), np.log10(e_hi), n_ell_samples)
+        for horizon in horizons:
+            for i in tqdm(range(len(sweep_tasks)), desc=f"Enumerating curves (alpha={alpha_val:.3g})"):
+                t, history_str, e_lo, e_hi = sweep_tasks[i]
+                canon_C = states_by_th[(t, history_str)]
+                alphas = init_alphas + canon_C
+                # h_remaining = horizon - t
+                h_remaining = np.min([horizon, n_trials - t])
+                sample_ells = np.logspace(np.log10(e_lo), np.log10(e_hi), n_ell_samples)
 
-            ## info-seeking agent: ell-free, same across all sampled ells for this history
-            info_Q = bellman_info_Q(alphas.copy(), n_arms, n_outcomes,
-                                    h_remaining, termination_arm)
-            info_best_a = int(np.argmin(info_Q))
-            info_probs = _softmax(-info_Q / temp)
+                ## info-seeking agent: ell-free, same across all sampled ells for this history
+                info_Q = bellman_info_Q(alphas.copy(), n_arms, n_outcomes,
+                                        h_remaining, termination_arm)
+                info_best_a = int(np.argmin(info_Q))
+                info_probs = _softmax(-info_Q / temp)
 
-            if n_jobs == 1:
-                Qs = [bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
-                                    h_remaining, termination_arm, e, verbose=False)
-                      for e in sample_ells]
-            else:
-                Qs = Parallel(n_jobs=n_jobs)(
-                    delayed(bellman_emp_Q)(alphas.copy(), n_arms, n_outcomes,
-                                           h_remaining, termination_arm, e, verbose=False)
-                    for e in sample_ells
-                )
+                if n_jobs == 1:
+                    Qs = [bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
+                                        h_remaining, termination_arm, e, verbose=False)
+                        for e in sample_ells]
+                else:
+                    Qs = Parallel(n_jobs=n_jobs)(
+                        delayed(bellman_emp_Q)(alphas.copy(), n_arms, n_outcomes,
+                                            h_remaining, termination_arm, e, verbose=False)
+                        for e in sample_ells
+                    )
 
-            for e, Q in zip(sample_ells, Qs):
-                probs = _softmax(Q / temp)
-                row = {'alpha': alpha_val, 'history_str': history_str, 't': t, 'ell': e,
-                       'info_best_a': info_best_a}
-                for a in range(n_arms):
-                    row[f'Q_{a}'] = Q[a]
-                    row[f'p_{a}'] = probs[a]
-                    row[f'info_Q_{a}'] = info_Q[a]
-                    row[f'info_p_{a}'] = info_probs[a]
-                if termination_arm:
-                    row['Q_terminate'] = Q[-1]
-                    row['p_terminate'] = probs[-1]
-                    row['info_Q_terminate'] = info_Q[-1]
-                    row['info_p_terminate'] = info_probs[-1]
-                rows.append(row)
+                for e, Q in zip(sample_ells, Qs):
+                    probs = _softmax(Q / temp)
+                    row = {'alpha': alpha_val, 'horizon': horizon, 'history_str': history_str, 't': t, 'ell': e,
+                        'info_best_a': info_best_a}
+                    for a in range(n_arms):
+                        row[f'Q_{a}'] = Q[a]
+                        row[f'p_{a}'] = probs[a]
+                        row[f'info_Q_{a}'] = info_Q[a]
+                        row[f'info_p_{a}'] = info_probs[a]
+                    if termination_arm:
+                        row['Q_terminate'] = Q[-1]
+                        row['p_terminate'] = probs[-1]
+                        row['info_Q_terminate'] = info_Q[-1]
+                        row['info_p_terminate'] = info_probs[-1]
+                    rows.append(row)
 
     return pd.DataFrame(rows)
 
