@@ -6,7 +6,7 @@ from enum import Enum
 import seaborn as sns
 import scipy
 from scipy.spatial.distance import cdist
-from scipy.special import softmax
+from scipy.special import softmax, gammaln
 from collections import defaultdict
 from IPython.display import display, clear_output
 from numba import jit, njit
@@ -57,118 +57,213 @@ def make_emp_env(n_arms=3, n_outcomes=5, n_trials=20, alpha=1.0, ell=1.0,
 
 
 
-def bellman_emp_V(alphas, n_arms, n_outcomes, depth, termination_arm, ell):
-    """Bayes-adaptive optimal value with `depth` future pulls remaining.
+class EmpAgent:
+    """Bayes-adaptive belief agent over a global Dirichlet context.
 
-    V(h, 0)   = emp_l(h)
-    V(h, d>0) = max_a sum_o p(o|a, h) * V(h u (a,o), d-1)
+    The agent's belief model is a list of `contexts`, each a (alpha, prior)
+    pair giving a symmetric Dirichlet concentration and its prior weight p(z).
 
-    `alphas` is the running Dirichlet posterior; mutated in place and restored.
+      - len(contexts) == 1  -> KNOWN context: a single Dirichlet posterior,
+        p(z|h) = 1 always. Reproduces the original single-alpha behaviour.
+      - len(contexts) >= 2  -> UNKNOWN context: the agent infers
+        p(z|h) = p(h|z) p(z) / sum_z p(h|z) p(z),
+        with the GLOBAL marginal likelihood p(h|z) = prod_a B(a_z + n_a)/B(a_z)
+        (all arms share one z), and acts on the MIXTURE posterior predictive
+        p(o|a,h) = sum_z p(z|h) (a_z + n_{a,o}) / sum_o'(a_z + n_{a,o'}).
+
+    State carried through the recursion is the RAW count matrix `counts`
+    (n_arms x n_outcomes), because under a global context observing (a,o)
+    shifts p(z|h) and hence the predictive for every arm -- summed alphas
+    cannot represent this. The recursion scaffold (expectation over outcomes
+    weighted by the mixture predictive, depth recursion, termination arm) is
+    shared; subclasses supply the objective via `leaf_value` and the
+    optimisation direction (`_opt` / `_worst`).
     """
-    posterior_p = alphas / alphas.sum(axis=1, keepdims=True)
-    if depth == 0:
-        return float(np.sum(np.max(posterior_p, axis=0) ** ell))
-    if termination_arm:
-        best = float(np.sum(np.max(posterior_p, axis=0) ** ell)) ## value of terminating immediately, i.e. current empowerment, without any more samples
-    else:
-        best = -np.inf
-    for a in range(n_arms):
-        denom = alphas[a].sum()
-        ev = 0.0
-        for o in range(n_outcomes):
-            p_o = alphas[a, o] / denom
-            alphas[a, o] += 1
-            ev += p_o * bellman_emp_V(alphas, n_arms, n_outcomes, depth - 1, termination_arm, ell)
-            alphas[a, o] -= 1
-        if ev > best:
-            best = ev
-    return best
+
+    ## objective hooks -- overridden by subclasses
+    _worst = None              # initial "best" before optimisation (-inf / +inf)
+
+    def __init__(self, n_arms, n_outcomes, contexts, termination_arm=False):
+        self.n_arms = n_arms
+        self.n_outcomes = n_outcomes
+        self.termination_arm = bool(termination_arm)
+
+        alphas = np.array([float(a) for a, _ in contexts], dtype=float)
+        priors = np.array([float(p) for _, p in contexts], dtype=float)
+        priors = priors / priors.sum()
+        self.alphas_z = alphas                       # (Z,) symmetric concentrations
+        with np.errstate(divide='ignore'):           # a zero prior -> -inf is intended
+            self.log_prior = np.log(priors)          # (Z,)
+        self.single = len(contexts) == 1
+        ## constant Dirichlet log-normaliser per context, per arm:
+        ## log B(a_z * 1_K) = K*gammaln(a_z) - gammaln(K*a_z). Only needed for
+        ## context inference; skipped when single (a_z may be 0 there).
+        if self.single:
+            self._logB0_z = None
+        else:
+            K = n_outcomes
+            self._logB0_z = K * gammaln(alphas) - gammaln(K * alphas)
+
+    def _opt(self, a, b):
+        raise NotImplementedError
+
+    def leaf_value(self, counts):
+        raise NotImplementedError
+
+    ## ---- belief model -------------------------------------------------
+    def context_log_posterior(self, counts):
+        """Unnormalised log p(z|h) per context (global marginal likelihood)."""
+        row_sums = counts.sum(axis=1)                          # (A,)
+        loglik = np.empty(len(self.alphas_z))
+        for z, a_z in enumerate(self.alphas_z):
+            ## sum over arms of log B(a_z + n_a): per arm
+            ##   sum_o gammaln(a_z + n_{a,o}) - gammaln(K*a_z + n_a.sum())
+            num = gammaln(a_z + counts).sum()
+            den = gammaln(self.n_outcomes * a_z + row_sums).sum()
+            loglik[z] = (num - den) - self.n_arms * self._logB0_z[z]
+        return self.log_prior + loglik
+
+    def context_posterior(self, counts):
+        """p(z|h) -- normalised context weights."""
+        return softmax(self.context_log_posterior(counts))
+
+    def predictive(self, counts):
+        """Mixture posterior predictive matrix p(o|a,h), shape (A, O)."""
+        if self.single:
+            a = self.alphas_z[0] + counts
+            return a / a.sum(axis=1, keepdims=True)
+        w = self.context_posterior(counts)                     # (Z,)
+        pred = np.zeros((self.n_arms, self.n_outcomes))
+        for z, a_z in enumerate(self.alphas_z):
+            a = a_z + counts
+            pred += w[z] * (a / a.sum(axis=1, keepdims=True))
+        return pred
+
+    ## ---- shared Bellman recursion -------------------------------------
+    def bellman_V(self, counts, depth):
+        """Value with `depth` future pulls remaining (mutates+restores counts)."""
+        if depth == 0:
+            return self.leaf_value(counts)
+        p = self.predictive(counts)
+        ## value of terminating now (current belief), no more pulls
+        best = self.leaf_value(counts) if self.termination_arm else self._worst
+        for a in range(self.n_arms):
+            ev = 0.0
+            for o in range(self.n_outcomes):
+                p_o = p[a, o]
+                counts[a, o] += 1
+                ev += p_o * self.bellman_V(counts, depth - 1)
+                counts[a, o] -= 1
+            best = self._opt(best, ev)
+        return best
+
+    def bellman_Q(self, counts, h):
+        """Per-first-action Q with horizon h.
+
+        Q[a] = sum_o p(o|a,h) V(counts u (a,o), h-1); Q[terminate] = leaf(counts).
+        `counts` is the raw count matrix; a float working copy is used so the
+        caller's array is left untouched.
+        """
+        work = np.asarray(counts, dtype=float).copy()
+        Q = np.zeros(self.n_arms + int(self.termination_arm))
+        p = self.predictive(work)
+        for a in range(self.n_arms):
+            for o in range(self.n_outcomes):
+                p_o = p[a, o]
+                work[a, o] += 1
+                Q[a] += p_o * self.bellman_V(work, h - 1)
+                work[a, o] -= 1
+        if self.termination_arm:
+            Q[-1] = self.leaf_value(work)
+        return Q
+
+
+class EmpowermentAgent(EmpAgent):
+    """Maximises end-state empowerment Emp_ell = sum_o (max_a p(o|a))^ell."""
+
+    _worst = -np.inf
+
+    def __init__(self, n_arms, n_outcomes, contexts, ell, termination_arm=False):
+        super().__init__(n_arms, n_outcomes, contexts, termination_arm)
+        self.ell = ell
+
+    def _opt(self, a, b):
+        return a if a > b else b
+
+    def leaf_value(self, counts):
+        p = self.predictive(counts)
+        return float(np.sum(np.max(p, axis=0) ** self.ell))
+
+
+class InfoSeekingAgent(EmpAgent):
+    """Minimises end-state posterior variance (mixture: law of total variance).
+
+    Var[p_{a,o}|h] = sum_z w_z Var[p|z] + sum_z w_z (E[p|z] - Ebar)^2, summed
+    over all (a, o) cells. LOWER IS BETTER. Reduces to the single-context
+    Dirichlet variance when there is one context (the between term vanishes).
+    """
+
+    _worst = np.inf
+
+    def _opt(self, a, b):
+        return a if a < b else b
+
+    def _context_var_mean(self, counts, a_z):
+        a = a_z + counts
+        a0 = a.sum(axis=1, keepdims=True)
+        var = a * (a0 - a) / (a0 ** 2 * (a0 + 1))
+        mean = a / a0
+        return var, mean
+
+    def leaf_value(self, counts):
+        if self.single:
+            var, _ = self._context_var_mean(counts, self.alphas_z[0])
+            return float(var.sum())
+        w = self.context_posterior(counts)                     # (Z,)
+        vars_z, means_z = [], []
+        for a_z in self.alphas_z:
+            v, m = self._context_var_mean(counts, a_z)
+            vars_z.append(v); means_z.append(m)
+        mean_bar = sum(w[z] * means_z[z] for z in range(len(w)))
+        total = np.zeros_like(mean_bar)
+        for z in range(len(w)):
+            total += w[z] * (vars_z[z] + (means_z[z] - mean_bar) ** 2)
+        return float(total.sum())
+
+
+## ---------------------------------------------------------------------------
+## Backward-compatible free functions. These are now thin wrappers around the
+## single-context EmpAgent path. The passed `alphas`/`current_alphas` is already
+## (flat prior + counts); a single context with concentration 0 reproduces it
+## exactly, since predictive = (0 + alphas)/sum(alphas) and the variance leaf
+## uses the same alphas. The mixture machinery is bypassed (self.single).
+## ---------------------------------------------------------------------------
+def bellman_emp_V(alphas, n_arms, n_outcomes, depth, termination_arm, ell):
+    """Bayes-adaptive optimal empowerment value (single-context wrapper)."""
+    agent = EmpowermentAgent(n_arms, n_outcomes, contexts=[(0.0, 1.0)],
+                             ell=ell, termination_arm=termination_arm)
+    return agent.bellman_V(np.asarray(alphas, dtype=float), depth)
 
 
 def bellman_emp_Q(current_alphas, n_arms, n_outcomes, h, termination_arm, ell, verbose=False):
-    """Per-first-action Bayes-adaptive optimal Q with horizon h.
+    """Per-first-action Bayes-adaptive empowerment Q (single-context wrapper)."""
+    agent = EmpowermentAgent(n_arms, n_outcomes, contexts=[(0.0, 1.0)],
+                             ell=ell, termination_arm=termination_arm)
+    return agent.bellman_Q(current_alphas, h)
 
-    Q[a_1] = sum_o p(o|a_1, h) * V(h u (a_1, o), depth = h-1).
-    Subsequent actions are taken to maximise expected end-state empowerment
-    given the resulting belief, i.e. argmax_a inside bellman_emp_V.
-    """
-    Q = np.zeros(n_arms + termination_arm)
-    work = current_alphas.astype(float).copy()
-    for a in range(n_arms):
-        denom = work[a].sum()
-        for o in range(n_outcomes):
-            p_o = work[a, o] / denom
-            work[a, o] += 1
-            V = bellman_emp_V(work, n_arms, n_outcomes, h - 1, termination_arm, ell)
-            Q[a] += p_o * V
-            if verbose:
-                print(f"action {a}, outcome {o}, p(o|a,h)={p_o:.4f}, V(h u (a,o), h-1)={V:.4f}")
-            work[a, o] -= 1
-
-    ## Q(terminate) is just the immediate empowerment under the current belief, no future pulls
-    if termination_arm:
-        posterior_p = current_alphas / current_alphas.sum(axis=1, keepdims=True)
-        Q[-1] = float(np.sum(np.max(posterior_p, axis=0) ** ell))
-    return Q
 
 def bellman_info_V(alphas, n_arms, n_outcomes, depth, termination_arm):
-    """Bayes-adaptive *minimal* end-state posterior variance with `depth` pulls remaining.
-
-    The info-seeking agent wants to reduce uncertainty, so it MINIMISES the final
-    posterior variance:
-
-    V(h, 0)   = MSE(h), i.e. the total variance of the agent's posterior
-    V(h, d>0) = min_a sum_o p(o|a, h) * V(h u (a,o), d-1)
-
-    `alphas` is the running Dirichlet posterior; mutated in place and restored.
-    """
-    a0 = alphas.sum(axis=1, keepdims=True)
-    if depth == 0:
-        return float(np.sum(alphas * (a0 - alphas) / (a0**2 * (a0 + 1))))
-    if termination_arm:
-        ## value of terminating now: keep the current variance, take no more samples
-        best = float(np.sum(alphas * (a0 - alphas) / (a0**2 * (a0 + 1))))
-    else:
-        best = np.inf
-    for a in range(n_arms):
-        denom = alphas[a].sum()
-        ev = 0.0
-        for o in range(n_outcomes):
-            p_o = alphas[a, o] / denom
-            alphas[a, o] += 1
-            ev += p_o * bellman_info_V(alphas, n_arms, n_outcomes, depth - 1, termination_arm)
-            alphas[a, o] -= 1
-        if ev < best:
-            best = ev
-    return best
+    """Bayes-adaptive minimal posterior-variance value (single-context wrapper)."""
+    agent = InfoSeekingAgent(n_arms, n_outcomes, contexts=[(0.0, 1.0)],
+                             termination_arm=termination_arm)
+    return agent.bellman_V(np.asarray(alphas, dtype=float), depth)
 
 
 def bellman_info_Q(current_alphas, n_arms, n_outcomes, h, termination_arm, verbose=False):
-    """Per-first-action Bayes-adaptive info-seeking Q with horizon h.
-
-    Q[a_1] is the expected end-state posterior variance after pulling arm a_1 now and
-    acting variance-minimally thereafter (via bellman_info_V). LOWER IS BETTER -- the
-    info-seeking agent prefers the action that drives the final posterior variance down.
-    Not parameterised by ell.
-    """
-    Q = np.zeros(n_arms + termination_arm)
-    work = current_alphas.astype(float).copy()
-    for a in range(n_arms):
-        denom = work[a].sum()
-        for o in range(n_outcomes):
-            p_o = work[a, o] / denom
-            work[a, o] += 1
-            V = bellman_info_V(work, n_arms, n_outcomes, h - 1, termination_arm)
-            Q[a] += p_o * V
-            if verbose:
-                print(f"action {a}, outcome {o}, p(o|a,h)={p_o:.4f}, V(h u (a,o), h-1)={V:.4f}")
-            work[a, o] -= 1
-
-    ## Q(terminate) is just the current posterior variance, no future pulls
-    if termination_arm:
-        a0 = current_alphas.sum(axis=1, keepdims=True)
-        Q[-1] = float(np.sum(current_alphas * (a0 - current_alphas) / (a0**2 * (a0 + 1))))
-    return Q
+    """Per-first-action Bayes-adaptive info-seeking Q (single-context wrapper)."""
+    agent = InfoSeekingAgent(n_arms, n_outcomes, contexts=[(0.0, 1.0)],
+                             termination_arm=termination_arm)
+    return agent.bellman_Q(current_alphas, h)
 
 
 

@@ -190,12 +190,12 @@ def run_emp(agent, env, horizon=None, policy='bellman', termination_arm=None, ve
         'terminated_early': terminated and (action == terminate_idx) if termination_arm else False,
     }
 
-def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size,
+def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size, horizon,
                           n_arms, n_outcomes, n_trials, alpha, termination_arm, ells, temp):
     """Per-(canonical history, ell) empowerment / Q / probs / deltas rows."""
     init_alphas = np.full((n_arms, n_outcomes), float(alpha))
     alphas = init_alphas + canon_C
-    h_remaining = n_trials - t
+    h_remaining = np.min([horizon, n_trials - t])
 
     ## info-seeking agent: Bayes-adaptive minimisation of end-state posterior variance (ell-free)
     a0 = alphas.sum(axis=1, keepdims=True)
@@ -282,6 +282,7 @@ def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size,
 
 def _tipping_rows_for_history(t, canon_C, history_str,
                               n_arms, n_outcomes, n_trials, alpha, termination_arm,
+                              horizon=None,
                               ell_lo=0.001, ell_hi=100, n_ell_samples=200, n_check_samples = 50, eps_tie=1e-8,
                               n_jobs=1):
     """Per-(canonical history, arm, interval) preferred ell-range rows.
@@ -291,7 +292,9 @@ def _tipping_rows_for_history(t, canon_C, history_str,
     """
     init_alphas = np.full((n_arms, n_outcomes), float(alpha))
     alphas = init_alphas + canon_C
-    h_remaining = n_trials - t
+    if horizon is None:
+        horizon = n_trials
+    h_remaining = np.min([horizon, n_trials - t])
 
     ## info-seeking agent: ell-free verdict for this history, stamped on every tip row
     info_Q = bellman_info_Q(alphas.copy(), n_arms, n_outcomes, h_remaining, termination_arm)
@@ -468,10 +471,21 @@ def enumerate_tipping_intervals(n_arms=2, n_outcomes=2, n_trials=3, alpha=1.0, t
     return pd.DataFrame([r for batch in batches for r in batch])
 
 
+def _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h):
+    """Module-level (picklable) helper: build an EmpowermentAgent for one ell
+    and return its horizon-h Q over the given counts. Used by the joblib path."""
+    agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=ell,
+                             termination_arm=termination_arm)
+    return agent.bellman_Q(counts, h)
+
+
 def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
+                     contexts=None, context_prior=None,
+                     df_tip=None, termination_arm=True, temp=1,
+                     horizons = None,
                      df_tip=None, termination_arm=True, temp=1.0,
                      ell_lo=0.001, ell_hi=100,
-                     n_ell_samples=50, 
+                     n_ell_samples=50,
                      tied_only=False, n_jobs=1):
     """Q / softmax-prob curves over ell for canonical histories.
 
@@ -487,16 +501,43 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
       the sweep on each history's interesting range. With `tied_only=True`,
       restrict to histories that have at least one `has_ties=True` row.
 
-    sweeps over alphas
+    Each curve is produced by one belief agent (`EmpAgent`). Two kinds are
+    swept into the same DataFrame for comparison:
 
-    Returns a long-format DataFrame with one row per (history_str, t, ell, alpha),
-    columns: alpha, Q_0, Q_1, ..., Q_terminate (if applicable), p_0, p_1, ...,
-    p_terminate (if applicable). `n_jobs` parallelises the inner ell sweep.
+    - KNOWN context: one agent per value in `alphas` (the agent knows its
+      Dirichlet concentration). `alpha` column holds the numeric value.
+    - UNKNOWN context: if `contexts` is given (e.g. [0.1, 1.0]), ONE extra
+      agent that infers p(z|h) over that context set and acts on the mixture
+      posterior predictive. `context_prior` defaults to uniform. Its rows are
+      labelled `alpha='unknown'`.
+
+    Both kinds also emit the (now context-aware) info-seeking columns `info_*`,
+    computed by an `InfoSeekingAgent` over the same context set.
+
+    Returns a long-format DataFrame with one row per (history_str, t, ell,
+    agent), columns: alpha, context_set, Q_0, Q_1, ..., Q_terminate (if
+    applicable), p_0, p_1, ..., p_terminate, and matching info_* columns.
+    `n_jobs` parallelises the inner ell sweep.
     """
     states = canonical_states(n_arms, n_outcomes, n_trials)
     states_by_th = {(int(t), hs): C for (t, C, _, hs, _) in states}
     if n_jobs != 1:
         print(f"Running in parallel with n_cores = {n_jobs}")
+
+    ## set horizon
+    if horizons is None:
+        horizons = [n_trials]
+
+    ## agents to sweep: known (one per alpha) + optional one unknown-context agent.
+    ## entries: (alpha_label, context_set_str, contexts=[(alpha, prior), ...])
+    agent_specs = [(alpha_val, str(alpha_val), [(float(alpha_val), 1.0)])
+                   for alpha_val in alphas]
+    if contexts is not None:
+        if context_prior is None:
+            context_prior = [1.0 / len(contexts)] * len(contexts)
+        ctx_unknown = [(float(a), float(p)) for a, p in zip(contexts, context_prior)]
+        context_set_str = 'ctx' + str(tuple(float(a) for a in contexts))
+        agent_specs.append(('unknown', context_set_str, ctx_unknown))
 
     if df_tip is None:
         ## sweep all canonical histories with the predefined range
@@ -514,47 +555,62 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                         float(r['ell_min']), float(r['ell_max']))
                        for _, r in ranges.iterrows()]
     rows = []
-    for alpha_val in alphas:
-        init_alphas = np.full((n_arms, n_outcomes), alpha_val)
-        for i in tqdm(range(len(sweep_tasks)), desc=f"Enumerating curves (alpha={alpha_val:.3g})"):
-            t, history_str, e_lo, e_hi = sweep_tasks[i]
-            canon_C = states_by_th[(t, history_str)]
-            alphas = init_alphas + canon_C
-            h_remaining = n_trials - t
-            sample_ells = np.logspace(np.log10(e_lo), np.log10(e_hi), n_ell_samples)
+    for alpha_label, context_set, ctx in agent_specs:
+        for horizon in horizons:
+            ## info-seeking agent (ell-free) over this context set
+            info_agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm)
+            for i in tqdm(range(len(sweep_tasks)), desc=f"Enumerating curves (alpha={alpha_label})"):
+                t, history_str, e_lo, e_hi = sweep_tasks[i]
+                canon_C = states_by_th[(t, history_str)]
+                # h_remaining = horizon - t
+                h_remaining = int(np.min([horizon, n_trials - t]))
+                sample_ells = np.logspace(np.log10(e_lo), np.log10(e_hi), n_ell_samples)
 
-            ## info-seeking agent: ell-free, same across all sampled ells for this history
-            info_Q = bellman_info_Q(alphas.copy(), n_arms, n_outcomes,
-                                    h_remaining, termination_arm)
-            info_best_a = int(np.argmin(info_Q))
-            info_probs = _softmax(-info_Q / temp)
+                ## info-seeking agent: ell-free, same across all sampled ells for this history
+                info_Q = info_agent.bellman_Q(canon_C, h_remaining)
+                info_best_a = int(np.argmin(info_Q))
+                info_probs = _softmax(-info_Q / temp)
 
-            if n_jobs == 1:
-                Qs = [bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
-                                    h_remaining, termination_arm, e, verbose=False)
-                      for e in sample_ells]
-            else:
-                Qs = Parallel(n_jobs=n_jobs)(
-                    delayed(bellman_emp_Q)(alphas.copy(), n_arms, n_outcomes,
-                                           h_remaining, termination_arm, e, verbose=False)
-                    for e in sample_ells
-                )
+                if n_jobs == 1:
+                    Qs = [_emp_bellman_Q(n_arms, n_outcomes, ctx, e,
+                                         termination_arm, canon_C, h_remaining)
+                        for e in sample_ells]
+                else:
+                    Qs = Parallel(n_jobs=n_jobs)(
+                        delayed(_emp_bellman_Q)(n_arms, n_outcomes, ctx, e,
+                                                termination_arm, canon_C, h_remaining)
+                        for e in sample_ells
+                    )
+                
+                ## calculate current emp
+                current_emps = []
+                for e in sample_ells:
+                    agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e,
+                                             termination_arm=termination_arm)
+                    counts = canon_C + np.array([a for a, _ in ctx]).reshape(-1, 1)
+                    current_emp = agent.leaf_value(counts)
+                    current_emps.append(current_emp)
 
-            for e, Q in zip(sample_ells, Qs):
-                probs = _softmax(Q / temp)
-                row = {'alpha': alpha_val, 'history_str': history_str, 't': t, 'ell': e,
-                       'info_best_a': info_best_a}
-                for a in range(n_arms):
-                    row[f'Q_{a}'] = Q[a]
-                    row[f'p_{a}'] = probs[a]
-                    row[f'info_Q_{a}'] = info_Q[a]
-                    row[f'info_p_{a}'] = info_probs[a]
-                if termination_arm:
-                    row['Q_terminate'] = Q[-1]
-                    row['p_terminate'] = probs[-1]
-                    row['info_Q_terminate'] = info_Q[-1]
-                    row['info_p_terminate'] = info_probs[-1]
-                rows.append(row)
+
+                for ei in range(len(sample_ells)):
+                    e = sample_ells[ei]
+                    Q = Qs[ei]
+                # for e, Q in zip(sample_ells, Qs):
+                    probs = _softmax(Q / temp)
+                    row = {'alpha': alpha_label, 'context_set': context_set,
+                        'horizon': horizon, 'history_str': history_str, 't': t, 'ell': e, 'current_emp': current_emps[ei],
+                        'info_best_a': info_best_a}
+                    for a in range(n_arms):
+                        row[f'Q_{a}'] = Q[a]
+                        row[f'p_{a}'] = probs[a]
+                        row[f'info_Q_{a}'] = info_Q[a]
+                        row[f'info_p_{a}'] = info_probs[a]
+                    if termination_arm:
+                        row['Q_terminate'] = Q[-1]
+                        row['p_terminate'] = probs[-1]
+                        row['info_Q_terminate'] = info_Q[-1]
+                        row['info_p_terminate'] = info_probs[-1]
+                    rows.append(row)
 
     return pd.DataFrame(rows)
 

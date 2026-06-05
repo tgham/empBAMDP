@@ -12,8 +12,13 @@ def main():
     parser.add_argument('--n_ell_samples', type=int, default=100)
     parser.add_argument('--ell_lo', type=float, default=0.01)
     parser.add_argument('--ell_hi', type=float, default=100)
+    parser.add_argument('--horizon', type=int, default=None)
     parser.add_argument('--alphas', type=float, nargs='+', default=[0.1, 0.5, 1])
     parser.add_argument('--termination_arm', action='store_true')
+    parser.add_argument('--contexts', type=float, nargs='+', default=None)
+    parser.add_argument('--context_prior', type=float, nargs='+', default=None)
+
+
     args = parser.parse_args()
 
     ## run expt
@@ -28,6 +33,7 @@ def main():
     print(f'  termination_arm: {args.termination_arm}')
     df_curves = enumerate_curves(n_arms=args.n_arms, n_outcomes=args.n_outcomes, n_trials=args.n_trials, alphas=args.alphas,
                                  ell_hi=args.ell_hi, ell_lo=args.ell_lo,
+                                context_prior=args.context_prior, contexts=args.contexts,
                                  termination_arm=args.termination_arm,
                                  n_jobs=-1, n_ell_samples=args.n_ell_samples
                                  )
