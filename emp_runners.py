@@ -469,7 +469,7 @@ def enumerate_tipping_intervals(n_arms=2, n_outcomes=2, n_trials=3, alpha=1.0, t
 
 
 def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
-                     df_tip=None, termination_arm=True, temp=0.1,
+                     df_tip=None, termination_arm=True, temp=1.0,
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50, 
                      tied_only=False, n_jobs=1):
@@ -495,6 +495,8 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     """
     states = canonical_states(n_arms, n_outcomes, n_trials)
     states_by_th = {(int(t), hs): C for (t, C, _, hs, _) in states}
+    if n_jobs != 1:
+        print(f"Running in parallel with n_cores = {n_jobs}")
 
     if df_tip is None:
         ## sweep all canonical histories with the predefined range
