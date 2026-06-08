@@ -17,9 +17,12 @@ def main():
     parser.add_argument('--termination_arm', action='store_true')
     parser.add_argument('--contexts', type=float, nargs='+', default=None)
     parser.add_argument('--context_prior', type=float, nargs='+', default=None)
-
+    parser.add_argument('--k', type=float, default=0.0)
 
     args = parser.parse_args()
+
+    ## load max_emps
+    df_max = pd.read_csv(f'useful_saves/sweep/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{["noTermination","Termination"][args.termination_arm]}_max_emps.csv')
 
     ## run expt
     print('Running experiment with parameters:')
@@ -31,15 +34,19 @@ def main():
     print(f'  ell_hi: {args.ell_hi}')
     print(f'  alphas: {args.alphas}')
     print(f'  termination_arm: {args.termination_arm}')
+    print(f'  contexts: {args.contexts}')
+    print(f'  context_prior: {args.context_prior}')
+    print(f'  k: {args.k}')
     df_curves = enumerate_curves(n_arms=args.n_arms, n_outcomes=args.n_outcomes, n_trials=args.n_trials, alphas=args.alphas,
                                  ell_hi=args.ell_hi, ell_lo=args.ell_lo,
                                 context_prior=args.context_prior, contexts=args.contexts,
                                  termination_arm=args.termination_arm,
-                                 n_jobs=-1, n_ell_samples=args.n_ell_samples
+                                 n_jobs=-1, n_ell_samples=args.n_ell_samples,
+                                 df_max=df_max, k=args.k
                                  )
     
     ## save
-    df_curves.to_csv(f'useful_saves/sweep/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials.csv', index=False)
+    df_curves.to_csv(f'useful_saves/sweep/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{["noTermination","Termination"][args.termination_arm]}_{args.k}k.csv', index=False)
 
 if __name__ == '__main__':
     main()
