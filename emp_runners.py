@@ -483,7 +483,6 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      contexts=None, context_prior=None,
                      df_tip=None, termination_arm=True, temp=1,
                      horizons = None,
-                     df_tip=None, termination_arm=True, temp=1.0,
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50,
                      tied_only=False, n_jobs=1):
