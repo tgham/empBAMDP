@@ -83,10 +83,14 @@ class EmpAgent:
     ## objective hooks -- overridden by subclasses
     _worst = None              # initial "best" before optimisation (-inf / +inf)
 
-    def __init__(self, n_arms, n_outcomes, contexts, termination_arm=False):
+    def __init__(self, n_arms, n_outcomes, contexts, termination_arm=False, cost=0.0):
         self.n_arms = n_arms
         self.n_outcomes = n_outcomes
         self.termination_arm = bool(termination_arm)
+        ## per-pull sampling cost, paid on every arm pull throughout the horizon.
+        ## Only meaningful for the maximising EmpowermentAgent; the minimising
+        ## InfoSeekingAgent must leave this at 0 (a negative term would corrupt it).
+        self.cost = float(cost)
 
         alphas = np.array([float(a) for a, _ in contexts], dtype=float)
         priors = np.array([float(p) for _, p in contexts], dtype=float)
@@ -145,10 +149,10 @@ class EmpAgent:
         if depth == 0:
             return self.leaf_value(counts)
         p = self.predictive(counts)
-        ## value of terminating now (current belief), no more pulls
+        ## value of terminating now (current belief), no more pulls -- no cost
         best = self.leaf_value(counts) if self.termination_arm else self._worst
         for a in range(self.n_arms):
-            ev = 0.0
+            ev = -self.cost                          # pulling arm a pays the sampling cost
             for o in range(self.n_outcomes):
                 p_o = p[a, o]
                 counts[a, o] += 1
@@ -173,8 +177,9 @@ class EmpAgent:
                 work[a, o] += 1
                 Q[a] += p_o * self.bellman_V(work, h - 1)
                 work[a, o] -= 1
+            Q[a] -= self.cost                        # pulling arm a pays the sampling cost
         if self.termination_arm:
-            Q[-1] = self.leaf_value(work)
+            Q[-1] = self.leaf_value(work)            # terminate: no cost
         return Q
 
 
@@ -183,8 +188,8 @@ class EmpowermentAgent(EmpAgent):
 
     _worst = -np.inf
 
-    def __init__(self, n_arms, n_outcomes, contexts, ell, termination_arm=False):
-        super().__init__(n_arms, n_outcomes, contexts, termination_arm)
+    def __init__(self, n_arms, n_outcomes, contexts, ell, termination_arm=False, cost=0.0):
+        super().__init__(n_arms, n_outcomes, contexts, termination_arm, cost=cost)
         self.ell = ell
 
     def _opt(self, a, b):
@@ -238,17 +243,17 @@ class InfoSeekingAgent(EmpAgent):
 ## exactly, since predictive = (0 + alphas)/sum(alphas) and the variance leaf
 ## uses the same alphas. The mixture machinery is bypassed (self.single).
 ## ---------------------------------------------------------------------------
-def bellman_emp_V(alphas, n_arms, n_outcomes, depth, termination_arm, ell):
+def bellman_emp_V(alphas, n_arms, n_outcomes, depth, termination_arm, ell, cost=0.0):
     """Bayes-adaptive optimal empowerment value (single-context wrapper)."""
     agent = EmpowermentAgent(n_arms, n_outcomes, contexts=[(0.0, 1.0)],
-                             ell=ell, termination_arm=termination_arm)
+                             ell=ell, termination_arm=termination_arm, cost=cost)
     return agent.bellman_V(np.asarray(alphas, dtype=float), depth)
 
 
-def bellman_emp_Q(current_alphas, n_arms, n_outcomes, h, termination_arm, ell, verbose=False):
+def bellman_emp_Q(current_alphas, n_arms, n_outcomes, h, termination_arm, ell, verbose=False, cost=0.0):
     """Per-first-action Bayes-adaptive empowerment Q (single-context wrapper)."""
     agent = EmpowermentAgent(n_arms, n_outcomes, contexts=[(0.0, 1.0)],
-                             ell=ell, termination_arm=termination_arm)
+                             ell=ell, termination_arm=termination_arm, cost=cost)
     return agent.bellman_Q(current_alphas, h)
 
 
