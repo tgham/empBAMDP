@@ -69,7 +69,8 @@ def run_emp_bamcp(agent, env, verbose=True):
     }
 
 
-def run_emp(agent, env, horizon=None, policy='bellman', termination_arm=None, verbose=True):
+def run_emp(agent, env, horizon=None, policy='bellman', termination_arm=None,
+            df_max=None, k=0.0, verbose=True):
     """Run an empowerment-bandit agent with exact Q estimates.
 
     `policy='bellman'` (default): Bayes-adaptive optimal Q via the recursion
@@ -91,18 +92,36 @@ def run_emp(agent, env, horizon=None, policy='bellman', termination_arm=None, ve
     empowerment and ends the episode. `uniform_tail` does not currently
     support termination.
 
+    `df_max`/`k`: optional per-pull sampling cost. If `df_max` (columns `ell`,
+    `alpha`, `current_emp`) is given, every arm pull is penalised by
+    `c = k * current_emp` for this env's (env.alpha, env.ell); the cost is paid
+    recursively over the horizon and the terminate action is free. Only the
+    `bellman` policy supports a cost.
+
     H = min(horizon, n_trials - t) is the remaining horizon at each trial,
     p(o|a, h) is the posterior predictive of the env's Dirichlet posterior.
     """
     if termination_arm is None:
         termination_arm = bool(getattr(env, 'termination_arm', False))
 
+    ## per-pull sampling cost for this env's (alpha, ell): c = k * max emp
+    cost = 0.0
+    if df_max is not None and k != 0:
+        m = df_max.loc[(df_max['alpha'].astype(str) == str(env.alpha))
+                       & np.isclose(df_max['ell'].astype(float), float(env.ell)),
+                       'current_emp']
+        if len(m) == 0:
+            raise KeyError(f"df_max has no current_emp for alpha={env.alpha!r}, ell={env.ell!r}")
+        cost = k * float(m.iloc[0])
+
     if policy == 'bellman':
         Q_fn = lambda alphas, n_a, n_o, h_, e: bellman_emp_Q(
-            alphas, n_a, n_o, h_, termination_arm, e, verbose=verbose)
+            alphas, n_a, n_o, h_, termination_arm, e, verbose=verbose, cost=cost)
     elif policy == 'uniform_tail':
         if termination_arm:
             raise NotImplementedError("uniform_tail policy does not support termination_arm")
+        if k != 0:
+            raise NotImplementedError("uniform_tail policy does not support a sampling cost")
         Q_fn = uniform_tail_emp_Q
     else:
         raise ValueError(f"unknown policy {policy!r}; expected 'bellman' or 'uniform_tail'")
@@ -471,11 +490,12 @@ def enumerate_tipping_intervals(n_arms=2, n_outcomes=2, n_trials=3, alpha=1.0, t
     return pd.DataFrame([r for batch in batches for r in batch])
 
 
-def _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h):
+def _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cost=0.0):
     """Module-level (picklable) helper: build an EmpowermentAgent for one ell
-    and return its horizon-h Q over the given counts. Used by the joblib path."""
+    and return its horizon-h Q over the given counts. Used by the joblib path.
+    `cost` is the per-pull sampling cost (subtracted from arm Q's in the recursion)."""
     agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=ell,
-                             termination_arm=termination_arm)
+                             termination_arm=termination_arm, cost=cost)
     return agent.bellman_Q(counts, h)
 
 
@@ -485,6 +505,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      horizons = None,
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50,
+                     df_max=None, k=0.0,
                      tied_only=False, n_jobs=1):
     """Q / softmax-prob curves over ell for canonical histories.
 
@@ -512,6 +533,13 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
 
     Both kinds also emit the (now context-aware) info-seeking columns `info_*`,
     computed by an `InfoSeekingAgent` over the same context set.
+
+    SAMPLING COST: if `df_max` is given (columns `ell`, `alpha`, `current_emp`,
+    typically the per-(alpha, ell) max-empowerment history from a prior cost-free
+    sweep), each arm pull is penalised by `c = k * current_emp` for the matching
+    (alpha, ell). The cost is paid recursively on every pull over the horizon
+    (see `EmpAgent.bellman_Q`); the terminate action is free. The info-seeking
+    columns stay cost-free. `c` is recorded in the `cost` column (`k` in `k`).
 
     Returns a long-format DataFrame with one row per (history_str, t, ell,
     agent), columns: alpha, context_set, Q_0, Q_1, ..., Q_terminate (if
@@ -553,6 +581,28 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
         sweep_tasks = [(int(r['t']), r['history_str'],
                         float(r['ell_min']), float(r['ell_max']))
                        for _, r in ranges.iterrows()]
+
+    ## per-pull sampling cost: c = k * (max achievable emp for this alpha, ell),
+    ## looked up from df_max. Build per-alpha (ell, current_emp) arrays once.
+    use_cost = df_max is not None and k != 0
+    if use_cost:
+        cost_tables = {}
+        for key, grp in df_max.groupby(df_max['alpha'].astype(str)):
+            cost_tables[key] = (grp['ell'].to_numpy(dtype=float),
+                                grp['current_emp'].to_numpy(dtype=float))
+
+    def cost_for(alpha_label, e):
+        if not use_cost:
+            return 0.0
+        key = str(alpha_label)
+        if key not in cost_tables:
+            raise KeyError(f"df_max has no rows for alpha={alpha_label!r}")
+        ells_arr, emps_arr = cost_tables[key]
+        hits = np.flatnonzero(np.isclose(ells_arr, e))
+        if len(hits) == 0:
+            raise KeyError(f"df_max has no current_emp for alpha={alpha_label!r}, ell={e}")
+        return k * float(emps_arr[hits[0]])
+
     rows = []
     for alpha_label, context_set, ctx in agent_specs:
         for horizon in horizons:
@@ -570,15 +620,18 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                 info_best_a = int(np.argmin(info_Q))
                 info_probs = _softmax(-info_Q / temp)
 
+                ## per-pull sampling cost for each sampled ell (0 when df_max is None)
+                costs = [cost_for(alpha_label, e) for e in sample_ells]
+
                 if n_jobs == 1:
                     Qs = [_emp_bellman_Q(n_arms, n_outcomes, ctx, e,
-                                         termination_arm, canon_C, h_remaining)
-                        for e in sample_ells]
+                                         termination_arm, canon_C, h_remaining, cost=c)
+                        for e, c in zip(sample_ells, costs)]
                 else:
                     Qs = Parallel(n_jobs=n_jobs)(
                         delayed(_emp_bellman_Q)(n_arms, n_outcomes, ctx, e,
-                                                termination_arm, canon_C, h_remaining)
-                        for e in sample_ells
+                                                termination_arm, canon_C, h_remaining, cost=c)
+                        for e, c in zip(sample_ells, costs)
                     )
                 
                 ## calculate current emp
@@ -598,6 +651,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                     probs = _softmax(Q / temp)
                     row = {'alpha': alpha_label, 'context_set': context_set,
                         'horizon': horizon, 'history_str': history_str, 't': t, 'ell': e, 'current_emp': current_emps[ei],
+                        'cost': costs[ei], 'k': k,
                         'info_best_a': info_best_a}
                     for a in range(n_arms):
                         row[f'Q_{a}'] = Q[a]
