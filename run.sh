@@ -10,8 +10,8 @@
 #SBATCH --mail-user=thomas.graham@tuebingen.mpg.de
 
 
-# micromamba activate chickpeas
-srun python -u ell_alpha_sweep.py --n_ell_samples 1000 --alphas 0.01 0.15 0.3 0.45 0.6 0.75 0.9 1.0 --n_trials 6
+micromamba activate chickpeas
+srun python -u ell_alpha_sweep.py --n_ell_samples 1000 --alphas 0.0125 0.025 0.05 0.1 0.2 0.4 0.7 1.0 --n_trials 6 --n_outcomes 4 --termination_arm
 
 
 
