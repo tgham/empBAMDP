@@ -505,7 +505,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      horizons = None,
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50,
-                     df_max=None, k=0.0,
+                     df_max=None, ks=(0.0,),
                      tied_only=False, n_jobs=1):
     """Q / softmax-prob curves over ell for canonical histories.
 
@@ -534,12 +534,20 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     Both kinds also emit the (now context-aware) info-seeking columns `info_*`,
     computed by an `InfoSeekingAgent` over the same context set.
 
-    SAMPLING COST: if `df_max` is given (columns `ell`, `alpha`, `current_emp`,
-    typically the per-(alpha, ell) max-empowerment history from a prior cost-free
-    sweep), each arm pull is penalised by `c = k * current_emp` for the matching
-    (alpha, ell). The cost is paid recursively on every pull over the horizon
-    (see `EmpAgent.bellman_Q`); the terminate action is free. The info-seeking
-    columns stay cost-free. `c` is recorded in the `cost` column (`k` in `k`).
+    SAMPLING COST: `ks` is a list of cost fractions to sweep; the whole curve
+    enumeration is repeated for each `k` and stacked into one DataFrame with `k`
+    (and the resulting per-row `cost`) as columns. For a given `k`, each arm pull
+    is penalised by `c = k * (max achievable emp for this alpha, ell)`, paid
+    recursively on every pull over the horizon (see `EmpAgent.bellman_Q`); the
+    terminate action is free and the info-seeking columns stay cost-free.
+
+    The per-(alpha, ell) max empowerment comes from `df_max` (columns `ell`,
+    `alpha`, `current_emp`). If `df_max` is None and any `k != 0` is requested,
+    it is derived internally as the max `current_emp` over all swept histories
+    for each (alpha, ell) -- i.e. the `k=0` pass seeds the costed ones, so a
+    single call is self-contained. (Internal derivation requires `df_tip is
+    None`, since the per-history ell grids otherwise differ; pass `df_max`
+    explicitly in that case.)
 
     Returns a long-format DataFrame with one row per (history_str, t, ell,
     agent), columns: alpha, context_set, Q_0, Q_1, ..., Q_terminate (if
@@ -582,17 +590,47 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                         float(r['ell_min']), float(r['ell_max']))
                        for _, r in ranges.iterrows()]
 
+    ## current empowerment (cost-free leaf) for one belief context at one ell
+    def _leaf_emp(ctx, e, canon_C):
+        agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e,
+                                 termination_arm=termination_arm)
+        counts = canon_C + np.array([a for a, _ in ctx]).reshape(-1, 1)
+        return agent.leaf_value(counts)
+
+    ## sampling costs to sweep
+    ks = [ks] if np.isscalar(ks) else list(ks)
+    need_cost = any(float(k) != 0 for k in ks)
+
     ## per-pull sampling cost: c = k * (max achievable emp for this alpha, ell),
-    ## looked up from df_max. Build per-alpha (ell, current_emp) arrays once.
-    use_cost = df_max is not None and k != 0
-    if use_cost:
+    ## looked up from df_max. If df_max is absent, derive it from the cost-free
+    ## leaf empowerment, taking the max over all swept histories per (alpha, ell).
+    if df_max is None and need_cost:
+        if df_tip is not None:
+            raise ValueError("enumerate_curves: pass df_max explicitly when df_tip "
+                             "is set (per-history ell grids prevent internal derivation)")
+        sample_ells = np.logspace(np.log10(ell_lo), np.log10(ell_hi), n_ell_samples)
+        max_rows = []
+        for alpha_label, _, ctx in agent_specs:
+            max_emp = np.full(n_ell_samples, -np.inf)
+            for (t, _, _, history_str, _) in states:
+                canon_C = states_by_th[(int(t), history_str)]
+                for ei, e in enumerate(sample_ells):
+                    max_emp[ei] = max(max_emp[ei], _leaf_emp(ctx, e, canon_C))
+            for ei, e in enumerate(sample_ells):
+                max_rows.append({'alpha': alpha_label, 'ell': e,
+                                 'current_emp': max_emp[ei]})
+        df_max = pd.DataFrame(max_rows)
+
+    ## build per-alpha (ell, current_emp) arrays once for fast lookup
+    cost_tables = None
+    if df_max is not None:
         cost_tables = {}
         for key, grp in df_max.groupby(df_max['alpha'].astype(str)):
             cost_tables[key] = (grp['ell'].to_numpy(dtype=float),
                                 grp['current_emp'].to_numpy(dtype=float))
 
-    def cost_for(alpha_label, e):
-        if not use_cost:
+    def cost_for(alpha_label, e, k):
+        if k == 0 or cost_tables is None:
             return 0.0
         key = str(alpha_label)
         if key not in cost_tables:
@@ -620,50 +658,43 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                 info_best_a = int(np.argmin(info_Q))
                 info_probs = _softmax(-info_Q / temp)
 
-                ## per-pull sampling cost for each sampled ell (0 when df_max is None)
-                costs = [cost_for(alpha_label, e) for e in sample_ells]
+                ## current emp (cost-free leaf): k-independent, computed once
+                current_emps = [_leaf_emp(ctx, e, canon_C) for e in sample_ells]
 
-                if n_jobs == 1:
-                    Qs = [_emp_bellman_Q(n_arms, n_outcomes, ctx, e,
-                                         termination_arm, canon_C, h_remaining, cost=c)
-                        for e, c in zip(sample_ells, costs)]
-                else:
-                    Qs = Parallel(n_jobs=n_jobs)(
-                        delayed(_emp_bellman_Q)(n_arms, n_outcomes, ctx, e,
-                                                termination_arm, canon_C, h_remaining, cost=c)
-                        for e, c in zip(sample_ells, costs)
-                    )
-                
-                ## calculate current emp
-                current_emps = []
-                for e in sample_ells:
-                    agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e,
-                                             termination_arm=termination_arm)
-                    counts = canon_C + np.array([a for a, _ in ctx]).reshape(-1, 1)
-                    current_emp = agent.leaf_value(counts)
-                    current_emps.append(current_emp)
+                ## sweep the sampling costs: re-evaluate Q at each k, stack rows
+                for k in ks:
+                    costs = [cost_for(alpha_label, e, k) for e in sample_ells]
 
+                    if n_jobs == 1:
+                        Qs = [_emp_bellman_Q(n_arms, n_outcomes, ctx, e,
+                                             termination_arm, canon_C, h_remaining, cost=c)
+                            for e, c in zip(sample_ells, costs)]
+                    else:
+                        Qs = Parallel(n_jobs=n_jobs)(
+                            delayed(_emp_bellman_Q)(n_arms, n_outcomes, ctx, e,
+                                                    termination_arm, canon_C, h_remaining, cost=c)
+                            for e, c in zip(sample_ells, costs)
+                        )
 
-                for ei in range(len(sample_ells)):
-                    e = sample_ells[ei]
-                    Q = Qs[ei]
-                # for e, Q in zip(sample_ells, Qs):
-                    probs = _softmax(Q / temp)
-                    row = {'alpha': alpha_label, 'context_set': context_set,
-                        'horizon': horizon, 'history_str': history_str, 't': t, 'ell': e, 'current_emp': current_emps[ei],
-                        'cost': costs[ei], 'k': k,
-                        'info_best_a': info_best_a}
-                    for a in range(n_arms):
-                        row[f'Q_{a}'] = Q[a]
-                        row[f'p_{a}'] = probs[a]
-                        row[f'info_Q_{a}'] = info_Q[a]
-                        row[f'info_p_{a}'] = info_probs[a]
-                    if termination_arm:
-                        row['Q_terminate'] = Q[-1]
-                        row['p_terminate'] = probs[-1]
-                        row['info_Q_terminate'] = info_Q[-1]
-                        row['info_p_terminate'] = info_probs[-1]
-                    rows.append(row)
+                    for ei in range(len(sample_ells)):
+                        e = sample_ells[ei]
+                        Q = Qs[ei]
+                        probs = _softmax(Q / temp)
+                        row = {'alpha': alpha_label, 'context_set': context_set,
+                            'horizon': horizon, 'history_str': history_str, 't': t, 'ell': e, 'current_emp': current_emps[ei],
+                            'cost': costs[ei], 'k': k,
+                            'info_best_a': info_best_a}
+                        for a in range(n_arms):
+                            row[f'Q_{a}'] = Q[a]
+                            row[f'p_{a}'] = probs[a]
+                            row[f'info_Q_{a}'] = info_Q[a]
+                            row[f'info_p_{a}'] = info_probs[a]
+                        if termination_arm:
+                            row['Q_terminate'] = Q[-1]
+                            row['p_terminate'] = probs[-1]
+                            row['info_Q_terminate'] = info_Q[-1]
+                            row['info_p_terminate'] = info_probs[-1]
+                        rows.append(row)
 
     return pd.DataFrame(rows)
 
