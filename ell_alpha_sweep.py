@@ -26,6 +26,9 @@ def main():
     stem = f'useful_saves/sweep/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{tag}'
     max_emps_path = f'{stem}_max_emps.csv'
 
+    if args.contexts is not None:
+        stem += f'_unknown_contexts'
+
     ks = sorted(args.ks)
 
     ## df_max (per-(alpha, ell) max empowerment) drives the sampling cost. If a
@@ -59,8 +62,11 @@ def main():
                                  df_max=df_max, ks=ks
                                  )
 
-    ## one dataframe over all ks
-    df_curves.to_csv(f'{stem}_ksweep.csv', index=False)
+    ## save
+    if len(ks) > 1:
+        df_curves.to_csv(f'{stem}_ksweep.csv', index=False)
+    else:
+        df_curves.to_csv(f'{stem}_{ks[0]}k.csv', index=False)
 
     ## persist the max-empowerment table from the cost-free pass for later reuse
     if (df_curves['k'] == 0).any():
