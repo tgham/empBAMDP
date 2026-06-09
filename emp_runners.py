@@ -663,7 +663,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
 
                 ## posterior prob of contexts (same for all agents, since they share the same prior and history)
                 if context_set.startswith('ctx'):
-                    agent_tmp = EmpAgent(n_arms, n_outcomes, ctx, ell=sample_ells[0], termination_arm=termination_arm)
+                    agent_tmp = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=sample_ells[0], termination_arm=termination_arm)
                     counts = canon_C + np.array([a for a, _ in ctx]).reshape(-1, 1)
                     p_ctx = agent_tmp.context_posterior(counts)
                 else:
