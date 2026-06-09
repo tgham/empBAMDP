@@ -622,29 +622,121 @@ def plot_curves(
     return figs_by_t
 
 
+def _heatmap_metric_spec(metric, cmap):
+    """Resolve a heat `metric` into the data columns to pivot, the columns
+    used to build the heat value, the info-seeker columns, a colorbar label,
+    whether the scale is symmetric about zero, and a default cmap.
+
+    Returns (value_cols, info_cols, build_heat, cbar_label, symmetric, cmap).
+    `build_heat(pivot, cols)` turns a pivot (with a column level matching
+    `cols`) into the 2D heat array.
+    """
+    if metric == 'p_diff':
+        value_cols = ['p_0', 'p_1']
+        info_cols = ['info_p_0', 'info_p_1']
+        cbar_label = 'p₀ − p₁'
+        symmetric = True
+        cmap = 'RdBu' if cmap is None else cmap
+
+        def build_heat(pivot, cols):
+            return (pivot[cols[0]] - pivot[cols[1]]).values
+    elif metric == 'p_terminate':
+        value_cols = ['p_terminate']
+        info_cols = ['info_p_terminate']
+        cbar_label = 'P(terminate)'
+        symmetric = False
+        cmap = 'viridis' if cmap is None else cmap
+
+        def build_heat(pivot, cols):
+            return pivot[cols[0]].values
+    else:
+        raise ValueError(f"unknown metric {metric!r}; expected 'p_diff' or 'p_terminate'")
+    return value_cols, info_cols, build_heat, cbar_label, symmetric, cmap
+
+
+def _heatmap_limits(heat, symmetric):
+    """Per-array (vmin, vmax) for a heat panel. Symmetric metrics centre on
+    zero with a small floor so a near-flat panel doesn't blow up the scale;
+    asymmetric metrics use the data range (with a small floor)."""
+    if symmetric:
+        vmax_abs = max(abs(np.nanmin(heat)), abs(np.nanmax(heat)))
+        if vmax_abs < 1e-3:
+            vmax_abs = 1e-3
+        return -vmax_abs, vmax_abs
+    vmin = float(np.nanmin(heat))
+    vmax = float(np.nanmax(heat))
+    if vmax - vmin < 1e-3:
+        vmax = vmin + 1e-3
+    return vmin, vmax
+
+
 def plot_heatmap(
     df_curves,
+    y_axis='alpha',
+    metric='p_diff',
+    fixed_k=None,
+    fixed_alpha=None,
     max_n_cols=4,
-    cmap='RdBu',
+    cmap=None,
     panel_size=(3.0, 3.0),
     suptitle=None,
     shared_colorbar=True,
     plot_info_seeker=True,
 ):
-    """Plot 2D heatmaps of p_0 - p_1 over (ell, alpha) grid for each (history, t).
+    """Plot 2D heatmaps of a per-(history, t) metric over an (ell, y_axis) grid.
     Returns one figure per trial t; each figure has a grid of panels for that
     trial's histories.
 
-    Expected input: df_curves output from enumerate_curves with both ell and alpha
-    columns (i.e., run with alpha_lo and alpha_hi set).
+    `y_axis` chooses what varies down the y-axis:
+      - 'alpha' (default): one row per Dirichlet concentration alpha, at the
+        single sampling cost `fixed_k`.
+      - 'k': one row per sampling cost k, at the single concentration
+        `fixed_alpha` — i.e. how a fixed-ell agent's preference shifts as the
+        cost of sampling changes.
+    The variable not on the y-axis is sliced to a single value (`fixed_k` /
+    `fixed_alpha`); if left None it defaults to 0.0 when present, else the
+    smallest value, so the pivot never silently averages over it.
+
+    `metric` chooses the heat:
+      - 'p_diff' (default): p_0 - p_1, symmetric diverging scale.
+      - 'p_terminate': P(terminate), sequential scale.
+
+    Expected input: df_curves from enumerate_curves with ell, alpha and (for
+    the k-sweep / cost slicing) k columns.
 
     Returns a dict mapping t -> (fig, axes_array) where axes_array is a 2D numpy
     array of axes for that trial's grid.
     """
     if 'history_str' not in df_curves.columns or len(df_curves) == 0:
         raise ValueError("df_curves is empty or missing 'history_str'")
-    if 'alpha' not in df_curves.columns:
-        raise ValueError("df_curves missing 'alpha' column — run enumerate_curves with alpha_lo/alpha_hi")
+    if y_axis not in ('alpha', 'k'):
+        raise ValueError(f"unknown y_axis {y_axis!r}; expected 'alpha' or 'k'")
+    if y_axis not in df_curves.columns:
+        raise ValueError(f"df_curves missing {y_axis!r} column")
+
+    value_cols, info_cols, build_heat, cbar_label, symmetric, cmap = \
+        _heatmap_metric_spec(metric, cmap)
+    if plot_info_seeker:
+        plot_info_seeker = all(c in df_curves.columns for c in info_cols)
+
+    ## the variable NOT on the y-axis is fixed to a single slice so the pivot
+    ## (which aggregates with 'first') never silently collapses it.
+    slice_col = 'k' if y_axis == 'alpha' else 'alpha'
+    requested = fixed_k if y_axis == 'alpha' else fixed_alpha
+    if slice_col in df_curves.columns:
+        slice_vals = sorted(v for v in df_curves[slice_col].dropna().unique())
+        ## default to the lowest value present; otherwise use the requested one.
+        slice_val = requested if requested is not None else (
+            slice_vals[0] if slice_vals else None)
+        if slice_val is not None:
+            df_curves = df_curves[df_curves[slice_col] == slice_val]
+            if len(df_curves) == 0:
+                raise ValueError(f"no rows with {slice_col} == {slice_val!r}")
+        slice_note = f'{slice_col} = {slice_val}'
+    else:
+        slice_note = None
+
+    y_label = 'α' if y_axis == 'alpha' else 'k'
 
     panels_by_t = {}
     for t, history_str in (df_curves[['t', 'history_str']]
@@ -663,21 +755,14 @@ def plot_heatmap(
 
         # Calculate vmin/vmax based on shared_colorbar setting
         if shared_colorbar:
-            # Shared colorbar: normalize across all histories in this trial
-            trial_diffs = (df_curves[df_curves['t'] == t]['p_0'] -
-                           df_curves[df_curves['t'] == t]['p_1']).values
-            vmax_abs = max(abs(np.nanmin(trial_diffs)), abs(np.nanmax(trial_diffs)))
-            ## if close to zero, set a minimum scale to avoid a flat colorbar
-            if vmax_abs < 1e-3:
-                vmax_abs = 1e-3
-            vmin = -vmax_abs
-            vmax = vmax_abs
-            vmin_per_history = None  # will be set per history if needed
+            # Shared colorbar: normalize across all histories in this trial.
+            # build_heat works on the raw trial frame too (plain column access).
+            df_t = df_curves[df_curves['t'] == t]
+            vmin, vmax = _heatmap_limits(build_heat(df_t, value_cols), symmetric)
         else:
             # Per-history colorbars: will compute for each history in the loop
             vmin = None
             vmax = None
-            vmin_per_history = {}
 
         histories = panels_by_t[t]
         n_p = len(histories)
@@ -712,31 +797,28 @@ def plot_heatmap(
                 ax_info.set_visible(False)
                 continue
 
-            pivot = sub.pivot_table(index='alpha', columns='ell',
-                                    values=['p_0', 'p_1', 'info_p_0', 'info_p_1'], aggfunc='first')
-            if pivot.empty or 'p_0' not in pivot.columns:
+            pivot_cols = value_cols + (info_cols if plot_info_seeker else [])
+            pivot = sub.pivot_table(index=y_axis, columns='ell',
+                                    values=pivot_cols, aggfunc='first')
+            if pivot.empty or value_cols[0] not in pivot.columns:
                 ax.text(0.5, 0.5, 'pivot error', ha='center', va='center',
                         transform=ax.transAxes, color='grey', fontsize=10)
                 ax.set_title(history_str, fontsize=8)
                 ax_info.set_visible(False)
                 continue
 
-            heat = (pivot['p_0'] - pivot['p_1']).values
-            ells = pivot['p_0'].columns.values
-            alphas = pivot['p_0'].index.values
+            heat = build_heat(pivot, value_cols)
+            ells = pivot[value_cols[0]].columns.values
+            ys = pivot[value_cols[0]].index.values
 
             # Compute per-history vmin/vmax if not using shared colorbar
             if not shared_colorbar:
-                hist_vmax = max(abs(np.nanmin(heat)), abs(np.nanmax(heat)))
-                if hist_vmax < 1e-3:
-                    hist_vmax = 1e-3
-                hist_vmin = -hist_vmax
-                hist_vmax_final = hist_vmax
+                hist_vmin, hist_vmax_final = _heatmap_limits(heat, symmetric)
             else:
                 hist_vmin = vmin
                 hist_vmax_final = vmax
 
-            pm = ax.pcolormesh(ells, alphas, heat, cmap=cmap, vmin=hist_vmin, vmax=hist_vmax_final,
+            pm = ax.pcolormesh(ells, ys, heat, cmap=cmap, vmin=hist_vmin, vmax=hist_vmax_final,
                                shading='auto')
             ax.set_xscale('log')
             # Set x-axis ticks to show each decade
@@ -744,30 +826,30 @@ def plot_heatmap(
             ax.set_title(history_str, fontsize=8)
 
             if i % ncols == 0:
-                ax.set_ylabel('α')
+                ax.set_ylabel(y_label)
             if i // ncols == nr - 1:
                 ax.set_xlabel(r'$\ell$')
             ax.grid(alpha=0.25, which='both')
 
             # Plot info-seeker panel (vertical bar)
-            if plot_info_seeker and 'info_p_0' in pivot.columns and 'info_p_1' in pivot.columns:
-                info_heat = (pivot['info_p_0'] - pivot['info_p_1']).values
+            if plot_info_seeker and all(c in pivot.columns for c in info_cols):
+                info_heat = build_heat(pivot, info_cols)
                 # Average across ell (should be constant for info_p)
                 info_col = info_heat.mean(axis=1, keepdims=True)
                 im = ax_info.imshow(info_col, aspect='auto', cmap=cmap, vmin=hist_vmin, vmax=hist_vmax_final,
-                                    extent=[0, 1, alphas[0], alphas[-1]], origin='lower', interpolation='none')
+                                    extent=[0, 1, ys[0], ys[-1]], origin='lower', interpolation='none')
                 ax_info.tick_params(labelleft=False, labelbottom=False)
                 if i // ncols == nr - 1:
                     ax_info.set_xlabel('info-seeker', fontsize=7)
 
                 # Add per-panel colorbar if not using shared colorbar
                 if not shared_colorbar:
-                    fig.colorbar(im, ax=ax_info, label='p₀ − p₁', pad=0.02, aspect=20)
+                    fig.colorbar(im, ax=ax_info, label=cbar_label, pad=0.02, aspect=20)
             else:
                 ax_info.set_visible(False)
                 # If not plotting info-seeker but using per-panel colorbars, add colorbar to main axis
                 if not shared_colorbar:
-                    fig.colorbar(pm, ax=ax, label='p₀ − p₁', pad=0.02)
+                    fig.colorbar(pm, ax=ax, label=cbar_label, pad=0.02)
 
         for j in range(n_p, nr * ncols):
             ax_flat[j].set_visible(False)
@@ -784,12 +866,17 @@ def plot_heatmap(
             sm.set_array([])
             # Attach colorbar to info axis if plotting info-seeker, otherwise to main axis
             cbar_ax = info_axes[0, -1] if plot_info_seeker else axes[0, -1]
-            cbar_kwargs = {'label': 'p₀ − p₁', 'pad': 0.08}
+            cbar_kwargs = {'label': cbar_label, 'pad': 0.08}
             if plot_info_seeker:
                 cbar_kwargs['aspect'] = 20  # Make it taller when attached to narrow info axis
             fig.colorbar(sm, ax=cbar_ax, **cbar_kwargs)
 
-        title = f't = {t}' if suptitle is None else f'{suptitle}  |  t = {t}'
+        title_bits = [f't = {t}']
+        if slice_note is not None:
+            title_bits.append(slice_note)
+        title = '  |  '.join(title_bits)
+        if suptitle is not None:
+            title = f'{suptitle}  |  {title}'
         fig.suptitle(title, fontsize=12, fontweight='bold')
         figs_by_t[t] = (fig, axes)
 

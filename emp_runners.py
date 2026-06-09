@@ -661,6 +661,14 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                 ## current emp (cost-free leaf): k-independent, computed once
                 current_emps = [_leaf_emp(ctx, e, canon_C) for e in sample_ells]
 
+                ## posterior prob of contexts (same for all agents, since they share the same prior and history)
+                if context_set.startswith('ctx'):
+                    agent_tmp = EmpAgent(n_arms, n_outcomes, ctx, ell=sample_ells[0], termination_arm=termination_arm)
+                    counts = canon_C + np.array([a for a, _ in ctx]).reshape(-1, 1)
+                    p_ctx = agent_tmp.context_posterior(counts)
+                else:
+                    p_ctx = np.array([1.0])
+                    
                 ## sweep the sampling costs: re-evaluate Q at each k, stack rows
                 for k in ks:
                     costs = [cost_for(alpha_label, e, k) for e in sample_ells]
@@ -682,13 +690,15 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                         probs = _softmax(Q / temp)
                         row = {'alpha': alpha_label, 'context_set': context_set,
                             'horizon': horizon, 'history_str': history_str, 't': t, 'ell': e, 'current_emp': current_emps[ei],
-                            'cost': costs[ei], 'k': k,
+                            'cost': costs[ei], 'k': k, 
                             'info_best_a': info_best_a}
                         for a in range(n_arms):
                             row[f'Q_{a}'] = Q[a]
                             row[f'p_{a}'] = probs[a]
                             row[f'info_Q_{a}'] = info_Q[a]
                             row[f'info_p_{a}'] = info_probs[a]
+                        for ctx_i in range(len(ctx)):
+                            row[f'p_ctx_{ctx_i}'] = p_ctx[ctx_i]
                         if termination_arm:
                             row['Q_terminate'] = Q[-1]
                             row['p_terminate'] = probs[-1]
