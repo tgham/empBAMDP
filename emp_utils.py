@@ -83,10 +83,16 @@ class EmpAgent:
     ## objective hooks -- overridden by subclasses
     _worst = None              # initial "best" before optimisation (-inf / +inf)
 
-    def __init__(self, n_arms, n_outcomes, contexts, termination_arm=False, cost=0.0):
+    def __init__(self, n_arms, n_outcomes, contexts, termination_arm=False, cost=0.0,
+                 independent_contexts=False):
         self.n_arms = n_arms
         self.n_outcomes = n_outcomes
         self.termination_arm = bool(termination_arm)
+        ## independent_contexts: if True, each arm infers its OWN context posterior
+        ## p(z_a | n_a) from only that arm's counts (arms may be drawn from the same
+        ## or different priors). If False (default), a single GLOBAL posterior p(z|h)
+        ## is shared across all arms. No effect when single-context.
+        self.independent = bool(independent_contexts)
         ## per-pull sampling cost, paid on every arm pull throughout the horizon.
         ## Only meaningful for the maximising EmpowermentAgent; the minimising
         ## InfoSeekingAgent must leave this at 0 (a negative term would corrupt it).
@@ -116,8 +122,23 @@ class EmpAgent:
 
     ## ---- belief model -------------------------------------------------
     def context_log_posterior(self, counts):
-        """Unnormalised log p(z|h) per context (global marginal likelihood)."""
+        """Unnormalised log p(z|h) per context.
+
+        GLOBAL (default): one weight vector, shape (Z,), from the marginal
+        likelihood summed over all arms p(h|z) = prod_a B(a_z + n_a)/B(a_z).
+        INDEPENDENT: per-arm weights, shape (A, Z), each arm's likelihood
+        p(n_a|z) = B(a_z + n_a)/B(a_z) using ONLY that arm's counts.
+        """
         row_sums = counts.sum(axis=1)                          # (A,)
+        if self.independent:
+            ## per arm a, per context z:
+            ##   sum_o gammaln(a_z + n_{a,o}) - gammaln(K*a_z + n_a.sum()) - logB0_z
+            loglik = np.empty((self.n_arms, len(self.alphas_z)))
+            for z, a_z in enumerate(self.alphas_z):
+                num = gammaln(a_z + counts).sum(axis=1)        # (A,)
+                den = gammaln(self.n_outcomes * a_z + row_sums)  # (A,)
+                loglik[:, z] = (num - den) - self._logB0_z[z]
+            return self.log_prior[None, :] + loglik            # (A, Z)
         loglik = np.empty(len(self.alphas_z))
         for z, a_z in enumerate(self.alphas_z):
             ## sum over arms of log B(a_z + n_a): per arm
@@ -128,19 +149,28 @@ class EmpAgent:
         return self.log_prior + loglik
 
     def context_posterior(self, counts):
-        """p(z|h) -- normalised context weights."""
-        return softmax(self.context_log_posterior(counts))
+        """Normalised context weights: (Z,) global, (A, Z) independent."""
+        return softmax(self.context_log_posterior(counts), axis=-1)
+
+    def _context_weights(self, counts):
+        """List of Z context weights, each broadcastable against an (A, O) array.
+
+        Global: scalar w[z]. Independent: column w[:, z][:, None] (per-arm)."""
+        w = self.context_posterior(counts)
+        if self.independent:
+            return [w[:, z][:, None] for z in range(w.shape[1])]
+        return [w[z] for z in range(len(w))]
 
     def predictive(self, counts):
         """Mixture posterior predictive matrix p(o|a,h), shape (A, O)."""
         if self.single:
             a = self.alphas_z[0] + counts
             return a / a.sum(axis=1, keepdims=True)
-        w = self.context_posterior(counts)                     # (Z,)
+        weights = self._context_weights(counts)
         pred = np.zeros((self.n_arms, self.n_outcomes))
         for z, a_z in enumerate(self.alphas_z):
             a = a_z + counts
-            pred += w[z] * (a / a.sum(axis=1, keepdims=True))
+            pred += weights[z] * (a / a.sum(axis=1, keepdims=True))
         return pred
 
     ## ---- shared Bellman recursion -------------------------------------
@@ -188,8 +218,10 @@ class EmpowermentAgent(EmpAgent):
 
     _worst = -np.inf
 
-    def __init__(self, n_arms, n_outcomes, contexts, ell, termination_arm=False, cost=0.0):
-        super().__init__(n_arms, n_outcomes, contexts, termination_arm, cost=cost)
+    def __init__(self, n_arms, n_outcomes, contexts, ell, termination_arm=False, cost=0.0,
+                 independent_contexts=False):
+        super().__init__(n_arms, n_outcomes, contexts, termination_arm, cost=cost,
+                         independent_contexts=independent_contexts)
         self.ell = ell
 
     def _opt(self, a, b):
@@ -224,15 +256,16 @@ class InfoSeekingAgent(EmpAgent):
         if self.single:
             var, _ = self._context_var_mean(counts, self.alphas_z[0])
             return float(var.sum())
-        w = self.context_posterior(counts)                     # (Z,)
+        weights = self._context_weights(counts)                # broadcastable per z
+        Z = len(weights)
         vars_z, means_z = [], []
         for a_z in self.alphas_z:
             v, m = self._context_var_mean(counts, a_z)
             vars_z.append(v); means_z.append(m)
-        mean_bar = sum(w[z] * means_z[z] for z in range(len(w)))
+        mean_bar = sum(weights[z] * means_z[z] for z in range(Z))
         total = np.zeros_like(mean_bar)
-        for z in range(len(w)):
-            total += w[z] * (vars_z[z] + (means_z[z] - mean_bar) ** 2)
+        for z in range(Z):
+            total += weights[z] * (vars_z[z] + (means_z[z] - mean_bar) ** 2)
         return float(total.sum())
 
 
