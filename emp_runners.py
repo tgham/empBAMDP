@@ -490,17 +490,20 @@ def enumerate_tipping_intervals(n_arms=2, n_outcomes=2, n_trials=3, alpha=1.0, t
     return pd.DataFrame([r for batch in batches for r in batch])
 
 
-def _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cost=0.0):
+def _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cost=0.0,
+                   independent_contexts=False):
     """Module-level (picklable) helper: build an EmpowermentAgent for one ell
     and return its horizon-h Q over the given counts. Used by the joblib path.
     `cost` is the per-pull sampling cost (subtracted from arm Q's in the recursion)."""
     agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=ell,
-                             termination_arm=termination_arm, cost=cost)
+                             termination_arm=termination_arm, cost=cost,
+                             independent_contexts=independent_contexts)
     return agent.bellman_Q(counts, h)
 
 
 def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      contexts=None, context_prior=None,
+                     independent_contexts=False,
                      df_tip=None, termination_arm=True, temp=1,
                      horizons = None,
                      ell_lo=0.001, ell_hi=100,
@@ -530,6 +533,13 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
       agent that infers p(z|h) over that context set and acts on the mixture
       posterior predictive. `context_prior` defaults to uniform. Its rows are
       labelled `alpha='unknown'`.
+
+    `independent_contexts` (default False): controls how the UNKNOWN-context
+    agent infers z. When False, a single GLOBAL posterior p(z|h) is shared
+    across all arms (all arms drawn from the same prior). When True, each arm
+    infers its OWN posterior p(z_a|n_a) from only that arm's counts (arms may be
+    drawn from the same or different priors); rows then carry per-arm
+    `p_ctx_{arm}_{context}` columns instead of the global `p_ctx_{context}`.
 
     Both kinds also emit the (now context-aware) info-seeking columns `info_*`,
     computed by an `InfoSeekingAgent` over the same context set.
@@ -593,9 +603,11 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     ## current empowerment (cost-free leaf) for one belief context at one ell
     def _leaf_emp(ctx, e, canon_C):
         agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e,
-                                 termination_arm=termination_arm)
-        counts = canon_C + np.array([a for a, _ in ctx]).reshape(-1, 1)
-        return agent.leaf_value(counts)
+                                 termination_arm=termination_arm,
+                                 independent_contexts=independent_contexts)
+        ## canon_C is the RAW count matrix; the agent adds the prior alpha
+        ## internally (predictive: alpha + counts), so do NOT pre-offset here.
+        return agent.leaf_value(canon_C)
 
     ## sampling costs to sweep
     ks = [ks] if np.isscalar(ks) else list(ks)
@@ -645,7 +657,8 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     for alpha_label, context_set, ctx in agent_specs:
         for horizon in horizons:
             ## info-seeking agent (ell-free) over this context set
-            info_agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm)
+            info_agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm,
+                                          independent_contexts=independent_contexts)
             for i in tqdm(range(len(sweep_tasks)), desc=f"Enumerating curves (alpha={alpha_label})"):
                 t, history_str, e_lo, e_hi = sweep_tasks[i]
                 canon_C = states_by_th[(t, history_str)]
@@ -661,12 +674,15 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                 ## current emp (cost-free leaf): k-independent, computed once
                 current_emps = [_leaf_emp(ctx, e, canon_C) for e in sample_ells]
 
-                ## posterior prob of contexts (same for all agents, since they share the same prior and history)
+                ## posterior prob of contexts (same for all agents, since they share the same prior and history).
+                ## global: p_ctx shape (Z,); independent: shape (A, Z) -- per-arm posteriors.
                 if context_set.startswith('ctx'):
-                    agent_tmp = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=sample_ells[0], termination_arm=termination_arm)
-                    counts = canon_C
-                    p_ctx = agent_tmp.context_posterior(counts)
-                    # print(f"  history {history_str}, counts = {counts.tolist()}, t={t}, p_ctx={p_ctx}")
+                    agent_tmp = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=sample_ells[0],
+                                                 termination_arm=termination_arm,
+                                                 independent_contexts=independent_contexts)
+                    ## context_posterior expects RAW counts (it adds alpha_z internally).
+                    p_ctx = agent_tmp.context_posterior(canon_C)
+                    print(f"  history {history_str}, t={t}, p_ctx={p_ctx}")
                 else:
                     p_ctx = np.array([1.0])
                     
@@ -676,12 +692,14 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
 
                     if n_jobs == 1:
                         Qs = [_emp_bellman_Q(n_arms, n_outcomes, ctx, e,
-                                             termination_arm, canon_C, h_remaining, cost=c)
+                                             termination_arm, canon_C, h_remaining, cost=c,
+                                             independent_contexts=independent_contexts)
                             for e, c in zip(sample_ells, costs)]
                     else:
                         Qs = Parallel(n_jobs=n_jobs)(
                             delayed(_emp_bellman_Q)(n_arms, n_outcomes, ctx, e,
-                                                    termination_arm, canon_C, h_remaining, cost=c)
+                                                    termination_arm, canon_C, h_remaining, cost=c,
+                                                    independent_contexts=independent_contexts)
                             for e, c in zip(sample_ells, costs)
                         )
 
@@ -698,8 +716,14 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                             row[f'p_{a}'] = probs[a]
                             row[f'info_Q_{a}'] = info_Q[a]
                             row[f'info_p_{a}'] = info_probs[a]
-                        for ctx_i in range(len(ctx)):
-                            row[f'p_ctx_{ctx_i}'] = p_ctx[ctx_i]
+                        if independent_contexts and p_ctx.ndim == 2:
+                            ## per-arm context posteriors: p_ctx_{arm}_{context}
+                            for a in range(p_ctx.shape[0]):
+                                for ctx_i in range(p_ctx.shape[1]):
+                                    row[f'p_ctx_{a}_{ctx_i}'] = p_ctx[a, ctx_i]
+                        else:
+                            for ctx_i in range(len(ctx)):
+                                row[f'p_ctx_{ctx_i}'] = p_ctx[ctx_i]
                         if termination_arm:
                             row['Q_terminate'] = Q[-1]
                             row['p_terminate'] = probs[-1]

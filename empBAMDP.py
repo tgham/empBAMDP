@@ -96,7 +96,8 @@ def _(pd):
     n_outcomes = 4
     n_trials = 6
     termination_arm = True
-    df_curves = pd.read_csv('useful_saves/sweep/{}arms_{}outcomes_{}trials_{}_ksweep.csv'.format(n_arms, n_outcomes, n_trials, ['noTermination', 'Termination'][termination_arm]))
+    # df_curves = pd.read_csv('useful_saves/sweep/{}arms_{}outcomes_{}trials_{}_ksweep.csv'.format(n_arms, n_outcomes, n_trials, ['noTermination', 'Termination'][termination_arm]))
+    df_curves = pd.read_csv('useful_saves/sweep/{}arms_{}outcomes_{}trials_{}_unknown_contexts_0.0k.csv'.format(n_arms, n_outcomes, n_trials, ['noTermination', 'Termination'][termination_arm]))
     print('alphas:', df_curves['alpha'].unique())
     df_curves
     return df_curves, n_arms, n_outcomes, n_trials, termination_arm
@@ -113,14 +114,28 @@ def _(mo):
 @app.cell
 def _(df_curves, n_arms, n_trials, plot_curves, termination_arm):
     ## plots
-    alpha_to_plot = 1
-
+    alpha_to_plot = 0.1
     horizon_to_plot = n_trials
-    k_to_plot = 0.01
+    k_to_plot = 0.00
     plot_curves(df_curves.loc[(df_curves['alpha'] == alpha_to_plot) 
     # & (df_curves['horizon'] == horizon_to_plot)
     & (df_curves['k'] == k_to_plot)
     ], n_arms=n_arms, y='p', eps_tie=1e-06, termination_arm=termination_arm, info_seeker=True, ncols=7)  #    df_tip=df_tip
+    return
+
+
+@app.cell
+def _(df_curves):
+    df_curves.loc[df_curves['alpha'] == 'unknown']
+    return
+
+
+@app.cell
+def _(df_curves, n_arms, plot_curves, termination_arm):
+    ## plots
+    alpha_to_plot = 0.1
+    plot_curves(df_curves.loc[(df_curves['alpha'] == alpha_to_plot) 
+    ], n_arms=n_arms, y='p', eps_tie=1e-06, termination_arm=termination_arm, info_seeker=True, ncols=7)
     return
 
 
