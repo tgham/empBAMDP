@@ -9,6 +9,7 @@ def main():
     parser.add_argument('--n_arms', type=int, default=2)
     parser.add_argument('--n_outcomes', type=int, default=4)
     parser.add_argument('--n_trials', type=int, default=6)
+    parser.add_argument('--n_jobs', type=int, default=-1)
     parser.add_argument('--n_ell_samples', type=int, default=100)
     parser.add_argument('--ell_lo', type=float, default=0.01)
     parser.add_argument('--ell_hi', type=float, default=100)
@@ -53,12 +54,13 @@ def main():
     print(f'  contexts: {args.contexts}')
     print(f'  context_prior: {args.context_prior}')
     print(f'  ks: {ks}')
+    print(f'  n_jobs: {args.n_jobs}')
 
     df_curves = enumerate_curves(n_arms=args.n_arms, n_outcomes=args.n_outcomes, n_trials=args.n_trials, alphas=args.alphas,
                                  ell_hi=args.ell_hi, ell_lo=args.ell_lo,
                                 context_prior=args.context_prior, contexts=args.contexts,
                                  termination_arm=args.termination_arm,
-                                 n_jobs=-1, n_ell_samples=args.n_ell_samples,
+                                 n_jobs=args.n_jobs, n_ell_samples=args.n_ell_samples,
                                  df_max=df_max, ks=ks
                                  )
 
