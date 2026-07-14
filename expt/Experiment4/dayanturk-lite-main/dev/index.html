@@ -1,0 +1,74 @@
+<html>
+
+  <head>
+    <script src="./backend_integration.js" ></script>
+  </head>
+
+  <body>
+    <button id="test_save_incomplete">Test save incomplete</button>
+    <button id="test_save_complete_1">Test send and complete</button>
+    <button id="test_save_complete_2">Test complete</button>
+    <button id="test_save_failure">Test save failure</button>
+
+    <script>
+      //This file contains most of the integration with an experimental backend 
+      // and will hopefully show an example of how to use it. The basic
+      // functions are commented here. The buttons are just so that I can test
+      // it a bit
+
+      // Get the ppts prolific id
+      var pid = get_prolific_id();
+      let id = null;
+      
+      //Tell the backend about the new ppt
+      create_participant(pid).then((value) => {
+        // If the id is null, then the backend is complaining that the ppt has
+        // done the experiment before
+        // You should probably bail out in that case
+        if (value['id'] == null) {
+          console.log(`${pid} is not unique`);
+        }
+        // Otherwise, give the ppt an internal id
+        id = value['id'];
+        console.log(`id => ${id}`);
+      })
+
+      const tsi_button = document.getElementById("test_save_incomplete");
+      tsi_button.addEventListener("click", (event) => {
+        // send_incomplete will take an internal id and the current state of the
+        // data (which you can get from jspsych, as json) and send it to the
+        // backend which will save it in data/incomplete
+        send_incomplete(id, {'from': 'incomplete'});
+      });
+
+      const tsc1_button = document.getElementById("test_save_complete_1");
+      tsc1_button.addEventListener("click", (event) => {
+        // send_complete will take an internal id and the current state of the
+        // data (which you can get from jspsych, as json) and send it to the
+        // backend which will save it in data/incomplete and then move it into
+        // data/complete
+        // This means that you don't have to call complete
+        send_complete(id, {'from': 'complete'});
+      });
+
+      const tsc2_button = document.getElementById("test_save_complete_2");
+      tsc2_button.addEventListener("click", (event) => {
+        // complete will send a message to the backend to tell it that the ppt
+        // has completed the experiment successfully. The backend will move any
+        // existing data from data/incomplete to data/complete.
+        // This shouldn't be used with send_complete
+        complete(id);
+      });
+
+      const tsf_button = document.getElementById("test_save_failure");
+      tsf_button.addEventListener("click", (event) => {
+        // complete(false) will send a message to the backend to tell it that the ppt
+        // has 'failed' the experiment. The backend will move any
+        // existing data from data/incomplete to data/invalid.
+        complete(id, false);
+      });
+
+    </script>
+  </body>
+
+</html>

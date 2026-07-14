@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Button room experiment</title>
+        <!-- jspsych -->
+        <script src="jspsych/jspsych.js"></script>
+        <script src="jspsych/plugin-html-keyboard-response.js"></script>
+        <script src="jspsych/plugin-html-button-response.js"></script>
+        <script src="jspsych/plugin-preload.js"></script>
+        <script src="jspsych/plugin-fullscreen.js"></script>
+        <script src="jspsych/plugin-instructions.js"></script>
+        <script src="jspsych/plugin-survey-multi-choice.js"></script>
+        <!-- my code -->
+        <script src="js/config.js"></script>
+        <script src="js/render.js"></script>
+        <script src="js/trials.js"></script>
+        <script src="js/instructions.js"></script>
+        <script src="js/comprehension.js"></script>
+        <script src="backend_integration.js" ></script>
+        <!-- css -->
+        <link href="jspsych/jspsych.css" rel="stylesheet" type="text/css" />
+        <link href="css/style.css" rel="stylesheet" />
+    </head>
+    <body></body>
+    <script>
+        //------------------------------------//
+        // Session identifiers + data saving
+        //------------------------------------//
+        // Prolific-style params if present in the URL, else a random id.
+        var urlParams = new URLSearchParams(window.location.search);
+        var subject_id = urlParams.get("PROLIFIC_PID") || ("anon_" + Date.now());
+        var study_id = urlParams.get("STUDY_ID") || "";
+        var session_id = urlParams.get("SESSION_ID") || "";
+
+        // comprehension gate bookkeeping (read by the loops/conditionals below)
+        var review_instructions = false;
+        var quiz_passed = false;
+        var quiz_attempts = 0;
+
+        var jsPsych = initJsPsych({
+            on_finish: function () {
+                // download the full trial-by-trial data as CSV
+                // jsPsych.data.get().localSave("csv", "exp4_" + subject_id + ".csv");
+
+                var ppt_data = jsPsych.data.get().json();
+                send_complete(id, ppt_data);
+
+                // redirect to Prolific (links are set in config.js; blank = no redirect)
+                var link = quiz_passed ? REDIRECT_COMPLETE : REDIRECT_FAIL;
+                if (link) {
+                    setTimeout(function () { window.location.replace(link); }, 500);
+                }
+            }
+        });
+
+        // attach session-level fields to every trial's data row
+        jsPsych.data.addProperties({
+            subject_id: subject_id,
+            study_id: study_id,
+            session_id: session_id,
+            belief_display: BELIEF_DISPLAY,
+            alpha: ALPHA
+        });
+
+        var timeline = [];
+
+        //------------------------------------//
+        // Preload images
+        //------------------------------------//
+        var preload = {
+            type: jsPsychPreload,
+            images: ["img/BaseAction.png", "img/Agent.png", "img/Goal.png", "img/Check.png"]
+        };
+        timeline.push(preload);
+
+        
+        // get prolific id
+        var pid = get_prolific_id();
+        let id = null;
+        create_participant(pid).then((value) => {
+        // If the id is null, then the backend is complaining that the ppt has
+        // done the experiment before
+        // You should probably bail out in that case
+        if (value['id'] == null) {
+            console.log(`${pid} is not unique`);
+        }
+        // Otherwise, give the ppt an internal id
+        id = value['id'];
+        console.log(`id => ${id}`);
+        })
+
+
+        //------------------------------------//
+        // Fullscreen (the enlarged display needs the width)
+        //------------------------------------//
+        timeline.push({
+            type: jsPsychFullscreen,
+            fullscreen_mode: true,
+            message: `<p>The task runs in fullscreen. Click below to continue.</p>`
+        });
+
+        //------------------------------------//
+        // Instructions + comprehension gate.
+        // Inner: instructions (with their own "review again" loop) -> quiz -> result.
+        // Outer loop repeats this whole block while the participant hasn't passed
+        // and hasn't used up both attempts. After it ends they've either passed or
+        // failed twice.
+        //------------------------------------//
+        var instructions_block = {
+            timeline: make_instructions_timeline(),
+            loop_function: function () { return review_instructions; }
+        };
+        timeline.push({
+            timeline: [instructions_block, make_comprehension_quiz(), make_quiz_result_trial()],
+            loop_function: function () {
+                return !quiz_passed && quiz_attempts < QUIZ_MAX_ATTEMPTS;
+            }
+        });
+
+        //------------------------------------//
+        // The experiment itself: only runs if the comprehension check was passed.
+        // R rooms; each = intro (reset beliefs + draw fresh transitions) ->
+        // N_TRIALS sampling trials -> a gold-collection trial.
+        //------------------------------------//
+        var experiment_timeline = [];
+        for (let r = 1; r <= N_ROOMS; r++) {
+            experiment_timeline.push(make_room_intro(r));
+            for (let t = 1; t <= N_TRIALS; t++) {
+                // each sampling trial is skipped once sampling has been ended early
+                experiment_timeline.push({
+                    timeline: [make_trial(r, t)],
+                    conditional_function: function () { return !sampling_ended; }
+                });
+            }
+            experiment_timeline.push(make_gold_trial(r));
+        }
+        experiment_timeline.push({
+            type: jsPsychHtmlKeyboardResponse,
+            stimulus: function () {
+                var msg = SHOW_GOLD_OUTCOME
+                    ? `<h3>You collected ${collected_gold} gold across ${N_ROOMS} rooms.</h3>`
+                    : ``;
+                return `<div style="text-align:center"><h2>Done!</h2>${msg}</div>`;
+            },
+            choices: "NO_KEYS",
+            trial_duration: 2500
+        });
+        timeline.push({
+            timeline: experiment_timeline,
+            conditional_function: function () { return quiz_passed; }
+        });
+
+        //------------------------------------//
+        // Failed the check twice: end here (the global on_finish handles redirect).
+        //------------------------------------//
+        timeline.push({
+            timeline: [{
+                type: jsPsychHtmlButtonResponse,
+                choices: ["Finish"],
+                stimulus: `<h2>Thank you for your time</h2>
+                           <p style="max-width:640px; margin:14px auto;">The experiment has ended. Click below to
+                           return to Prolific.</p>`,
+                data: { task: "failed_end" }
+            }],
+            conditional_function: function () { return !quiz_passed; }
+        });
+
+        jsPsych.run(timeline);
+    </script>
+</html>
