@@ -18,6 +18,7 @@ def main():
     parser.add_argument('--termination_arm', action='store_true')
     parser.add_argument('--contexts', type=float, nargs='+', default=None)
     parser.add_argument('--context_prior', type=float, nargs='+', default=None)
+    parser.add_argument('--skip_t0', action='store_true')
     parser.add_argument('--independent_contexts', action='store_true')
     parser.add_argument('--ks', type=float, nargs='+',
                         default=[round(x, 2) for x in np.arange(0.01, 0.101, 0.01)])
@@ -57,7 +58,9 @@ def main():
     print(f'  context_prior: {args.context_prior}')
     print(f'  independent_contexts: {args.independent_contexts}')
     print(f'  ks: {ks}')
+    print(f'  skip_t0: {args.skip_t0}')
     print(f'  n_jobs: {args.n_jobs}')
+
 
     df_curves = enumerate_curves(n_arms=args.n_arms, n_outcomes=args.n_outcomes, n_trials=args.n_trials, alphas=args.alphas,
                                  ell_hi=args.ell_hi, ell_lo=args.ell_lo,
@@ -65,7 +68,8 @@ def main():
                                 context_prior=args.context_prior, contexts=args.contexts,
                                  termination_arm=args.termination_arm,
                                  n_jobs=args.n_jobs, n_ell_samples=args.n_ell_samples,
-                                 df_max=df_max, ks=ks
+                                 df_max=df_max, ks=ks,
+                                    skip_t0=args.skip_t0
                                  )
 
     ## save
