@@ -682,7 +682,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                                                  independent_contexts=independent_contexts)
                     ## context_posterior expects RAW counts (it adds alpha_z internally).
                     p_ctx = agent_tmp.context_posterior(canon_C)
-                    print(f"  history {history_str}, t={t}, p_ctx={p_ctx}")
+                    # print(f"  history {history_str}, t={t}, p_ctx={p_ctx}")
                 else:
                     p_ctx = np.array([1.0])
                     
