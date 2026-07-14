@@ -509,7 +509,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50,
                      df_max=None, ks=(0.0,),
-                     tied_only=False, n_jobs=1):
+                     tied_only=False, skip_t0=True, n_jobs=1):
     """Q / softmax-prob curves over ell for canonical histories.
 
     Two modes, switched by whether `df_tip` is provided:
@@ -543,6 +543,11 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
 
     Both kinds also emit the (now context-aware) info-seeking columns `info_*`,
     computed by an `InfoSeekingAgent` over the same context set.
+
+    `skip_t0` (default True): drop the t=0 (empty `init`) history. There the
+    agent has observed nothing and so has equal preference over the actions --
+    uninteresting, and the costliest to sweep since its remaining horizon is
+    largest. Set False to include it.
 
     SAMPLING COST: `ks` is a list of cost fractions to sweep; the whole curve
     enumeration is repeated for each `k` and stacked into one DataFrame with `k`
@@ -599,6 +604,12 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
         sweep_tasks = [(int(r['t']), r['history_str'],
                         float(r['ell_min']), float(r['ell_max']))
                        for _, r in ranges.iterrows()]
+
+    ## t=0 is the empty history: the agent has observed nothing, so it has equal
+    ## preference over the actions -- uninteresting, and the costliest to sweep
+    ## (largest remaining horizon). Skip it by default.
+    if skip_t0:
+        sweep_tasks = [task for task in sweep_tasks if task[0] != 0]
 
     ## current empowerment (cost-free leaf) for one belief context at one ell
     def _leaf_emp(ctx, e, canon_C):
