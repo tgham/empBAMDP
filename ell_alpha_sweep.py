@@ -13,12 +13,13 @@ def main():
     parser.add_argument('--n_ell_samples', type=int, default=100)
     parser.add_argument('--ell_lo', type=float, default=0.01)
     parser.add_argument('--ell_hi', type=float, default=100)
-    parser.add_argument('--horizon', type=int, default=None)
+    parser.add_argument('--horizons', type=int, nargs='+', default=None)
     parser.add_argument('--alphas', type=float, nargs='+', default=[0.1, 0.5, 1])
     parser.add_argument('--termination_arm', action='store_true')
     parser.add_argument('--contexts', type=float, nargs='+', default=None)
     parser.add_argument('--context_prior', type=float, nargs='+', default=None)
     parser.add_argument('--skip_t0', action='store_true')
+    parser.add_argument('--independent_contexts', action='store_true')
     parser.add_argument('--ks', type=float, nargs='+',
                         default=[round(x, 2) for x in np.arange(0.01, 0.101, 0.01)])
 
@@ -48,12 +49,14 @@ def main():
     print(f'  n_outcomes: {args.n_outcomes}')
     print(f'  n_trials: {args.n_trials}')
     print(f'  n_ell_samples: {args.n_ell_samples}')
+    print(f'  horizons: {args.horizons}')
     print(f'  ell_lo: {args.ell_lo}')
     print(f'  ell_hi: {args.ell_hi}')
     print(f'  alphas: {args.alphas}')
     print(f'  termination_arm: {args.termination_arm}')
     print(f'  contexts: {args.contexts}')
     print(f'  context_prior: {args.context_prior}')
+    print(f'  independent_contexts: {args.independent_contexts}')
     print(f'  ks: {ks}')
     print(f'  skip_t0: {args.skip_t0}')
     print(f'  n_jobs: {args.n_jobs}')
@@ -61,6 +64,7 @@ def main():
 
     df_curves = enumerate_curves(n_arms=args.n_arms, n_outcomes=args.n_outcomes, n_trials=args.n_trials, alphas=args.alphas,
                                  ell_hi=args.ell_hi, ell_lo=args.ell_lo,
+                                 horizons=args.horizons, independent_contexts=args.independent_contexts,
                                 context_prior=args.context_prior, contexts=args.contexts,
                                  termination_arm=args.termination_arm,
                                  n_jobs=args.n_jobs, n_ell_samples=args.n_ell_samples,
