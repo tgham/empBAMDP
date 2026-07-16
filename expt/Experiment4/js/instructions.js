@@ -25,12 +25,12 @@ function postFromCounts(cntObj, outcome) {
 // the main room with the K reachable cells highlighted (no heatmaps)
 function reachableRoomStaticHTML() {
     let cells = "";
-    for (const outcome of OUTCOMES) {
-        cells += `<div class="reachable-cell" style="${cellPosStyle(OUTCOME_CELL[outcome], 0.08, 0.84)}"></div>`;
-    }
+    // for (const outcome of OUTCOMES) {
+    //     cells += `<div class="reachable-cell" style="${cellPosStyle(OUTCOME_CELL[outcome], 0.08, 0.84)}"></div>`;
+    // }
     return `
         <div class="container">
-            <img src="img/BaseAction.png" alt="Base" class="base-image">
+            <img src="img/BaseAction_4k.png" alt="Base" class="base-image">
             <div class="belief-overlay">${cells}</div>
             <img src="img/Agent.png" alt="Agent" class="agent-image">
         </div>`;
@@ -41,7 +41,7 @@ function goldRoomStaticHTML(outcome) {
     const { top, left } = outcomePercent(outcome);
     return `
         <div class="container">
-            <img src="img/BaseAction.png" alt="Base" class="base-image">
+            <img src="img/BaseAction_4k.png" alt="Base" class="base-image">
             <img src="img/Goal.png" alt="Gold" class="gold-image" style="top:${top}%; left:${left}%;">
             <img src="img/Agent.png" alt="Agent" class="agent-image">
         </div>`;
@@ -78,8 +78,16 @@ function beliefBlockStaticHTML(button, label, cntObj) {
         </div>`;
 }
 
-// a full static illustration: room + buttons + two heatmaps, for given counts
+// a full static illustration: room + buttons + belief display, for given counts.
+// Adapts to BELIEF_DISPLAY (counters -> single grid of tokens; else two heatmaps).
 function exampleDisplayStaticHTML(redCounts, blueCounts) {
+    if (BELIEF_DISPLAY === "counters") {
+        return `
+            <div class="task-row" style="pointer-events:none;">
+                ${roomCountersStaticHTML(redCounts, blueCounts)}
+                ${buttonStackHTML()}
+            </div>`;
+    }
     return `
         <div class="task-row" style="pointer-events:none;">
             ${reachableRoomStaticHTML()}
@@ -104,15 +112,24 @@ function roomButtonsStaticHTML() {
 function plainRoomStaticHTML() {
     return `
         <div class="container">
-            <img src="img/BaseAction.png" alt="Base" class="base-image">
+            <img src="img/BaseAction_4k.png" alt="Base" class="base-image">
             <img src="img/Agent.png" alt="Agent" class="agent-image">
         </div>`;
 }
 
-// the usual task display (tick + room + buttons + heatmaps), illustrating early stop
+// the usual task display (tick + room + buttons + belief display), illustrating
+// early stop. Adapts to BELIEF_DISPLAY.
 function earlyStopStaticHTML() {
     const blueC = { up: 2, right: 0, down: 0, left: 1 };
     const redC = { up: 0, right: 2, down: 1, left: 0 };
+    if (BELIEF_DISPLAY === "counters") {
+        return `
+            <div class="task-row" style="pointer-events:none;">
+                ${checkButtonHTML()}
+                ${roomCountersStaticHTML(redC, blueC)}
+                ${buttonStackHTML()}
+            </div>`;
+    }
     return `
         <div class="task-row" style="pointer-events:none;">
             ${checkButtonHTML()}
@@ -189,6 +206,80 @@ function make_demo_trial(cfg) {
 
             cont.addEventListener("click", function () {
                 jsPsych.finishTrial({ task: "demo", demo_button: cfg.button, demo_outcome: cfg.outcome });
+            });
+        }
+    };
+}
+
+//----------------------------------------------------------------------------//
+// Auto-play demo: the computer presses one button `cfg.outcomes.length` times,
+// showing the agent move to each (fixed) outcome and return to the centre. Used
+// to illustrate how reliable vs variable a button can be. No heatmap is shown
+// (they haven't been introduced yet); the focus is on the movement. The Next
+// button appears after `cfg.revealAfter` observations (default 5) so the
+// participant may continue early while the rest keep playing.
+//----------------------------------------------------------------------------//
+function make_auto_demo_trial(cfg) {
+    const revealAfter = cfg.revealAfter || 5;
+    return {
+        type: jsPsychHtmlKeyboardResponse,
+        choices: "NO_KEYS",
+        stimulus: `
+            <div class="task-row">
+                ${initialize_agent()}
+                ${buttonStackHTML()}
+            </div>
+            <div class="prompt">
+                <div id="demo-instruction" class="demo-text">${cfg.instruction}</div>
+                <button id="demo-continue" class="demo-continue" style="display:none;">Next</button>
+            </div>`,
+        data: { task: "auto_demo", demo_button: cfg.button },
+        on_start: function () {
+            agent_topPos = topPos0;
+            agent_leftPos = leftPos0;
+        },
+        on_load: function () {
+            const active = document.getElementById("btn-" + cfg.button);
+            const other = document.getElementById("btn-" + (cfg.button === "red" ? "blue" : "red"));
+            // buttons are computer-controlled here; fade the one not being demoed
+            active.classList.add("inert");
+            other.classList.add("inert");
+            other.style.opacity = "0.2";
+
+            const cont = document.getElementById("demo-continue");
+            const agentEl = document.getElementById("agent");
+            const seq = cfg.outcomes;
+            let i = 0;
+            let stopped = false; // set when the participant clicks Next early
+
+            function toCentre() {
+                agent_topPos = topPos0;
+                agent_leftPos = leftPos0;
+                agentEl.style.top = topPos0 + "%";
+                agentEl.style.left = leftPos0 + "%";
+            }
+            function step() {
+                if (stopped || i >= seq.length) return;
+                active.classList.add("pressing"); // the computer "presses" the button
+                setTimeout(function () {
+                    if (stopped) return;
+                    active.classList.remove("pressing");
+                    moveAgent(seq[i]);
+                    i += 1;
+                    // let the participant continue once they've seen enough
+                    if (i >= revealAfter) cont.style.display = "inline-block";
+                    setTimeout(function () {
+                        if (stopped) return;
+                        toCentre();
+                        setTimeout(step, 550); // pause at the centre before the next press
+                    }, 800); // view the outcome
+                }, 450); // press pulse before the move
+            }
+            setTimeout(step, 500);
+
+            cont.addEventListener("click", function () {
+                stopped = true; // halt any in-flight animation before the trial ends
+                jsPsych.finishTrial({ task: "auto_demo", demo_button: cfg.button, observations: i });
             });
         }
     };
@@ -274,8 +365,8 @@ function make_gold_demo_trial(opts) {
                     if (success) { fb.textContent = "You reached the coin!"; fb.style.color = "green"; }
                     else { fb.textContent = "You missed the coin."; fb.style.color = "red"; }
                     instr.innerHTML = opts.revealText ||
-                        (`Because outcomes are <strong>revealed</strong> in this experiment,<br>` +
-                         `you find out whether you reached the coin.`);
+                        (`After selecting the final button,<br>` +
+                         `you will find out whether you reached the coin.`);
                     cont.style.display = "inline-block";
                 }, MOVE_MS);
             }
@@ -331,21 +422,43 @@ function make_instructions_timeline() {
     const zeroCounts = { up: 0, right: 0, down: 0, left: 0 };
     const P = `max-width:680px; margin:14px auto;`; // paragraph style, generous spacing
 
-    // ---- Block 1: overview + first (empty) heatmap ----
+    // ---- Overview + testing intro ----
     tl.push(instructionBlock([
         `<h2>How the room task works</h2>
-         <p style="${P}">In the next phase you will explore a series of <strong>${N_ROOMS} rooms</strong>, one at a time.</p>
-         <p style="${P}">In each room you have <strong>${N_BUTTONS} buttons</strong> to press (below), and there are
-         <strong>${K_OUTCOMES} locations</strong> you can be taken to (highlighted).</p>
+         <p style="${P}">In the next phase you will explore a series of rooms</strong>, one at a time.</p>
+         <p style="${P}">In each room you have <strong>${N_BUTTONS} coloured buttons</strong> to press, and there are
+         <strong>${K_OUTCOMES} locations</strong> you can reach - i.e. up, down, left or right.</p>
          ${roomButtonsStaticHTML()}`,
 
         `<h2>Testing the buttons</h2>
          <p style="${P}">Each button takes you to one of these ${K_OUTCOMES} locations, but
          <strong>you don't know which location each button is most likely to lead to</strong>.</p>
-         <p style="${P}">You can test the buttons up to <strong>${N_TRIALS} times</strong> in total. Each time you
-         press a button, the agent moves and you see where it took you.</p>
-         ${roomButtonsStaticHTML()}`,
+         <p style="${P}">While there is <strong>always some degree of randomness</strong> in where a button leads,
+         buttons can vary in how <strong>reliable</strong> they are.</p>
+         <p style="${P}">Let's look at two examples.</p>
+         ${roomButtonsStaticHTML()}`
+    ]));
 
+    // ---- Reliability animations (computer presses each button 10 times; Next after 5) ----
+    tl.push(make_auto_demo_trial({
+        button: "blue",
+        outcomes: ["up", "up", "up", "left", "up", "up", "right", "up", "up", "up"],
+        instruction: sayLines(
+            `For example, a button may have a preferred direction, reliably leading you to one location.`,
+            `See how the <strong>blue</strong> button often takes the agent <strong>upwards</strong> &mdash; although not all the time.`
+        )
+    }));
+    tl.push(make_auto_demo_trial({
+        button: "red",
+        outcomes: ["up", "left", "right", "up", "down", "left", "down", "right", "up", "left"],
+        instruction: sayLines(
+            `Other buttons may be more random, taking you to many different locations.`,
+            `See how the <strong>red</strong> button is much more variable in the outcomes it leads to.`
+        )
+    }));
+
+    // ---- The heatmaps (introduced before the pressing/tick instructions) ----
+    tl.push(instructionBlock([
         `<h2>The heatmaps</h2>
          <p style="${P}">To the right of the buttons you'll see a <strong>separate heatmap for each button</strong>,
          reflecting the history of outcomes you've observed for that button.</p>
@@ -368,7 +481,7 @@ function make_instructions_timeline() {
         ),
         resultText: sayLines(
             `The agent moved <strong>up</strong>.`,
-            `The blue heatmap now shows strong evidence that blue leads upward.`,
+            `The blue heatmap now shows stronger evidence that blue leads upward.`,
             `Click <strong>Continue</strong>.`
         )
     }));
@@ -378,7 +491,7 @@ function make_instructions_timeline() {
         reset: false,
         instruction: `Now <strong>click the red button</strong> to test the other one.`,
         resultText: sayLines(
-            `The red button led <strong>left</strong>, so the red heatmap now shows strong evidence for that outcome.`,
+            `The red button led <strong>left</strong>, so the red heatmap now shows stronger evidence for that outcome.`,
             `Notice this is <strong>independent</strong> of blue &mdash; each button has its own heatmap.`,
             `Click <strong>Continue</strong>.`
         )
@@ -402,18 +515,48 @@ function make_instructions_timeline() {
         )
     }));
 
-    // ---- Block 3a: budgeting samples + the gold phase ----
+    // ---- Testing the buttons: pressing, budget, and the tick to finish early.
+    //      Full task display beneath. on_start sets up the practice room that
+    //      follows (also runs on review, before the conditional practice trials). ----
     tl.push(instructionBlock([
-        `<h2>Spend your presses how you like</h2>
-         <p style="${P}">You can split your <strong>${N_TRIALS} presses</strong> between the ${N_BUTTONS} buttons
-         however you like — test one a lot and the other a little, or share them evenly.</p>
-         <p style="${P}">Use them to learn where each button tends to take you.</p>`,
+        `<h2>Testing the buttons</h2>
+         <p style="${P}">Each time you press a button, the agent moves and you see where it took you.</p>
+         <p style="${P}">You can test the buttons up to <strong>${N_TRIALS} times</strong> in total, splitting your
+         presses between the buttons however you like.</p>
+         <p style="${P}">You do not have to use all ${N_TRIALS} choices, though &mdash; if you already feel certain
+         enough, you can click the <strong>tick button</strong> to move on to the next phase.</p>
+         ${earlyStopStaticHTML()}`
+    ], {
+        on_start: function () {
+            for (const b of BUTTONS) {
+                for (const o of OUTCOMES) counts[b][o] = 0;
+            }
+            sampleTrueT();
+            sampling_ended = false;
+        }
+    }));
 
+    // ---- Practice: press the buttons (up to N_TRIALS) until certain, then tick ----
+    tl.push(instructionBlock([
+        `<h2>Let's practise</h2>
+         <p style="${P}">The next part works exactly like a real room.</p>
+         <p style="${P}">Press the buttons to test them, and click the tick button when you feel
+         you've learned enough.</p>`
+    ]));
+    for (let t = 1; t <= N_TRIALS; t++) {
+        tl.push({
+            timeline: [make_trial(0, t, { practice: true })],
+            conditional_function: function () { return !sampling_ended; }
+        });
+    }
+
+    // ---- The gold-collection phase ----
+    tl.push(instructionBlock([
         `<h2>Collecting the gold</h2>
          <p style="${P}">Once you've finished testing, a <strong>gold coin</strong> will appear at one of the
          ${K_OUTCOMES} locations.</p>
          <p style="${P}">You must then choose the <strong>button you think is most likely to take you to the
-         coin</strong>, based on what you learned. Let's try one.</p>
+         coin</strong>, based on what you know about the buttons. Let's try a couple.</p>
          ${goldRoomStaticHTML("up")}`
     ]));
 
@@ -430,46 +573,6 @@ function make_instructions_timeline() {
         revealText: sayLines(
             `This coin appeared in a location that <strong>neither button</strong> is likely to reach.`,
             `There's no guarantee the coin will appear somewhere a button can reliably reach &mdash; sometimes you simply won't be able to get it.`
-        )
-    }));
-
-    // ---- Block 3b: stopping early + practice intro (resets for the practice room) ----
-    tl.push(instructionBlock([
-        `<h2>Stopping early</h2>
-         <p style="${P}">Of course, you don't have to use up all your samples.</p>
-         <p style="${P}">If at any point you feel you've learned enough about the two buttons, you can click the
-         <strong>tick button</strong> (to the left of the room) to move on to the coin selection straight away.</p>
-         ${earlyStopStaticHTML()}`,
-
-        `<h2>Let's practise</h2>
-         <p style="${P}">The next part works exactly like a real room.</p>
-         <p style="${P}">For this practice, take <strong>3 samples</strong>, then click the <strong>tick
-         button</strong> to finish early and go to the coin.</p>`
-    ], {
-        on_start: function () {
-            // set up the practice room (also runs when reviewing, before the
-            // conditional practice trials are reached)
-            for (const b of BUTTONS) {
-                for (const o of OUTCOMES) counts[b][o] = 0;
-            }
-            sampleTrueT();
-            sampling_ended = false;
-        }
-    }));
-
-    // ---- Early-stop practice: a real room (room_num 0), asking to stop after 3 ----
-    for (let t = 1; t <= N_TRIALS; t++) {
-        tl.push({
-            timeline: [make_trial(0, t, { practice: true })],
-            conditional_function: function () { return !sampling_ended; }
-        });
-    }
-    tl.push(make_gold_demo_trial({
-        useCurrentBeliefs: true,
-        goldOutcome: "random",
-        instruction: sayLines(
-            `A gold coin appeared.`,
-            `Click the button you think is most likely to reach it.`
         )
     }));
 

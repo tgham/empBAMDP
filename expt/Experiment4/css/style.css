@@ -40,7 +40,7 @@
 }
 .gold-image {
     position: absolute;
-    width: 26%;
+    width: 21%;
     height: auto;
     top: 50%;
     left: 50%;
@@ -73,6 +73,46 @@
     opacity: 0.7;
     text-anchor: middle;
     dominant-baseline: middle;
+}
+
+/* ------------------------------------ */
+/*  counter/token belief mode             */
+/* ------------------------------------ */
+/* counters sit in front of the agent and gold coin (they're the live readout) */
+.belief-overlay.counter-layer {
+    z-index: 6;
+}
+.counter-cell {
+    position: absolute;
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+}
+.counter-half {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6%;
+}
+.counter-slot {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.counter-token {
+    width: 78%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+/* pop a freshly placed token in once the agent has reached the cell */
+@keyframes counter-token-pop {
+    0%   { transform: scale(0); opacity: 0; }
+    60%  { transform: scale(1.28); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+}
+.counter-token.token-new {
+    animation: counter-token-pop 0.4s ease;
 }
 
 /* instruction illustration: reachable-location highlight */
@@ -158,6 +198,15 @@
 /* visually normal but not clickable (used in guided demos) */
 .cbtn.inert {
     pointer-events: none;
+}
+/* the computer "pressing" a button in the auto-play reliability demos */
+@keyframes cbtn-press {
+    0%   { transform: scale(1); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3); }
+    45%  { transform: scale(1.18); box-shadow: 0 0 0 10px rgba(0, 0, 0, 0.10); }
+    100% { transform: scale(1); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3); }
+}
+.cbtn.pressing {
+    animation: cbtn-press 0.42s ease;
 }
 
 /* "done sampling" tick button, left of the room */

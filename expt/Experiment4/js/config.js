@@ -6,7 +6,7 @@ const N_BUTTONS = 2;
 const K_OUTCOMES = 4;
 const N_TRIALS = 8;   // sampling trials per room
 const N_ROOMS = 5;    // number of rooms (fresh transition functions each)
-const ALPHA = 1;
+const ALPHA = 0.1;
 
 // After the sampling trials, a gold coin appears at a random reachable cell and
 // the participant picks a button to try to reach it.
@@ -41,9 +41,13 @@ const BTN_COLOR = { red: "220,40,40", blue: "40,90,220" }; // rgb triples for rg
 //   "overlay"  -> both buttons' posteriors shown in the main grid, each reachable
 //                 cell split diagonally (red upper-right triangle, blue lower-left).
 //   "separate" -> a dedicated belief grid per button, to the right of the room.
+//   "counters" -> a single grid; each reachable cell has a red half and a blue
+//                 half, each filling with up to N_TRIALS tokens as that button is
+//                 observed leading there (a running tally, not a probability).
 //----------------------------------------------------------------------------//
 // const BELIEF_DISPLAY = "overlay";
-const BELIEF_DISPLAY = "separate";
+// const BELIEF_DISPLAY = "separate";
+const BELIEF_DISPLAY = "counters";
 
 //----------------------------------------------------------------------------//
 // Hidden true transition distributions (categorical over OUTCOMES).

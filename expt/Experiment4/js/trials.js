@@ -21,6 +21,10 @@ function checkButtonHTML() {
 
 // Right-hand belief panel: colorbar legend (overlay) or two belief grids (separate).
 function beliefPanelHTML() {
+    // counters + overlay draw into the main grid; counters has no side panel.
+    if (BELIEF_DISPLAY === "counters") {
+        return ``;
+    }
     if (BELIEF_DISPLAY === "overlay") {
         return `
             <div class="belief-stack">
@@ -36,8 +40,10 @@ function beliefPanelHTML() {
 }
 
 // Redraw the belief display (and the sample-counter titles) from current counts.
-function refreshBeliefs() {
-    if (BELIEF_DISPLAY === "overlay") {
+function refreshBeliefs(highlight) {
+    if (BELIEF_DISPLAY === "counters") {
+        renderMainCounters(highlight);
+    } else if (BELIEF_DISPLAY === "overlay") {
         renderMainBeliefOverlay();
     } else {
         renderBeliefGrid("red", document.getElementById("belief-red"));
@@ -117,9 +123,9 @@ function make_trial(room_num, trial_num, opts) {
     opts = opts || {};
     const practice = opts.practice === true;
     const taskName = practice ? "practice_sample" : "sample";
-    const hint = practice
-        ? `<h4 style="color:#c99700; font-weight:normal; margin-top:6px;">Practice: take 3 samples, then click the tick to stop early.</h4>`
-        : ``;
+    // const hint = practice
+    //     ? `<h4 style="color:#c99700; font-weight:normal; margin-top:6px;">Practice: test the buttons as you like, then click the tick when you feel you've learned enough.</h4>`
+    //     : ``;
 
     return {
         type: jsPsychHtmlKeyboardResponse,
@@ -134,7 +140,6 @@ function make_trial(room_num, trial_num, opts) {
             <div class="prompt">
                 <h4 class="trial-counter">Trial ${trial_num} of ${N_TRIALS}</h4>
                 <h3>Click a coloured button to move, or the tick to finish sampling.</h3>
-                ${hint}
             </div>`,
         data: {
             task: taskName,
@@ -172,7 +177,9 @@ function make_trial(room_num, trial_num, opts) {
                 };
 
                 setTimeout(function () {
-                    refreshBeliefs(); // agent has arrived -> reveal the updated belief
+                    // agent has arrived -> reveal the updated belief; in counters
+                    // mode, pop in the token just placed for this observation
+                    refreshBeliefs({ button: button, outcome: outcome });
                     setTimeout(() => jsPsych.finishTrial(trial_data), 900);
                 }, MOVE_MS);
             }, function (rt) {

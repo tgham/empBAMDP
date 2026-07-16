@@ -16,7 +16,7 @@ let agent_leftPos = leftPos0;
 function initialize_agent() {
     return `
     <div class="container">
-        <img src="img/BaseAction.png" alt="Base Action Image" class="base-image">
+        <img src="img/BaseAction_4k.png" alt="Base Action Image" class="base-image">
         <div id="belief-overlay" class="belief-overlay"></div>
         <img id="agent" src="img/Agent.png" alt="Agent Image" class="agent-image">
     </div>`;
@@ -53,7 +53,7 @@ function moveAgent(outcome) {
 function initialize_agent_gold() {
     return `
     <div class="container">
-        <img src="img/BaseAction.png" alt="Base Action Image" class="base-image">
+        <img src="img/BaseAction_4k.png" alt="Base Action Image" class="base-image">
         <div id="belief-overlay" class="belief-overlay"></div>
         <img id="gold" src="img/Goal.png" alt="Gold Coin" class="gold-image">
         <img id="agent" src="img/Agent.png" alt="Agent Image" class="agent-image">
@@ -250,6 +250,80 @@ function renderMainBeliefOverlay() {
             </svg>`;
         layer.appendChild(cell);
     }
+}
+
+//----------------------------------------------------------------------------//
+// Counter/token mode: a single grid whose four reachable cells each hold a red
+// half and a blue half. Each half has N_TRIALS (invisible) slots that fill with
+// small button-coloured tokens as that button is observed reaching that outcome.
+// The token count in a half == the number of times that button led there.
+//----------------------------------------------------------------------------//
+// `highlightButton` ("red"/"blue"/null): pop in the last filled token of that
+// half (used to animate the token placed once the agent reaches the cell).
+function counterCellHTML(redN, blueN, highlightButton) {
+    function half(button, n) {
+        let slots = "";
+        for (let k = 0; k < N_TRIALS; k++) {
+            const isNew = button === highlightButton && k === n - 1;
+            slots += (k < n)
+                ? `<div class="counter-slot"><div class="counter-token${isNew ? " token-new" : ""}" style="background:rgb(${BTN_COLOR[button]})"></div></div>`
+                : `<div class="counter-slot"></div>`;
+        }
+        // 2 columns, ceil(N_TRIALS/2) rows
+        return `<div class="counter-half" style="grid-template-rows:repeat(${Math.ceil(N_TRIALS / 2)},1fr)">${slots}</div>`;
+    }
+    // red on the left, blue on the right (no visible divider between them)
+    return half("red", redN) + half("blue", blueN);
+}
+
+// build the counter tokens into the given overlay layer from a counts object.
+// `highlight` ({button, outcome}) optionally animates the just-placed token.
+function renderCountersInto(layer, cnts, highlight) {
+    if (!layer) return;
+    // bring the counters in front of the agent and gold coin (see CSS)
+    layer.classList.add("counter-layer");
+    layer.innerHTML = "";
+    const cellPct = 100 / gridSize;
+    for (const outcome of OUTCOMES) {
+        const idx = OUTCOME_CELL[outcome];
+        const r = Math.floor(idx / gridSize);
+        const col = idx % gridSize;
+        const cell = document.createElement("div");
+        cell.className = "counter-cell";
+        cell.style.left = `${col * cellPct + cellPct * 0.08}%`;
+        cell.style.top = `${r * cellPct + cellPct * 0.08}%`;
+        cell.style.width = `${cellPct * 0.84}%`;
+        cell.style.height = `${cellPct * 0.84}%`;
+        const hl = highlight && highlight.outcome === outcome ? highlight.button : null;
+        cell.innerHTML = counterCellHTML(cnts.red[outcome], cnts.blue[outcome], hl);
+        layer.appendChild(cell);
+    }
+}
+
+// live: render from the global counts into the main grid's overlay layer.
+// pass {button, outcome} to pop in the token just added for that observation.
+function renderMainCounters(highlight) {
+    renderCountersInto(document.getElementById("belief-overlay"), counts, highlight);
+}
+
+// static: a container (base tile + counter tokens + agent) for instruction slides
+function roomCountersStaticHTML(redCounts, blueCounts) {
+    const cellPct = 100 / gridSize;
+    let cells = "";
+    for (const outcome of OUTCOMES) {
+        const idx = OUTCOME_CELL[outcome];
+        const r = Math.floor(idx / gridSize);
+        const col = idx % gridSize;
+        const style = `left:${col * cellPct + cellPct * 0.08}%; top:${r * cellPct + cellPct * 0.08}%;` +
+                      `width:${cellPct * 0.84}%; height:${cellPct * 0.84}%;`;
+        cells += `<div class="counter-cell" style="${style}">${counterCellHTML(redCounts[outcome], blueCounts[outcome])}</div>`;
+    }
+    return `
+        <div class="container">
+            <img src="img/BaseAction_4k.png" alt="Base" class="base-image">
+            <div class="belief-overlay counter-layer">${cells}</div>
+            <img src="img/Agent.png" alt="Agent" class="agent-image">
+        </div>`;
 }
 
 //----------------------------------------------------------------------------//
