@@ -334,6 +334,7 @@ function make_gold_demo_trial(opts) {
                 btnRed.classList.add("disabled");
                 btnBlue.classList.add("disabled");
                 (button === "red" ? btnBlue : btnRed).classList.add("hidden");
+                instr.innerHTML = ""; // the choice is made; drop the "click a button" prompt
 
                 // the demos always reveal the outcome (for teaching), even though the
                 // real experiment keeps it hidden (SHOW_GOLD_OUTCOME).
@@ -385,9 +386,10 @@ function make_review_choice_trial() {
             <h2>You're ready</h2>
             <p style="max-width:640px; margin:0 auto;">That's the end of the instructions.</p>
             <p style="max-width:640px; margin:0 auto;">There are <strong>${N_ROOMS} rooms</strong> to come, each with new buttons to learn.</p>
-            <p style="max-width:640px; margin:0 auto;">Would you like to start, or review the instructions again from the beginning?</p>`,
-        choices: ["Start the experiment", "Review the instructions again"],
-        data: { task: "review_choice" },
+            <p style="max-width:640px; margin:0 auto;">We will now ask you a series of questions about the task to check your understanding.</p>
+            <p style="max-width:640px; margin:0 auto;">Before you do so, you have the option to review the instructions again.</p>`,
+            choices: ["Start comprehension check", "Review the instructions again"],
+            data: { task: "review_choice" },
         on_finish: function (data) {
             review_instructions = (data.response === 1);
         }

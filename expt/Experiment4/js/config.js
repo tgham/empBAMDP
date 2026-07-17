@@ -7,8 +7,18 @@ const K_OUTCOMES = 4;
 const N_TRIALS = 8;   // sampling trials per room
 const N_ROOMS = 6;    // number of rooms (fresh transition functions each)
 const ALPHA = 0.25;
+
+// CONTEXTUAL controls which prior each button's hidden transition function is
+// drawn from at the start of a room:
+//   false -> every button is drawn from Dirichlet(ALPHA), as before.
+//   true  -> each button independently gets a fair coin flip between
+//            Dirichlet(ALPHA_CTX1) and Dirichlet(ALPHA_CTX2), so the two buttons
+//            in a room can come from different priors. The context drawn is
+//            recorded in BUTTON_CTX and logged, but is never cued to the
+//            participant.
+const CONTEXTUAL = true;
 const ALPHA_CTX1 = 0.25; // context 1 prior
-const ALPHA_CTX2 = 0.25; // context 2 prior
+const ALPHA_CTX2 = 1; // context 2 prior
 
 // After the sampling trials, a gold coin appears at a random reachable cell and
 // the participant picks a button to try to reach it.
@@ -71,6 +81,10 @@ let TRUE_T = {
     red:  { up: 0.25, right: 0.25, down: 0.25, left: 0.25 },
     blue: { up: 0.25, right: 0.25, down: 0.25, left: 0.25 }
 };
+
+// Which context (1 or 2) each button's TRUE_T was drawn from in the current room.
+// Set by sampleTrueT(); null for every button when CONTEXTUAL is false.
+let BUTTON_CTX = { red: null, blue: null };
 
 //----------------------------------------------------------------------------//
 // Observation counts. Persist across trials so beliefs accumulate over T trials.

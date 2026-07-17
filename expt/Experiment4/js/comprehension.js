@@ -23,7 +23,7 @@ const QUIZ_QUESTIONS = [
     {
         name: "blue_up",
         prompt: "Suppose I press the blue button and it takes me to the upward location. What can I infer about the upward location?",
-        correct: "It's evidence that blue is fairly likely to lead upward — but not a certainty.",
+        correct: "It's evidence that blue is fairly likely to lead upward, but not a certainty.",
         distractors: [
             "Blue will now always lead upward.",
             "The gold coin must be in the upward location."
