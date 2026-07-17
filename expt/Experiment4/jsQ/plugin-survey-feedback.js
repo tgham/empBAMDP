@@ -367,7 +367,7 @@ var jsPsychSurveyFeedback = (function (jspsych) {
 
         // add prompt
         html += '<div class="survey-debrief-item" type="prompt">';
-        html += '<p>Did you use any strategies during the task?<br><small>(e.g. write things down)</small></p>';
+        html += '<p>Did you use any particular strategies during the task?</p>';
         html += '</div>';
 
         // add free response option
