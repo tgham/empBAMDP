@@ -362,7 +362,6 @@ function make_gold_demo_trial(opts) {
                     const fb = document.getElementById("gold-feedback");
                     if (success) { fb.textContent = "You reached the coin!"; fb.style.color = "green"; }
                     else { fb.textContent = opts.missFeedback || "You missed the coin."; fb.style.color = "red"; }
-                    instr.innerHTML = opts.revealText || `Click <strong>Continue</strong>.`;
                     cont.style.display = "inline-block";
                 }, MOVE_MS);
             }
@@ -423,7 +422,7 @@ function make_instructions_timeline() {
         `<h2>Button task</h2>
          <p style="${P}">In the next phase you will explore a series of rooms, one at a time.</p>
          <p style="${P}">In each room you have <strong>${N_BUTTONS} coloured buttons</strong> to press, and there are
-         <strong>${K_OUTCOMES} locations</strong> you can reach - i.e. up, down, left or right.</p>
+         <strong>${K_OUTCOMES} locations</strong> you can reach from the central location - i.e. up, down, left or right.</p>
          <p style="${P}">Each button takes you to one of these ${K_OUTCOMES} locations, but
          <strong>you don't know which location each button is most likely to lead to</strong>.</p>
          <p style="${P}">NOTE: the colour of the buttons has <strong>no relation</strong> to the locations they reach.</p>
@@ -477,8 +476,8 @@ function make_instructions_timeline() {
          ${exampleDisplayStaticHTML(zeroCounts, zeroCounts)}`,
 
         `<h2>Interpreting the tokens</h2>
-         <p style="${P}">If, however, testing a button adds more tokens to one location, this indicates the button is 
-         <strong>less</strong> likely to lead to the others.</p>
+         <p style="${P}">If, however, testing a button adds more tokens to locations that have been reached, this indicates the button is 
+         <strong>less</strong> likely to lead to the other locations that have not been reached.</p>
          <p style="${P}">For example, in the room below the tokens suggest the <strong>blue</strong> button is likely
          to lead <strong>up</strong> &mdash; suggesting it is less likely to lead to any of the other locations.</p>
          ${exampleDisplayStaticHTML({ up: 0, right: 0, down: 0, left: 0 }, { up: 5, right: 0, down: 0, left: 0 })}`
@@ -511,7 +510,7 @@ function make_instructions_timeline() {
     tl.push(instructionBlock([
         `<h2>Let's practise</h2>
          <p style="${P}">The next part works exactly like a real room.</p>
-         <p style="${P}">Press the buttons to test them, and click the tick button when you feel
+         <p style="${P}">Press the buttons to test them. Feel free to use all ${N_TRIALS} presses, or to click the tick button when you feel
          you've learned enough.</p>`
     ]));
     tl.push(make_room_sampling(0, { practice: true }));
