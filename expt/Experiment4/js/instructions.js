@@ -67,42 +67,40 @@ function beliefBlockStaticHTML(button, label, cntObj) {
         </div>`;
 }
 
-// a full static illustration: room + buttons + belief display, for given counts.
-// Adapts to BELIEF_DISPLAY (counters -> single grid of tokens; else two heatmaps).
-function exampleDisplayStaticHTML(redCounts, blueCounts) {
+// The task display exactly as a participant meets it in a real room: the same
+// tick, room, buttons and belief display, in the same places -- but inert, so
+// nothing can be clicked and nothing animates. Counts default to an untouched
+// room. Adapts to BELIEF_DISPLAY (counters -> tokens in the main grid; else two
+// heatmaps beside it).
+//
+// opts.tick shows the real tick button. Slides that have not introduced it yet
+// get an invisible placeholder instead: it keeps its layout footprint, so the
+// room sits exactly where the task puts it, without offering the participant a
+// control nothing has explained.
+function taskDisplayStaticHTML(redCounts, blueCounts, opts) {
+    opts = opts || {};
+    const zero = { up: 0, right: 0, down: 0, left: 0 };
+    const redC = redCounts || zero;
+    const blueC = blueCounts || zero;
+    const tick = checkButtonHTML({ placeholder: opts.tick !== true });
+
     if (BELIEF_DISPLAY === "counters") {
         return `
             <div class="task-row" style="pointer-events:none;">
-                ${roomCountersStaticHTML(redCounts, blueCounts)}
+                ${tick}
+                ${roomCountersStaticHTML(redC, blueC)}
                 ${buttonStackHTML()}
             </div>`;
     }
     return `
         <div class="task-row" style="pointer-events:none;">
+            ${tick}
             ${reachableRoomStaticHTML()}
             ${buttonStackHTML()}
             <div class="belief-stack">
-                ${beliefBlockStaticHTML("blue", "Blue button", blueCounts)}
-                ${beliefBlockStaticHTML("red", "Red button", redCounts)}
+                ${beliefBlockStaticHTML("blue", "Blue button", blueC)}
+                ${beliefBlockStaticHTML("red", "Red button", redC)}
             </div>
-        </div>`;
-}
-
-// room + buttons only (no heatmaps), for the overview slides
-function roomButtonsStaticHTML() {
-    return `
-        <div class="task-row" style="pointer-events:none;">
-            ${reachableRoomStaticHTML()}
-            ${buttonStackHTML()}
-        </div>`;
-}
-
-// the plain room (base + centred agent, no highlights) for realistic illustrations
-function plainRoomStaticHTML() {
-    return `
-        <div class="container">
-            <img src="img/BaseAction_4k.png" alt="Base" class="base-image">
-            <img src="img/Agent.png" alt="Agent" class="agent-image">
         </div>`;
 }
 
@@ -113,29 +111,13 @@ function goldCoinStaticHTML() {
     return `<img src="img/Goal.png" alt="Gold coin" class="gold-coin-static">`;
 }
 
-// the usual task display (tick + room + buttons + belief display), illustrating
-// early stop. Adapts to BELIEF_DISPLAY.
-function earlyStopStaticHTML() {
-    // blank grid (no tokens) for the "Testing the buttons" slide
-    const blueC = { up: 0, right: 0, down: 0, left: 0 };
-    const redC = { up: 0, right: 0, down: 0, left: 0 };
-    if (BELIEF_DISPLAY === "counters") {
-        return `
-            <div class="task-row" style="pointer-events:none;">
-                ${checkButtonHTML()}
-                ${roomCountersStaticHTML(redC, blueC)}
-                ${buttonStackHTML()}
-            </div>`;
-    }
+// The demo trials' own advance button. It is pinned to the bottom of the screen
+// (see .screen-nav), in the same place as the instructions plugin's nav, so the
+// room sits identically whether a slide or a demo is showing.
+function navHTML(label) {
     return `
-        <div class="task-row" style="pointer-events:none;">
-            ${checkButtonHTML()}
-            ${plainRoomStaticHTML()}
-            ${buttonStackHTML()}
-            <div class="belief-stack">
-                ${beliefBlockStaticHTML("blue", "Blue button", blueC)}
-                ${beliefBlockStaticHTML("red", "Red button", redC)}
-            </div>
+        <div class="screen-nav">
+            <button id="demo-continue" class="demo-continue" style="display:none;">${label}</button>
         </div>`;
 }
 
@@ -182,18 +164,17 @@ function make_auto_demo_trial(cfg) {
     return {
         type: jsPsychHtmlKeyboardResponse,
         choices: "NO_KEYS",
-        stimulus: `
-            ${cfg.title ? `<h2 style="margin-top:0;">${cfg.title}</h2>` : ``}
-            <div class="task-row">
-                ${checkButtonHTML({ placeholder: true })}
-                ${initialize_agent()}
-                ${buttonStackHTML()}
-                ${beliefPanelHTML()}
-            </div>
-            <div class="prompt">
-                <div id="demo-instruction" class="demo-text">${cfg.instruction}</div>
-                <button id="demo-continue" class="demo-continue" style="display:none;">Next</button>
-            </div>`,
+        stimulus: screenHTML({
+            title: cfg.title,
+            lines: cfg.lines,
+            stage: `
+                <div class="task-row">
+                    ${checkButtonHTML({ placeholder: true })}
+                    ${initialize_agent()}
+                    ${buttonStackHTML()}
+                    ${beliefPanelHTML()}
+                </div>`
+        }) + navHTML("Next"),
         data: { task: "auto_demo", demo_button: cfg.button },
         on_start: function () {
             agent_topPos = topPos0;
@@ -277,26 +258,25 @@ function make_auto_demo_trial(cfg) {
 function make_gold_demo_trial(opts) {
     opts = opts || {};
     const useCurrent = opts.useCurrentBeliefs === true;
-    const introText = opts.instruction ||
-        `A gold coin appeared at the <strong>top</strong>.<br>` +
-        `Click the button you think is most likely to take you there.`;
+    const introLines = opts.lines || [
+        `A gold coin appeared at the <strong>top</strong>.`,
+        `Click the button you think is most likely to take you there.`
+    ];
 
     return {
         type: jsPsychHtmlKeyboardResponse,
         choices: "NO_KEYS",
-        stimulus: `
-            <div class="task-row">
-                ${checkButtonHTML({ placeholder: true })}
-                ${initialize_agent_gold()}
-                ${buttonStackHTML()}
-                ${beliefPanelHTML()}
-            </div>
-            <div class="prompt">
-                <div id="demo-instruction" class="demo-text">${introText}</div>
-                <h2 id="gold-feedback"></h2>
-                ${opts.note ? `<div id="demo-note" class="demo-text">${opts.note}</div>` : ``}
-                <button id="demo-continue" class="demo-continue" style="display:none;">Continue</button>
-            </div>`,
+        stimulus: screenHTML({
+            lines: introLines,
+            stage: `
+                <div class="task-row">
+                    ${checkButtonHTML({ placeholder: true })}
+                    ${initialize_agent_gold()}
+                    ${buttonStackHTML()}
+                    ${beliefPanelHTML()}
+                </div>`,
+            below: opts.note ? `<p class="screen-note">${opts.note}</p>` : ``
+        }) + navHTML("Continue"),
         data: { task: useCurrent ? "practice_gold" : "demo_gold" },
         on_start: function () {
             agent_topPos = topPos0;
@@ -335,7 +315,7 @@ function make_gold_demo_trial(opts) {
             const btnRed = document.getElementById("btn-red");
             const btnBlue = document.getElementById("btn-blue");
             const cont = document.getElementById("demo-continue");
-            const instr = document.getElementById("demo-instruction");
+            const instr = document.getElementById("screen-lines");
 
             function handle(button) {
                 btnRed.classList.add("disabled");
@@ -367,12 +347,13 @@ function make_gold_demo_trial(opts) {
                 const success = outcome === goldOutcome;
                 moveAgent(outcome);
                 setTimeout(function () {
-                    const fb = document.getElementById("gold-feedback");
-                    if (success) { fb.textContent = "You reached the coin!"; fb.style.color = "green"; }
-                    else { fb.textContent = opts.missFeedback || "You missed the coin."; fb.style.color = "red"; }
-                    // the prompt was blanked on click; reuse it for the lesson this
-                    // demo teaches, if it has one (otherwise it stays empty)
-                    if (opts.revealText) instr.innerHTML = opts.revealText;
+                    // the result reads where the prompt was, above the room, followed
+                    // by the lesson this demo teaches if it has one
+                    showScreenFeedback(
+                        success ? "You reached the gold!" : (opts.missFeedback || "You missed the gold."),
+                        success,
+                        opts.revealLines
+                    );
                     cont.style.display = "inline-block";
                 }, MOVE_MS);
             }
@@ -391,14 +372,17 @@ function make_gold_demo_trial(opts) {
 function make_review_choice_trial() {
     return {
         type: jsPsychHtmlButtonResponse,
-        stimulus: `
-            <h2>You're ready</h2>
-            <p style="max-width:640px; margin:0 auto;">That's the end of the instructions.</p>
-            <p style="max-width:640px; margin:0 auto;">There are <strong>${N_ROOMS} rooms</strong> to come, each with new buttons to learn.</p>
-            <p style="max-width:640px; margin:0 auto;">We will now ask you a series of questions about the task to check your understanding.</p>
-            <p style="max-width:640px; margin:0 auto;">Before you do so, you have the option to review the instructions again.</p>`,
-            choices: ["Start comprehension check", "Review the instructions again"],
-            data: { task: "review_choice" },
+        stimulus: screenHTML({
+            title: `You're ready`,
+            lines: [
+                `That's the end of the instructions.`,
+                `There are <strong>${N_ROOMS} rooms</strong> to come, each with new buttons to learn.`,
+                `We will now ask you a series of questions about the task to check your understanding.`,
+                `Before you do so, you have the option to review the instructions again.`
+            ]
+        }),
+        choices: ["Start comprehension check", "Review the instructions again"],
+        data: { task: "review_choice" },
         on_finish: function (data) {
             review_instructions = (data.response === 1);
         }
@@ -419,36 +403,32 @@ function instructionBlock(pages, extra) {
     }, extra || {});
 }
 
-// join sentences with a blank line between them (readable spacing in a prompt)
-function sayLines() {
-    return Array.prototype.slice.call(arguments).join("<br><br>");
-}
-
 function make_instructions_timeline() {
     const tl = [];
-    const zeroCounts = { up: 0, right: 0, down: 0, left: 0 };
-    const P = `max-width:680px; margin:14px auto;`; // paragraph style, generous spacing
 
     // ---- Overview + testing intro + token explanation (before the demos) ----
     tl.push(instructionBlock([
-        `<h2>Button task</h2>
-         <p style="${P}">In the next phase you will explore a series of rooms, one at a time.</p>
-         <p style="${P}">In each room you have <strong>${N_BUTTONS} coloured buttons</strong> to press, and there are
-         <strong>${K_OUTCOMES} locations</strong> you can reach from the central location - i.e. up, down, left or right.</p>
-         <p style="${P}">Each button takes you to one of these ${K_OUTCOMES} locations, but
-         <strong>you don't know which location each button is most likely to lead to</strong>.</p>
-         <p style="${P}">NOTE: the colour of the buttons has <strong>no relation</strong> to the locations they reach.</p>
-         ${roomButtonsStaticHTML()}`,
+        screenHTML({
+            title: `Button task`,
+            lines: [
+                `In the next phase you will explore a series of rooms, one at a time.`,
+                `Each room has <strong>${N_BUTTONS} buttons</strong> to press, and there are <strong>${K_OUTCOMES} locations</strong> you can reach from the central location - i.e. up, down, left or right.`,
+                `Each button takes you to one of these ${K_OUTCOMES} locations, but <strong>you don't know which location each button is most likely to lead to</strong>.`,
+                `NOTE: the colour of the buttons has <strong>no relation</strong> to the locations they reach.`
+            ],
+            stage: taskDisplayStaticHTML()
+        }),
 
-        `<h2>Testing the buttons</h2>
-        <p style="${P}">Whenever you press a button, a <strong>coloured token</strong> will be placed on the location
-        that you reached.</p>
-        <p style="${P}">Hence, the tokens in each location reflect the <strong>number of times</strong> each button has
-        taken you there.</p>
-        <p style="${P}">While there is <strong>always some degree of randomness</strong> in where a button leads,
-        buttons can vary in how <strong>reliable</strong> they are.</p>
-         <p style="${P}">Let's look at two examples.</p>
-         ${exampleDisplayStaticHTML(zeroCounts, zeroCounts)}`
+        screenHTML({
+            title: `Testing the buttons`,
+            lines: [
+                `Whenever you press a button, a <strong>coloured token</strong> will be placed on the location that you reached.`,
+                `Hence, the tokens in each location reflect the <strong>number of times</strong> each button has taken you there.`,
+                `While there is <strong>always some degree of randomness</strong> in where a button leads, buttons can vary in how <strong>reliable</strong> they are.`,
+                `Let's look at two examples.`
+            ],
+            stage: taskDisplayStaticHTML()
+        })
     ]));
 
     // ---- Reliability animations (computer presses each button; Next after 5) ----
@@ -458,10 +438,10 @@ function make_instructions_timeline() {
         outcomes: ["up", "up", "up", "right", "up", "up", "left", "up",
             // "up", "up"
         ],
-        instruction: sayLines(
+        lines: [
             `For example, a button may have a preferred direction, reliably leading you to one location.`,
             `See how this <strong>blue</strong> button often takes you <strong>upwards</strong> &mdash; although not all the time.`
-        )
+        ]
     }));
     tl.push(make_auto_demo_trial({
         button: "red",
@@ -470,29 +450,51 @@ function make_instructions_timeline() {
         outcomes: ["up", "left", "right", "up", "down", "left", "down", "down",
             // "up", "left"
         ],
-        instruction: sayLines(
+        lines: [
             `Other buttons may be more random, taking you to many different locations.`,
-            `See how this <strong>red</strong> button is much more variable in the outcomes it leads to.`,
-            `The two buttons are <strong>independent</strong>. This means the locations one button tends to reach
-            may or may not overlap with those the other reaches.`,
-            `Learning about one button therefore tells you nothing about the other.`,
-        )
+            `See how this <strong>red</strong> button is much more variable in the outcomes it leads to.`
+        ]
+    }));
+
+    // ---- Independence, made on the tokens the two demos just built up.
+    //      `pages` is a function so the slide is rendered when it is reached,
+    //      off the counts the participant actually saw: the timeline is built
+    //      up front (when every count is still zero), and either demo can be
+    //      skipped early, so the tally cannot be baked in here. ----
+    tl.push(instructionBlock(function () {
+        return [
+            screenHTML({
+                title: `Testing the buttons`,
+                lines: [
+                    `The two buttons are <strong>independent</strong>.`,
+                    `This means the locations one button tends to reach <strong>may or may not overlap</strong> with those the other tends to reach.`,
+                    `Learning about one button therefore tells you nothing about the other.`
+                ],
+                stage: taskDisplayStaticHTML(counts.red, counts.blue)
+            })
+        ];
     }));
 
     // ---- Interpreting the tokens: blank grid at first, then how tokens in one
     //      location make the others less likely. ----
     tl.push(instructionBlock([
-        `<h2>Interpreting the tokens</h2>
-         <p style="${P}">At the beginning, before a button has been tested, there are <strong>no tokens</strong>.
-         So it's reasonable to believe each button is just as likely to lead <strong>anywhere</strong>.</p>
-         ${exampleDisplayStaticHTML(zeroCounts, zeroCounts)}`,
+        screenHTML({
+            title: `Interpreting the tokens`,
+            lines: [
+                `When you first enter the room, before a button has been tested, there are <strong>no tokens</strong>.`,
+                `So, at this point, it's reasonable to believe each button is just as likely to lead <strong>anywhere</strong>.`
+            ],
+            stage: taskDisplayStaticHTML()
+        }),
 
-        `<h2>Interpreting the tokens</h2>
-         <p style="${P}">If, however, testing a button adds more tokens to locations that have been reached, this indicates the button is 
-         <strong>less</strong> likely to lead to the other locations that have not been reached.</p>
-         <p style="${P}">For example, in the room below the tokens suggest the <strong>blue</strong> button is likely
-         to lead <strong>up</strong> &mdash; suggesting it is less likely to lead to any of the other locations.</p>
-         ${exampleDisplayStaticHTML({ up: 0, right: 0, down: 0, left: 0 }, { up: 5, right: 0, down: 0, left: 0 })}`
+        screenHTML({
+            title: `Interpreting the tokens`,
+            lines: [
+                `If, however, testing a button adds more tokens to locations that have been reached, this indicates the button is <strong>less</strong> likely to lead to the other locations that have not been reached.`,
+                `For example, in the room below the tokens suggest the <strong>blue</strong> button is likely to lead <strong>up</strong>. This indicates it is less likely to lead to any of the other locations.`
+            ],
+            stage: taskDisplayStaticHTML({ up: 0, right: 0, down: 0, left: 0 }, { up: 5, right: 0, down: 0, left: 0 })
+        })
     ]));
 
     // (No single-selection practice here: participants practise a full room below.)
@@ -501,13 +503,15 @@ function make_instructions_timeline() {
     //      Full task display beneath. on_start sets up the practice room that
     //      follows (also runs on review, before the conditional practice trials). ----
     tl.push(instructionBlock([
-        `<h2>Testing the buttons</h2>
-         <p style="${P}">You can press a button by clicking it, and then observing where it took you.</p>
-         <p style="${P}">You can test the buttons up to <strong>${N_TRIALS} times</strong> in total, splitting your
-         presses between the buttons however you like.</p>
-         <p style="${P}">You do not have to use all ${N_TRIALS} choices, though &mdash; if you already feel certain
-         enough, you can click the <strong>tick button</strong> to move on to the next phase.</p>
-         ${earlyStopStaticHTML()}`
+        screenHTML({
+            title: `Testing the buttons`,
+            lines: [
+                `You can press a button by clicking it, and then observing where it took you.`,
+                `You can test the buttons up to <strong>${N_TRIALS} times</strong> in total, splitting your presses between the buttons however you like.`,
+                `You do not have to use all ${N_TRIALS} choices, though &mdash; if you already feel you've learned enough, you can click the <strong>tick button</strong> to move on.`
+            ],
+            stage: taskDisplayStaticHTML(null, null, { tick: true })
+        })
     ], {
         on_start: function () {
             for (const b of BUTTONS) {
@@ -520,10 +524,14 @@ function make_instructions_timeline() {
 
     // ---- Practice: press the buttons (up to N_TRIALS) until certain, then tick ----
     tl.push(instructionBlock([
-        `<h2>Let's practise</h2>
-         <p style="${P}">The next part works exactly like a real room.</p>
-         <p style="${P}">Press the buttons to test them. Feel free to use all ${N_TRIALS} presses, or to click the tick button when you feel
-         you've learned enough.</p>`
+        screenHTML({
+            title: `Let's practise`,
+            lines: [
+                `The next part works exactly like a real room.`,
+                `Press the buttons to test them.`,
+                `Feel free to use all ${N_TRIALS} presses, or to click the tick button when you feel you've learned enough.`
+            ]
+        })
     ]));
     tl.push(make_room_sampling(0, { practice: true }));
 
@@ -535,13 +543,15 @@ function make_instructions_timeline() {
         blue: { up: 0, right: 2, down: 0, left: 1 }
     };
     tl.push(instructionBlock([
-        `<h2>Collecting the gold</h2>
-         <p style="${P}">Once you've finished testing, a <strong>gold coin</strong> will appear at one of the
-         ${K_OUTCOMES} locations.</p>
-         <p style="${P}">You must then choose the <strong>button you think is most likely to take you to the
-         coin</strong>, based on the tokens you've collected for each button.</p>
-         <p style="${P}">Here's a fresh room. Let's try a couple of examples.</p>
-         ${goldCoinStaticHTML()}`
+        screenHTML({
+            title: `Collecting the gold`,
+            lines: [
+                `Once you've finished testing the buttons, a <strong>gold coin</strong> will appear at one of the ${K_OUTCOMES} locations.`,
+                `You must then choose the <strong>button you think is most likely to take you to the gold</strong>, based on the tokens you've collected for each button.`,
+                `Here's a fresh room. Let's try a couple of examples.`
+            ],
+            stage: goldCoinStaticHTML()
+        })
     ]));
 
     // ---- Coin-selection demo 1: coin at "up", where red is reliable. Red reaches
@@ -551,11 +561,11 @@ function make_instructions_timeline() {
         goldOutcome: "up",
         reachButton: "red", // red reaches the coin; the other button misses
         missFeedback: "You missed the coin.",
-        instruction: sayLines(
+        lines: [
             `A <strong>gold coin</strong> has appeared.`,
             `Click the button you think is most likely to reach it.`
-        ),
-        note: `<em style="font-size:0.85em; color:#555;">(Note that in the real experiment, you will not see whether or not you actually reached the coin.)</em>`,
+        ],
+        note: `(Note that in the real experiment, you will not see whether or not you actually reached the gold.)`
     }));
 
     // ---- Coin-selection demo 2: coin at "down", which neither button reaches. ----
@@ -563,26 +573,30 @@ function make_instructions_timeline() {
         fixedCounts: goldDemoCounts,
         goldOutcome: "down",
         forceOutcome: "miss", // neither button reaches this coin
-        instruction: sayLines(
-            `Here's another coin.`,
+        lines: [
+            `Here's another gold coin.`,
             `Again, click the button you think is most likely to reach it.`
-        ),
-        note: `<em style="font-size:0.85em; color:#555;">(Note that in the real experiment, you will not see whether or not you actually reached the coin.)</em>`,
-        revealText: sayLines(
-            `There's no guarantee the coin will appear somewhere a button can reliably reach &mdash; sometimes it might simply be unlikely that you will get it.`
-        )
+        ],
+        note: `(Note that in the real experiment, you will not see whether or not you actually reached the gold.)`,
+        revealLines: [
+            `There's <strong>no guarantee</strong> the gold coin will appear somewhere a button can reliably reach.`,
+            `Sometimes it might simply be unlikely that you will get it.`,
+            `The best you can do is to choose the button you think is most likely to reach the gold coin`
+        ]
     }));
 
     // ---- The aim of the task (bonus) + note that the real task hides the outcome ----
     tl.push(instructionBlock([
-        `<h2>The aim of the task</h2>
-         <p style="${P}">The aim of the task is to collect <strong>as many gold coins as possible</strong>.</p>
-         <p style="${P}">The more coins you collect, the <strong>bigger the bonus</strong> you will receive on Prolific.</p>
-         <p style="${P}">So in each room, test out the buttons until you feel <strong>certain enough</strong> to continue to the
-         gold selection phase.</p>
-         <p style="${P}">Remember: in the practice we <strong>showed you whether you reached the coin</strong>.
-         In the real experiment you will <strong>not</strong> see this, so just choose the button you
-         most believe will take you to the coin.</p>`
+        screenHTML({
+            title: `The aim of the task`,
+            lines: [
+                `The aim of the task is to collect <strong>as many gold coins as possible</strong>.`,
+                `The more gold coins you collect, the <strong>bigger the bonus</strong> you will receive on Prolific.`,
+                `So in each room, test out the buttons until you feel you've learned enough to continue to the gold selection phase.`,
+                `Remember: in the practice we <strong>showed you whether you reached the gold coin</strong>.`,
+                `In the real experiment you will <strong>not</strong> see this, so just choose the button you most believe will take you to the gold coin.`
+            ]
+        })
     ]));
 
     // ---- End: start, or review the instructions again ----

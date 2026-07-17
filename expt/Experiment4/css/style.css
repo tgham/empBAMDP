@@ -3,12 +3,118 @@
     display: none;
 }
 
-/* Anchor content to the top instead of vertically centering it, so that when
-   result text / the Continue button appear beneath the room, the room and
-   heatmaps stay in the same place (they don't get pushed up by re-centering). */
+/* Centre every screen vertically (jspsych.css's own `margin: auto`). Keeping the
+   room from drifting as text/feedback come and go is handled by the .screen
+   scaffold below, not by anchoring the page to the top. */
 .jspsych-content {
-    margin-top: 40px;
-    margin-bottom: auto;
+    margin: auto;
+}
+
+/* ------------------------------------ */
+/*  screen scaffold                       */
+/* ------------------------------------ */
+/* Every screen that shows the room (task trials, attention checks, instruction
+   slides) is a full-viewport box holding three things:
+
+     .screen-stage  the room / buttons / illustration -- DEAD CENTRE
+     .screen-text   the text, starting a fixed distance from the top of the screen
+     .screen-below  a note sitting just under the stage
+
+   The text and the note are positioned off the centre rather than flowing into
+   it, so neither the number of lines of text nor feedback appearing can shift
+   the room. It therefore sits in exactly the same place on every screen of the
+   task and the instructions.
+
+   The room is viewport-relative with a px cap, so a short laptop screen scales
+   it down instead of scrolling. */
+/* The room is dead centre, so the text above it has 50vh - room/2 to live in.
+   Every text metric below is therefore in vh as well: text and room then shrink
+   together on a short screen and the text can never grow down into the room. */
+:root {
+    --room-size: min(500px, 46vh);
+    --text-top: clamp(12px, 5vh, 60px);
+    /* wide enough that a sentence per <p> generally lands on a single line */
+    --screen-width: min(1300px, 94vw);
+}
+.screen {
+    position: relative;
+    width: 100%;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.screen-stage {
+    min-height: var(--room-size);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.screen-text {
+    position: absolute;
+    top: var(--text-top);
+    left: 50%;
+    transform: translateX(-50%);
+    width: var(--screen-width);
+    text-align: center;
+}
+.screen-below {
+    position: absolute;
+    top: calc(50% + var(--room-size) / 2 + 14px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: var(--screen-width);
+    text-align: center;
+}
+/* Slides with no stage use the same box, so their text starts at the same place
+   as every other screen's rather than jumping to the middle of the page. */
+
+/* screen typography: one sentence per paragraph, one line per sentence */
+.screen-title {
+    font-size: clamp(16px, 2.9vh, 31px);
+    font-weight: bold;
+    line-height: 1.3;
+    margin: 0 0 1.4vh 0;
+}
+.screen-text p,
+.screen-below p {
+    font-size: clamp(12px, 1.85vh, 21px);
+    line-height: 1.45;
+    margin: 0 0 1vh 0;
+}
+.screen-text p:last-child,
+.screen-below p:last-child {
+    margin-bottom: 0;
+}
+/* asides ("in the real experiment you won't see this"), a size down from the body */
+p.screen-note {
+    font-style: italic;
+    color: #555;
+    font-size: clamp(13px, 1.55vh, 18px);
+}
+/* the coin result, shown where the prompt was: above the room, not under it */
+.screen-feedback {
+    font-size: clamp(19px, 2.4vh, 26px);
+    font-weight: bold;
+    line-height: 1.3;
+    margin: 0 0 10px 0;
+}
+
+/* Navigation ("Next" / "Continue" / the instructions plugin's own nav) is pinned
+   to the bottom of the viewport. Out of the flow, it can't change the height of
+   the block being centred -- which is what keeps the stage in one place across
+   slides that have nav and screens that don't. */
+.screen-nav,
+.jspsych-instructions-nav,
+.jspsych-content:has(.screen) .jspsych-btn-group {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 26px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
 }
 
 /* ------------------------------------ */
@@ -16,8 +122,8 @@
 /* ------------------------------------ */
 .container {
     position: relative;
-    width: 500px;
-    height: 500px;
+    width: var(--room-size);
+    height: var(--room-size);
     flex: 0 0 auto;
 }
 .base-image {
@@ -46,6 +152,14 @@
     left: 50%;
     transform: translate(-50%, -50%);
     z-index: 2; /* above the belief overlay, below the agent */
+}
+/* free-standing coin for instruction slides (no room around it). Matches the
+   on-screen size of .gold-image in a room: 21% of the container. */
+.gold-coin-static {
+    display: block;
+    width: calc(var(--room-size) * 0.21);
+    height: auto;
+    margin: 0;
 }
 
 /* ------------------------------------ */
@@ -124,17 +238,8 @@
     box-sizing: border-box;
 }
 
-/* demo instruction text (sentences spaced with blank lines) */
-.demo-text {
-    font-size: 22px;
-    line-height: 1.45;
-    max-width: 760px;
-    margin: 0 auto;
-}
-
 /* demo Continue button */
 .demo-continue {
-    margin-top: 16px;
     padding: 12px 30px;
     font-size: 20px;
     cursor: pointer;
@@ -149,14 +254,11 @@
     justify-content: center;
     gap: 60px;
 }
-.prompt {
-    margin-top: 20px;
-    text-align: center;
-}
 .trial-counter {
-    margin: 0 0 4px 0;
-    color: #777;
-    font-weight: normal;
+    color: #000000;
+    font-size: 25px;
+    /* bold */
+    font-weight: 600;
 }
 
 /* ------------------------------------ */

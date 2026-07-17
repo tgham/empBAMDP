@@ -56,17 +56,17 @@ function makeAttentionCounts(color) {
 //----------------------------------------------------------------------------//
 // the grid + "which location has the most <colour> tokens?" question HTML
 function attentionStimulusHTML(color, red, blue) {
-    return `
-        <div class="task-row" style="pointer-events:none;">
-            ${roomCountersStaticHTML(red, blue)}
-        </div>
-        <div class="prompt">
-            <h3>Which location has the most
-                <span style="color:rgb(${BTN_COLOR[color]}); font-weight:bold;">${color}</span>
-                tokens?</h3>
-            <h4 style="font-weight:normal;">Press the arrow key
-                (&uarr; &rarr; &darr; &larr;) pointing to that location.</h4>
-        </div>`;
+    return screenHTML({
+        lines: [
+            `Which location has the most
+             <span style="color:rgb(${BTN_COLOR[color]}); font-weight:bold;">${color}</span> tokens?`,
+            `Press the arrow key (&uarr; &rarr; &darr; &larr;) pointing to that location.`
+        ],
+        stage: `
+            <div class="task-row" style="pointer-events:none;">
+                ${roomCountersStaticHTML(red, blue)}
+            </div>`
+    });
 }
 
 function make_attention_trial() {
@@ -122,10 +122,14 @@ function make_attention_excluded_trial() {
     return {
         type: jsPsychHtmlButtonResponse,
         choices: ["Finish"],
-        stimulus: `<h2>The experiment has ended</h2>
-                   <p style="max-width:640px; margin:14px auto;">Unfortunately, based on the attention checks,
-                   you do not meet the criteria to continue with the task. Thank you for your time.</p>
-                   <p style="max-width:640px; margin:14px auto;">Click below to return to Prolific.</p>`,
+        stimulus: screenHTML({
+            title: `The experiment has ended`,
+            lines: [
+                `Unfortunately, based on the attention checks, you do not meet the criteria to continue with the task.`,
+                `Thank you for your time.`,
+                `Click below to return to Prolific.`
+            ]
+        }),
         data: { task: "attention_excluded" }
     };
 }
@@ -163,18 +167,19 @@ function make_attention_practice_item() {
         choices: ["Continue"],
         stimulus: function () {
             const head = is_correct
-                ? `<h2 style="color:#2ca02c;">Correct!</h2>`
-                : `<h2 style="color:#c0392b;">Incorrect</h2>`;
-            return `
-                <div class="task-row" style="pointer-events:none;">
-                    ${roomCountersStaticHTML(red, blue)}
-                </div>
-                <div class="prompt">
-                    ${head}
-                    <h3>The most
-                        <span style="color:rgb(${BTN_COLOR[color]}); font-weight:bold;">${color}</span>
-                        tokens were in the <strong>${correct}</strong> location.</h3>
-                </div>`;
+                ? `<span style="color:#2ca02c;">Correct!</span>`
+                : `<span style="color:#c0392b;">Incorrect</span>`;
+            return screenHTML({
+                title: head,
+                lines: [
+                    `The most <span style="color:rgb(${BTN_COLOR[color]}); font-weight:bold;">${color}</span>
+                     tokens were in the <strong>${correct}</strong> location.`
+                ],
+                stage: `
+                    <div class="task-row" style="pointer-events:none;">
+                        ${roomCountersStaticHTML(red, blue)}
+                    </div>`
+            });
         },
         data: { task: "attention_practice_feedback" }
     };
@@ -183,7 +188,6 @@ function make_attention_practice_item() {
 
 // full intro + practice timeline (returns an array of trials).
 function make_attention_intro_and_practice() {
-    const P = `max-width:680px; margin:14px auto;`;
     const tl = [];
 
     tl.push({
@@ -193,13 +197,15 @@ function make_attention_intro_and_practice() {
         button_label_next: "Next",
         data: { task: "attention_intro" },
         pages: [
-            `<h2>Attention checks</h2>
-             <p style="${P}">Every so often during the task, we'll check that you're still paying attention.</p>
-             <p style="${P}">You'll see a room with red and blue tokens, and we'll ask:
-             <strong>which location has the most tokens of a particular colour?</strong></p>
-             <p style="${P}">Answer by pressing the <strong>arrow key</strong>
-             (&uarr; &rarr; &darr; &larr;) pointing to that location.</p>
-             <p style="${P}">Let's practise a couple, with feedback.</p>`
+            screenHTML({
+                title: `Attention checks`,
+                lines: [
+                    `Every so often during the task, we'll check that you're still paying attention.`,
+                    `You'll see a room with red and blue tokens, and we'll ask: <strong>which location has the most tokens of a particular colour?</strong>`,
+                    `Answer by pressing the <strong>arrow key</strong> (&uarr; &rarr; &darr; &larr;) pointing to that location.`,
+                    `Let's <strong>practise</strong> a couple, with feedback.`
+                ]
+            })
         ]
     });
 
@@ -214,9 +220,13 @@ function make_attention_intro_and_practice() {
         button_label_next: "Next",
         data: { task: "attention_intro_end" },
         pages: [
-            `<h2>Ready?</h2>
-             <p style="${P}">In the real attention checks you <strong>won't</strong> be told whether you were right.</p>
-             <p style="${P}">Please answer them carefully &mdash; if too many are missed, the study may end early.</p>`
+            screenHTML({
+                title: `Ready?`,
+                lines: [
+                    `In the real attention checks you <strong>won't</strong> be told whether you were right.`,
+                    `Please answer them carefully &mdash; if too many are missed, the study may end early.`
+                ]
+            })
         ]
     });
 

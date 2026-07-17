@@ -133,8 +133,7 @@ function make_quiz_result_trial() {
             const score = `You got <strong>${last.quiz_correct} of ${last.quiz_total}</strong> correct.`;
             if (quiz_passed) {
                 return `<h2>Nice work &mdash; you passed!</h2>
-                        <p style="max-width:640px; margin:14px auto;">${score}</p>
-                        <p style="max-width:640px; margin:14px auto;">Let's begin the experiment.</p>`;
+                        <p style="max-width:640px; margin:14px auto;">${score}</p>`;
             }
             if (quiz_attempts < QUIZ_MAX_ATTEMPTS) {
                 return `<h2>Not quite</h2>

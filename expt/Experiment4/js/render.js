@@ -11,6 +11,46 @@ let agent_topPos = topPos0;
 let agent_leftPos = leftPos0;
 
 //----------------------------------------------------------------------------//
+// Screen scaffold, shared by every screen of the task and the instructions. See
+// css/style.css for the geometry: the stage sits dead centre and the text is
+// positioned off that centre, so the room lands in the same place on every
+// screen and no amount of text can shift it.
+//   title  optional heading
+//   lines  the sentences above the stage -- one <p>, i.e. one line, each
+//   stage  the room / buttons / illustration (omit for a text-only screen)
+//   below  a note to sit just under the stage
+// The sentences live in #screen-lines so a trial can rewrite them in place --
+// see showScreenFeedback, which is how a result replaces the prompt.
+//----------------------------------------------------------------------------//
+function linesHTML(lines) {
+    return (lines || []).map((line) => `<p>${line}</p>`).join("");
+}
+
+function screenHTML(opts) {
+    const title = opts.title ? `<div class="screen-title">${opts.title}</div>` : ``;
+    return `
+        <div class="screen">
+            <div class="screen-text">
+                ${title}
+                <div id="screen-lines">${linesHTML(opts.lines)}</div>
+            </div>
+            ${opts.stage ? `<div class="screen-stage">${opts.stage}</div>` : ``}
+            ${opts.below ? `<div class="screen-below">${opts.below}</div>` : ``}
+        </div>`;
+}
+
+// Replace a screen's text with the outcome of the choice just made, so the
+// result reads where the prompt was (above the room). `extraLines` are any
+// further sentences to show under it.
+function showScreenFeedback(message, ok, extraLines) {
+    const el = document.getElementById("screen-lines");
+    if (!el) return;
+    el.innerHTML =
+        `<div class="screen-feedback" style="color:${ok ? "#2ca02c" : "#c0392b"}">${message}</div>` +
+        linesHTML(extraLines);
+}
+
+//----------------------------------------------------------------------------//
 // Main room scaffold: base tile + centred agent (mirrors Experiment3 script.js)
 //----------------------------------------------------------------------------//
 function initialize_agent() {
