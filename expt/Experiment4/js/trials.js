@@ -109,14 +109,16 @@ function make_room_intro(room_num) {
             for (const b of BUTTONS) {
                 for (const o of OUTCOMES) counts[b][o] = 0;
             }
-            // draw this room's hidden transition functions from Dirichlet(ALPHA)
+            // draw this room's hidden transition functions from the Dirichlet prior
             sampleTrueT();
             // allow sampling again in this new room
             sampling_ended = false;
         },
         on_finish: function (data) {
-            // log this room's (hidden) generative transition functions for analysis
+            // log this room's (hidden) generative transition functions for analysis,
+            // and which context each was drawn from (null unless CONTEXTUAL)
             data.true_T = JSON.parse(JSON.stringify(TRUE_T));
+            data.button_ctx = JSON.parse(JSON.stringify(BUTTON_CTX));
         }
     };
 }
@@ -145,6 +147,9 @@ function make_room_sampling(room_num, opts) {
         row.session_id = session_id;
         row.belief_display = BELIEF_DISPLAY;
         row.alpha = ALPHA;
+        row.contextual = CONTEXTUAL;
+        row.alpha_ctx1 = ALPHA_CTX1;
+        row.alpha_ctx2 = ALPHA_CTX2;
         row.button_upper = BUTTON_ORDER[0];
         row.button_lower = BUTTON_ORDER[1];
         row.trial_type = "html-keyboard-response";
@@ -317,6 +322,8 @@ function make_gold_trial(room_num) {
                     rt: rt,
                     counts: countsSnapshot(),                 // final transition counts for the room
                     posterior_means: posteriorSnapshot(),     // belief the choice was based on
+                    button_ctx: JSON.parse(JSON.stringify(BUTTON_CTX)), // prior each button came from
+                    chosen_button_ctx: BUTTON_CTX[button],
                     chosen_gold_prob: chosen_gold_prob,       // true P(chosen button -> coin)
                     best_gold_prob: best_gold_prob,           // best true P(any button -> coin)
                     success: success,

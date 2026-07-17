@@ -123,9 +123,18 @@ function sampleDirichlet(alpha, k) {
 }
 
 // Draw a fresh hidden transition distribution for every button and store in TRUE_T.
+// Under CONTEXTUAL each button's prior is chosen by an independent fair coin flip
+// between ALPHA_CTX1 and ALPHA_CTX2; the draw is recorded in BUTTON_CTX.
 function sampleTrueT() {
     for (const button of BUTTONS) {
-        const probs = sampleDirichlet(ALPHA, K_OUTCOMES);
+        let alpha = ALPHA;
+        if (CONTEXTUAL) {
+            BUTTON_CTX[button] = Math.random() < 0.5 ? 1 : 2;
+            alpha = BUTTON_CTX[button] === 1 ? ALPHA_CTX1 : ALPHA_CTX2;
+        } else {
+            BUTTON_CTX[button] = null;
+        }
+        const probs = sampleDirichlet(alpha, K_OUTCOMES);
         TRUE_T[button] = {};
         OUTCOMES.forEach((outcome, i) => {
             TRUE_T[button][outcome] = probs[i];
