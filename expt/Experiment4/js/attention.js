@@ -12,7 +12,7 @@
 //----------------------------------------------------------------------------//
 const ATTENTION_ROOMS_PER_BLOCK = 4;   // grids per attention-check block
 const ATTENTION_MIN_CHECKS = ATTENTION_ROOMS_PER_BLOCK * 3;        // start evaluating once this many are done
-const ATTENTION_PASS_FRACTION = 0.6;   // exclude below this running accuracy
+const ATTENTION_PASS_FRACTION = 0.5;   // exclude below this running accuracy
 
 // running tallies (read by index.html to gate the rest of the experiment)
 let attention_total = 0;

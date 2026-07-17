@@ -435,8 +435,8 @@ function make_instructions_timeline() {
          <p style="${P}">In the next phase you will explore a series of rooms, one at a time.</p>
          <p style="${P}">In each room you have <strong>${N_BUTTONS} coloured buttons</strong> to press, and there are
          <strong>${K_OUTCOMES} locations</strong> you can reach from the central location - i.e. up, down, left or right.</p>
-         <p style="${P}">Each button takes you to one of these ${K_OUTCOMES} locations, but
-         <strong>you don't know which location each button is most likely to lead to</strong>.</p>
+         <p style="${P}">Each time you press a button, it takes you to one of these ${K_OUTCOMES} locations, but
+         <strong>you don't know which location(s) each button is likely to lead to</strong>.</p>
          <p style="${P}">NOTE: the colour of the buttons has <strong>no relation</strong> to the locations they reach.</p>
          ${roomButtonsStaticHTML()}`,
 
