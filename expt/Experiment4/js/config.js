@@ -1,4 +1,14 @@
 //----------------------------------------------------------------------------//
+// DEBUGGING: jump straight to the rooms -- skips the instructions, the
+// comprehension check, and the attention-check intro/practice. The in-task
+// attention checks still run, as does the consent form and the fullscreen
+// prompt. The comprehension gate is treated as passed (everything downstream is
+// conditional on it), and the Prolific redirect at the end is suppressed.
+// MUST be false for any real run: it bypasses the comprehension gate.
+//----------------------------------------------------------------------------//
+const DEBUGGING = false;
+
+//----------------------------------------------------------------------------//
 // Experiment parameters
 //----------------------------------------------------------------------------//
 // N=2 buttons, K=4 outcomes (cardinal directions), T=6 trials, Dirichlet alpha=1

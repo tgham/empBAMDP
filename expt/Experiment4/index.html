@@ -38,9 +38,11 @@
         var study_id = urlParams.get("STUDY_ID") || "";
         var session_id = urlParams.get("SESSION_ID") || "";
 
-        // comprehension gate bookkeeping (read by the loops/conditionals below)
+        // comprehension gate bookkeeping (read by the loops/conditionals below).
+        // Under DEBUGGING the quiz never runs, so the gate starts open -- otherwise
+        // the task itself (conditional on quiz_passed) would be skipped too.
         var review_instructions = false;
-        var quiz_passed = false;
+        var quiz_passed = DEBUGGING;
         var quiz_attempts = 0;
 
         var jsPsych = initJsPsych({
@@ -53,8 +55,9 @@
 
                 // redirect to Prolific (links are set in config.js; blank = no redirect).
                 // Passing the comprehension check AND the attention checks -> complete.
+                // DEBUGGING stays put, so a dev run never hits a Prolific completion URL.
                 var link = (quiz_passed && !attention_failed) ? REDIRECT_COMPLETE : REDIRECT_FAIL;
-                if (link) {
+                if (link && !DEBUGGING) {
                     setTimeout(function () { window.location.replace(link); }, 500);
                 }
             }
@@ -141,31 +144,34 @@
         });
 
         //------------------------------------//
-        // Instructions + comprehension gate.
-        // Inner: instructions (with their own "review again" loop) -> quiz -> result.
-        // Outer loop repeats this whole block while the participant hasn't passed
-        // and hasn't used up both attempts. After it ends they've either passed or
-        // failed twice.
+        // Instructions + comprehension gate, then the attention-check explanation
+        // + practice. All three are skipped wholesale under DEBUGGING, which drops
+        // the participant straight into the first room.
         //------------------------------------//
-        var instructions_block = {
-            timeline: make_instructions_timeline(),
-            loop_function: function () { return review_instructions; }
-        };
-        timeline.push({
-            timeline: [instructions_block, make_comprehension_quiz(), make_quiz_result_trial()],
-            loop_function: function () {
-                return !quiz_passed && quiz_attempts < QUIZ_MAX_ATTEMPTS;
-            }
-        });
+        if (!DEBUGGING) {
+            // Instructions + comprehension gate.
+            // Inner: instructions (with their own "review again" loop) -> quiz -> result.
+            // Outer loop repeats this whole block while the participant hasn't passed
+            // and hasn't used up both attempts. After it ends they've either passed or
+            // failed twice.
+            var instructions_block = {
+                timeline: make_instructions_timeline(),
+                loop_function: function () { return review_instructions; }
+            };
+            timeline.push({
+                timeline: [instructions_block, make_comprehension_quiz(), make_quiz_result_trial()],
+                loop_function: function () {
+                    return !quiz_passed && quiz_attempts < QUIZ_MAX_ATTEMPTS;
+                }
+            });
 
-        //------------------------------------//
-        // Attention-check explanation + practice (with feedback), only if the
-        // comprehension check was passed. The practice does not count for exclusion.
-        //------------------------------------//
-        timeline.push({
-            timeline: make_attention_intro_and_practice(),
-            conditional_function: function () { return quiz_passed; }
-        });
+            // Attention-check explanation + practice (with feedback), only if the
+            // comprehension check was passed. The practice does not count for exclusion.
+            timeline.push({
+                timeline: make_attention_intro_and_practice(),
+                conditional_function: function () { return quiz_passed; }
+            });
+        }
 
         //------------------------------------//
         // The experiment itself: only runs if the comprehension check was passed.
