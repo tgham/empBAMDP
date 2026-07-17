@@ -144,8 +144,8 @@ function make_quiz_result_trial() {
             }
             return `<h2>Thanks for taking part</h2>
                     <p style="max-width:640px; margin:14px auto;">${score}</p>
-                    <p style="max-width:640px; margin:14px auto;">Unfortunately that isn't enough to continue, so the
-                    experiment ends here.</p>`;
+                    <p style="max-width:640px; margin:14px auto;">Unfortunately, you didn't score enough on the comprehension check to continue. 
+                    <p style="max-width:640px; margin:14px auto;">You will now be redirected to Prolific, where you will be reimbused for your time.</p>`;
         }
     };
 }
