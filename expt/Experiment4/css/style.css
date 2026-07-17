@@ -165,7 +165,14 @@
 .button-stack {
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
     gap: 48px;
+}
+/* the lower button is offset to the right so the pair sits on a 45-degree
+   diagonal rather than a vertical stack (which could imply a spatial colour
+   mapping). Offset = centre-to-centre vertical distance = button (140) + gap (48). */
+.cbtn-lower {
+    margin-left: 188px;
 }
 .cbtn {
     width: 140px;

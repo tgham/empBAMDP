@@ -5,19 +5,24 @@
 const N_BUTTONS = 2;
 const K_OUTCOMES = 4;
 const N_TRIALS = 8;   // sampling trials per room
-const N_ROOMS = 5;    // number of rooms (fresh transition functions each)
-const ALPHA = 0.1;
+const N_ROOMS = 6;    // number of rooms (fresh transition functions each)
+const ALPHA = 0.25;
+const ALPHA_CTX1 = 0.25; // context 1 prior
+const ALPHA_CTX2 = 0.25; // context 2 prior
 
 // After the sampling trials, a gold coin appears at a random reachable cell and
 // the participant picks a button to try to reach it.
 //   true  -> reveal the outcome: the agent moves per the transition function and
 //            we show whether the gold was obtained.
 //   false -> do not reveal the outcome; move straight on to the next room.
-const SHOW_GOLD_OUTCOME = true;
+// In the real experiment we do NOT reveal it (participants never learn whether
+// they reached the coin). The instruction gold DEMOS reveal it regardless, for
+// teaching, and explain that the real rooms keep it hidden.
+const SHOW_GOLD_OUTCOME = false;
 
 // Prolific redirect links (fill in later). If left blank, no redirect happens.
-const REDIRECT_COMPLETE = ""; // shown after finishing the experiment
-const REDIRECT_FAIL = "";     // shown after failing the comprehension check twice
+const REDIRECT_COMPLETE = "https://app.prolific.com/submissions/complete?cc=COKTR2G5"; // shown after finishing the experiment
+const REDIRECT_FAIL = "https://app.prolific.com/submissions/complete?cc=C908OCW9";     // shown after failing the comprehension check twice
 
 //----------------------------------------------------------------------------//
 // Grid geometry
@@ -35,6 +40,12 @@ const OUTCOME_CELL = { up: 1, right: 5, down: 7, left: 3 };
 //----------------------------------------------------------------------------//
 const BUTTONS = ["red", "blue"];
 const BTN_COLOR = { red: "220,40,40", blue: "40,90,220" }; // rgb triples for rgba() shading
+
+// The two buttons are shown one above the other, but offset diagonally, and the
+// colour->position mapping is randomised once per participant. This prevents a
+// spatial bias (e.g. reading "blue = up, red = down" from a fixed vertical stack).
+// BUTTON_ORDER = [upper colour, lower colour]; the lower button sits to the right.
+const BUTTON_ORDER = Math.random() < 0.5 ? ["blue", "red"] : ["red", "blue"];
 
 //----------------------------------------------------------------------------//
 // Belief display mode:

@@ -16,6 +16,12 @@
         <script src="js/trials.js"></script>
         <script src="js/instructions.js"></script>
         <script src="js/comprehension.js"></script>
+        <script src="js/attention.js"></script>
+        <!-- end-of-experiment questionnaires -->
+        <script src="jsQ/plugin-survey-template.js"></script>
+        <script src="jsQ/plugin-survey-feedback.js"></script>
+        <script src="jsQ/ius12.js"></script>
+        <script src="jsQ/loc74.js"></script>
         <script src="backend_integration.js" ></script>
         <!-- css -->
         <link href="jspsych/jspsych.css" rel="stylesheet" type="text/css" />
@@ -45,8 +51,9 @@
                 var ppt_data = jsPsych.data.get().json();
                 send_complete(id, ppt_data);
 
-                // redirect to Prolific (links are set in config.js; blank = no redirect)
-                var link = quiz_passed ? REDIRECT_COMPLETE : REDIRECT_FAIL;
+                // redirect to Prolific (links are set in config.js; blank = no redirect).
+                // Passing the comprehension check AND the attention checks -> complete.
+                var link = (quiz_passed && !attention_failed) ? REDIRECT_COMPLETE : REDIRECT_FAIL;
                 if (link) {
                     setTimeout(function () { window.location.replace(link); }, 500);
                 }
@@ -59,7 +66,9 @@
             study_id: study_id,
             session_id: session_id,
             belief_display: BELIEF_DISPLAY,
-            alpha: ALPHA
+            alpha: ALPHA,
+            button_upper: BUTTON_ORDER[0],
+            button_lower: BUTTON_ORDER[1]
         });
 
         var timeline = [];
@@ -147,32 +156,108 @@
         });
 
         //------------------------------------//
+        // Attention-check explanation + practice (with feedback), only if the
+        // comprehension check was passed. The practice does not count for exclusion.
+        //------------------------------------//
+        timeline.push({
+            timeline: make_attention_intro_and_practice(),
+            conditional_function: function () { return quiz_passed; }
+        });
+
+        //------------------------------------//
         // The experiment itself: only runs if the comprehension check was passed.
         // R rooms; each = intro (reset beliefs + draw fresh transitions) ->
         // N_TRIALS sampling trials -> a gold-collection trial.
         //------------------------------------//
+        // every node here is skipped once the attention criterion has been failed,
+        // so the task halts and falls through to the exclusion screen below.
         var experiment_timeline = [];
         for (let r = 1; r <= N_ROOMS; r++) {
-            experiment_timeline.push(make_room_intro(r));
-            for (let t = 1; t <= N_TRIALS; t++) {
-                // each sampling trial is skipped once sampling has been ended early
+            experiment_timeline.push({
+                timeline: [make_room_intro(r)],
+                conditional_function: function () { return !attention_failed; }
+            });
+            // whole sampling phase for the room is a single trial (handles the
+            // per-press loop and the early-stop tick internally -> no flicker)
+            experiment_timeline.push({
+                timeline: [make_room_sampling(r)],
+                conditional_function: function () { return !attention_failed; }
+            });
+            experiment_timeline.push({
+                timeline: [make_gold_trial(r)],
+                conditional_function: function () { return !attention_failed; }
+            });
+            // attention-check block after every 2 rooms (not after the final room)
+            if (r % 2 === 0 && r < N_ROOMS) {
                 experiment_timeline.push({
-                    timeline: [make_trial(r, t)],
-                    conditional_function: function () { return !sampling_ended; }
+                    timeline: make_attention_block(),
+                    conditional_function: function () { return !attention_failed; }
                 });
             }
-            experiment_timeline.push(make_gold_trial(r));
         }
+        // reached the end of the task: congratulate, then run the questionnaires
         experiment_timeline.push({
-            type: jsPsychHtmlKeyboardResponse,
-            stimulus: function () {
-                var msg = SHOW_GOLD_OUTCOME
-                    ? `<h3>You collected ${collected_gold} gold across ${N_ROOMS} rooms.</h3>`
-                    : ``;
-                return `<div style="text-align:center"><h2>Done!</h2>${msg}</div>`;
-            },
-            choices: "NO_KEYS",
-            trial_duration: 2500
+            timeline: [{
+                type: jsPsychHtmlButtonResponse,
+                choices: ["Continue"],
+                stimulus: `<h2>Congratulations</h2>
+                           <p style="max-width:640px; margin:14px auto;">You made it to the
+                           end of the experiment.</p>
+                           <p style="max-width:640px; margin:14px auto;">Before we calculate your bonus and return you
+                           to Prolific, we have a few short questions that we'd like to ask you.</p>`,
+                data: { task: "end_congrats" }
+            }],
+            conditional_function: function () { return !attention_failed; }
+        });
+        // end-of-experiment questionnaires (only for participants who completed,
+        // i.e. passed comprehension and were not excluded by the attention checks)
+        var expfeedback = {
+            type: jsPsychSurveyFeedback,
+            mental_demand: false,
+            task_instructions: false,
+            performance: false,
+            effort: false,
+            frustration: false,
+            strategy: true,
+            feedback: true,
+            data: { task: "expfeedback" }
+        };
+        experiment_timeline.push({
+            timeline: [ius12, loc74_1, loc74_2, expfeedback],
+            conditional_function: function () { return !attention_failed; }
+        });
+        // bonus: fraction of coins collected x GBP 2 (only if not excluded)
+        experiment_timeline.push({
+            timeline: [{
+                type: jsPsychHtmlButtonResponse,
+                choices: ["Finish"],
+                stimulus: function () {
+                    var frac = N_ROOMS > 0 ? collected_gold / N_ROOMS : 0;
+                    var bonus = (frac * 2).toFixed(2);
+                    return `<h2>Thank you!</h2>
+                            <p style="max-width:640px; margin:14px auto;">You collected
+                            <strong>${collected_gold}</strong> out of <strong>${N_ROOMS}</strong> gold coins.</p>
+                            <p style="max-width:640px; margin:14px auto;">Your bonus is <strong>&pound;${bonus}</strong>.</p>
+                            <p style="max-width:640px; margin:14px auto;">Click below to return to Prolific.</p>
+                            <p style="max-width:640px; margin:14px auto;">After clicking DO NOT CLOSE YOUR BROWSER until you have returned to Prolific. This may take a few seconds...`;
+                },
+                data: { task: "bonus" },
+                on_start: function () {
+                    var frac = N_ROOMS > 0 ? collected_gold / N_ROOMS : 0;
+                    // attach to every row so the backend/CSV captures the payout
+                    jsPsych.data.addProperties({
+                        coins_collected: collected_gold,
+                        n_rooms: N_ROOMS,
+                        bonus_gbp: (frac * 2).toFixed(2)
+                    });
+                }
+            }],
+            conditional_function: function () { return !attention_failed; }
+        });
+        // exclusion screen (only if the attention criterion was failed)
+        experiment_timeline.push({
+            timeline: [make_attention_excluded_trial()],
+            conditional_function: function () { return attention_failed; }
         });
         timeline.push({
             timeline: experiment_timeline,

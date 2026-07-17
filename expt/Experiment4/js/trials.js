@@ -1,21 +1,27 @@
 //----------------------------------------------------------------------------//
 // Shared building blocks
 //----------------------------------------------------------------------------//
-// The two circle buttons, vertically stacked to the right of the room.
+// The two circle buttons, to the right of the room. Stacked upper/lower but
+// offset diagonally, with the colour->position mapping randomised per participant
+// (BUTTON_ORDER) so position isn't associated with a colour.
 function buttonStackHTML() {
+    const upper = BUTTON_ORDER[0], lower = BUTTON_ORDER[1];
     return `
         <div class="button-stack">
-            <div class="cbtn blue" id="btn-blue"></div>
-            <div class="cbtn red" id="btn-red"></div>
+            <div class="cbtn ${upper}" id="btn-${upper}"></div>
+            <div class="cbtn ${lower} cbtn-lower" id="btn-${lower}"></div>
         </div>`;
 }
 
-// The "done sampling" tick button, shown to the left of the room.
-function checkButtonHTML() {
+// The "done sampling" tick button, shown to the left of the room. With
+// { placeholder: true } it renders the same element but invisible (keeping its
+// layout footprint) so grids without a tick don't shift horizontally.
+function checkButtonHTML(opts) {
+    const placeholder = opts && opts.placeholder;
     return `
-        <div class="check-stack">
-            <div class="checkbtn" id="btn-check"><img src="img/Check.png" alt="Done sampling"></div>
-            <div class="check-label">Done<br>sampling</div>
+        <div class="check-stack${placeholder ? " hidden" : ""}"${placeholder ? " aria-hidden=\"true\"" : ""}>
+            <div class="checkbtn" id="btn-check"><img src="img/Check.png" alt="Done testing"></div>
+            <div class="check-label">Done<br>testing</div>
         </div>`;
 }
 
@@ -116,16 +122,34 @@ function make_room_intro(room_num) {
 }
 
 //----------------------------------------------------------------------------//
-// One sampling trial: click a circle, the agent moves to the sampled outcome,
-// and the belief display re-shades once the agent has arrived.
+// One room's whole sampling phase, as a SINGLE jsPsych trial. Keeping every
+// press inside one trial means the grid DOM is built once and never torn down
+// between presses, so there is no inter-trial flicker. Each press is still
+// recorded as its own data row (task "sample"/"practice_sample"), pushed
+// directly onto the data collection so the trial-by-trial data shape is
+// unchanged from the old one-trial-per-press version.
+//
+// The tick ("done testing") ends the phase early. The trial ends when the
+// participant has used all N_TRIALS presses or clicks the tick.
 //----------------------------------------------------------------------------//
-function make_trial(room_num, trial_num, opts) {
+function make_room_sampling(room_num, opts) {
     opts = opts || {};
     const practice = opts.practice === true;
     const taskName = practice ? "practice_sample" : "sample";
-    // const hint = practice
-    //     ? `<h4 style="color:#c99700; font-weight:normal; margin-top:6px;">Practice: test the buttons as you like, then click the tick when you feel you've learned enough.</h4>`
-    //     : ``;
+
+    // Manually-pushed rows don't get the session-level fields that jsPsych
+    // auto-applies to rows it writes itself, so stamp them on here to match.
+    function stampSession(row) {
+        row.subject_id = subject_id;
+        row.study_id = study_id;
+        row.session_id = session_id;
+        row.belief_display = BELIEF_DISPLAY;
+        row.alpha = ALPHA;
+        row.button_upper = BUTTON_ORDER[0];
+        row.button_lower = BUTTON_ORDER[1];
+        row.trial_type = "html-keyboard-response";
+        return row;
+    }
 
     return {
         type: jsPsychHtmlKeyboardResponse,
@@ -138,23 +162,46 @@ function make_trial(room_num, trial_num, opts) {
                 ${beliefPanelHTML()}
             </div>
             <div class="prompt">
-                <h4 class="trial-counter">Trial ${trial_num} of ${N_TRIALS}</h4>
-                <h3>Click a coloured button to move, or the tick to finish sampling.</h3>
+                <h4 class="trial-counter">Trial 1 of ${N_TRIALS}</h4>
+                <h3>Click a button to move, or the tick to finish testing.</h3>
             </div>`,
-        data: {
-            task: taskName,
-            room_num: room_num,
-            trial_num: trial_num
-        },
+        data: { task: "room_sampling", room_num: room_num, practice: practice },
         on_start: function () {
-            // reset agent to the central cell at the start of each trial
+            // agent starts in the central cell
             agent_topPos = topPos0;
             agent_leftPos = leftPos0;
         },
         on_load: function () {
             refreshBeliefs();
 
-            wireButtons(function (button, rt) {
+            let trial_num = 1;   // 1..N_TRIALS; the press currently being made
+            let ended = false;
+
+            function finishRoom() {
+                ended = true;
+                jsPsych.finishTrial({
+                    task: "room_sampling",
+                    room_num: room_num,
+                    practice: practice,
+                    n_presses: trial_num - 1
+                });
+            }
+
+            // Re-render the controls (fresh, so no stale click handlers accumulate)
+            // and update the trial counter, then re-arm the buttons for the next
+            // press. The agent grid + counters layer are left in place (persist).
+            function armPress() {
+                const row = document.querySelector(".task-row");
+                const bs = row.querySelector(".button-stack");
+                if (bs) bs.outerHTML = buttonStackHTML();
+                const cs = row.querySelector(".check-stack");
+                if (cs) cs.outerHTML = checkButtonHTML();
+                const counter = document.querySelector(".trial-counter");
+                if (counter) counter.textContent = `Trial ${trial_num} of ${N_TRIALS}`;
+                wireButtons(onPress, onCheck);
+            }
+
+            function onPress(button, rt) {
                 // belief state the choice was based on (before this observation)
                 const counts_pre = countsSnapshot();
                 const posteriors_pre = posteriorSnapshot();
@@ -162,37 +209,60 @@ function make_trial(room_num, trial_num, opts) {
                 const outcome = sampleCategorical(TRUE_T[button]);
                 counts[button][outcome] += 1;
 
-                // the agent moves first; the posterior/colours only update once it
-                // has actually reached the outcome (after the move animation).
+                // the agent moves first; beliefs update only once it has arrived
                 moveAgent(outcome);
 
-                const trial_data = {
+                jsPsych.data.get().push(stampSession({
+                    task: taskName,
+                    room_num: room_num,
+                    trial_num: trial_num,
                     chosen_button: button,
                     outcome: outcome,
                     rt: rt,
                     ended_early: false,
-                    counts: counts_pre,           // transition counts at decision time
+                    counts: counts_pre,            // transition counts at decision time
                     posterior_means: posteriors_pre,
-                    counts_post: countsSnapshot() // counts after this observation
-                };
+                    counts_post: countsSnapshot()  // counts after this observation
+                }));
 
                 setTimeout(function () {
-                    // agent has arrived -> reveal the updated belief; in counters
-                    // mode, pop in the token just placed for this observation
+                    // arrived -> reveal the updated belief; pop in the new token
                     refreshBeliefs({ button: button, outcome: outcome });
-                    setTimeout(() => jsPsych.finishTrial(trial_data), 900);
+                    setTimeout(function () {
+                        // slide the agent back to the centre (animated) for the next press
+                        const agentEl = document.getElementById("agent");
+                        agent_topPos = topPos0;
+                        agent_leftPos = leftPos0;
+                        agentEl.style.top = topPos0 + "%";
+                        agentEl.style.left = leftPos0 + "%";
+                        setTimeout(function () {
+                            if (ended) return;
+                            trial_num += 1;
+                            if (trial_num <= N_TRIALS) armPress();
+                            else finishRoom();
+                        }, MOVE_MS + 150);
+                    }, 300);
                 }, MOVE_MS);
-            }, function (rt) {
-                // tick button: end sampling early and skip to the coin phase
-                sampling_ended = true;
-                jsPsych.finishTrial({
+            }
+
+            function onCheck(rt) {
+                // tick button: end sampling early and move on to the coin phase
+                if (ended) return;
+                sampling_ended = true; // retained for any external readers
+                jsPsych.data.get().push(stampSession({
                     task: taskName,
+                    room_num: room_num,
+                    trial_num: trial_num,
                     ended_early: true,
                     rt: rt,
                     counts: countsSnapshot(),
                     posterior_means: posteriorSnapshot()
-                });
-            });
+                }));
+                finishRoom();
+            }
+
+            // arm the first press (controls are already fresh from the stimulus)
+            wireButtons(onPress, onCheck);
         }
     };
 }
@@ -209,6 +279,7 @@ function make_gold_trial(room_num) {
         choices: "NO_KEYS",
         stimulus: `
             <div class="task-row">
+                ${checkButtonHTML({ placeholder: true })}
                 ${initialize_agent_gold()}
                 ${buttonStackHTML()}
                 ${beliefPanelHTML()}
@@ -230,31 +301,45 @@ function make_gold_trial(room_num) {
             refreshBeliefs();
 
             wireButtons(function (button, rt) {
+                // "correct" = chose the button with the objectively highest true
+                // probability of reaching the coin (no sampling). Tally it for the
+                // bonus. Ties (equal best true prob) count as correct for either.
+                const chosen_gold_prob = TRUE_T[button][goldOutcome];
+                const best_gold_prob = Math.max.apply(
+                    null, BUTTONS.map(function (b) { return TRUE_T[b][goldOutcome]; })
+                );
+                const success = chosen_gold_prob === best_gold_prob;
+                if (success) collected_gold += 1;
+
                 const trial_data = {
                     chosen_button: button,
                     gold_outcome: goldOutcome,
                     rt: rt,
                     counts: countsSnapshot(),                 // final transition counts for the room
-                    posterior_means: posteriorSnapshot()      // belief the choice was based on
+                    posterior_means: posteriorSnapshot(),     // belief the choice was based on
+                    chosen_gold_prob: chosen_gold_prob,       // true P(chosen button -> coin)
+                    best_gold_prob: best_gold_prob,           // best true P(any button -> coin)
+                    success: success,
+                    collected_gold: collected_gold,
+                    outcome_shown: SHOW_GOLD_OUTCOME
                 };
 
                 if (!SHOW_GOLD_OUTCOME) {
-                    // do not reveal the outcome; move straight on to the next room
-                    trial_data.outcome_shown = false;
-                    setTimeout(() => jsPsych.finishTrial(trial_data), 400);
+                    // do not reveal (agent stays put); on to the next room
+                    var ppt_data_hidden = jsPsych.data.get().json();
+                    send_incomplete(id, ppt_data_hidden);
+                    setTimeout(() => jsPsych.finishTrial(trial_data), 1000);
                     return;
                 }
 
-                // reveal: the agent moves according to the transition function
-                const outcome = sampleCategorical(TRUE_T[button]);
-                const success = outcome === goldOutcome;
-                trial_data.outcome_shown = true;
-                trial_data.outcome = outcome;
-                trial_data.success = success;
-                if (success) collected_gold += 1;
-                trial_data.collected_gold = collected_gold;
-
-                moveAgent(outcome);
+                // reveal (only if SHOW_GOLD_OUTCOME): move the agent to the coin on a
+                // correct choice, else to the chosen button's most likely location.
+                const revealOutcome = success
+                    ? goldOutcome
+                    : OUTCOMES.reduce(function (bestO, o) {
+                        return TRUE_T[button][o] > TRUE_T[button][bestO] ? o : bestO;
+                    }, OUTCOMES[0]);
+                moveAgent(revealOutcome);
 
                 setTimeout(function () {
                     // show whether the gold was obtained, once the agent has arrived
@@ -266,7 +351,6 @@ function make_gold_trial(room_num) {
                         fb.textContent = "Missed it...";
                         fb.style.color = "red";
                     }
-
 
                     // save data so far
                     var ppt_data = jsPsych.data.get().json();

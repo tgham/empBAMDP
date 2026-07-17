@@ -16,9 +16,9 @@ let agent_leftPos = leftPos0;
 function initialize_agent() {
     return `
     <div class="container">
-        <img src="img/BaseAction_4k.png" alt="Base Action Image" class="base-image">
+        <img src="img/BaseAction_4k.png" alt="Base Action Image" class="base-image" decoding="sync" fetchpriority="high">
         <div id="belief-overlay" class="belief-overlay"></div>
-        <img id="agent" src="img/Agent.png" alt="Agent Image" class="agent-image">
+        <img id="agent" src="img/Agent.png" alt="Agent Image" class="agent-image" decoding="sync">
     </div>`;
 }
 
@@ -53,10 +53,10 @@ function moveAgent(outcome) {
 function initialize_agent_gold() {
     return `
     <div class="container">
-        <img src="img/BaseAction_4k.png" alt="Base Action Image" class="base-image">
+        <img src="img/BaseAction_4k.png" alt="Base Action Image" class="base-image" decoding="sync" fetchpriority="high">
         <div id="belief-overlay" class="belief-overlay"></div>
         <img id="gold" src="img/Goal.png" alt="Gold Coin" class="gold-image">
-        <img id="agent" src="img/Agent.png" alt="Agent Image" class="agent-image">
+        <img id="agent" src="img/Agent.png" alt="Agent Image" class="agent-image" decoding="sync">
     </div>`;
 }
 
@@ -320,9 +320,9 @@ function roomCountersStaticHTML(redCounts, blueCounts) {
     }
     return `
         <div class="container">
-            <img src="img/BaseAction_4k.png" alt="Base" class="base-image">
+            <img src="img/BaseAction_4k.png" alt="Base" class="base-image" decoding="sync" fetchpriority="high">
             <div class="belief-overlay counter-layer">${cells}</div>
-            <img src="img/Agent.png" alt="Agent" class="agent-image">
+            <img src="img/Agent.png" alt="Agent" class="agent-image" decoding="sync">
         </div>`;
 }
 
