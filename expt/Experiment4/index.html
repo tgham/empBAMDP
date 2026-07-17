@@ -209,11 +209,13 @@
             timeline: [{
                 type: jsPsychHtmlButtonResponse,
                 choices: ["Continue"],
-                stimulus: `<h2>Congratulations</h2>
-                           <p style="max-width:640px; margin:14px auto;">You made it to the
-                           end of the experiment.</p>
-                           <p style="max-width:640px; margin:14px auto;">Before we calculate your bonus and return you
-                           to Prolific, we have a few short questions that we'd like to ask you.</p>`,
+                stimulus: screenHTML({
+                    title: `Congratulations`,
+                    lines: [
+                        `You made it to the end of the experiment.`,
+                        `Before we calculate your bonus and return you to Prolific, we have a few short questions that we'd like to ask you.`
+                    ]
+                }),
                 data: { task: "end_congrats" }
             }],
             conditional_function: function () { return !attention_failed; }
@@ -243,12 +245,15 @@
                 stimulus: function () {
                     var frac = N_ROOMS > 0 ? collected_gold / N_ROOMS : 0;
                     var bonus = (frac * 2).toFixed(2);
-                    return `<h2>Thank you!</h2>
-                            <p style="max-width:640px; margin:14px auto;">You collected
-                            <strong>${collected_gold}</strong> out of <strong>${N_ROOMS}</strong> gold coins.</p>
-                            <p style="max-width:640px; margin:14px auto;">Your bonus is <strong>&pound;${bonus}</strong>.</p>
-                            <p style="max-width:640px; margin:14px auto;">Click below to return to Prolific.</p>
-                            <p style="max-width:640px; margin:14px auto;">After clicking DO NOT CLOSE YOUR BROWSER until you have returned to Prolific. This may take a few seconds...`;
+                    return screenHTML({
+                        title: `Thank you!`,
+                        lines: [
+                            `You collected <strong>${collected_gold}</strong> out of <strong>${N_ROOMS}</strong> gold coins.`,
+                            `Your bonus is <strong>&pound;${bonus}</strong>.`,
+                            `Click below to return to Prolific.`,
+                            `After clicking DO NOT CLOSE YOUR BROWSER until you have returned to Prolific. This may take a few seconds...`
+                        ]
+                    });
                 },
                 data: { task: "bonus" },
                 on_start: function () {
@@ -280,9 +285,13 @@
             timeline: [{
                 type: jsPsychHtmlButtonResponse,
                 choices: ["Finish"],
-                stimulus: `<h2>Thank you for your time</h2>
-                           <p style="max-width:640px; margin:14px auto;">The experiment has ended. Click below to
-                           return to Prolific.</p>`,
+                stimulus: screenHTML({
+                    title: `Thank you for your time`,
+                    lines: [
+                        `The experiment has ended.`,
+                        `Click below to return to Prolific.`
+                    ]
+                }),
                 data: { task: "failed_end" }
             }],
             conditional_function: function () { return !quiz_passed; }

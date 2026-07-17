@@ -45,6 +45,11 @@ function beliefPanelHTML() {
         </div>`;
 }
 
+// How many of the room's presses are still to come, e.g. "8 choices remaining".
+function choicesRemainingText(remaining) {
+    return `${remaining} choice${remaining === 1 ? "" : "s"} remaining`;
+}
+
 // Redraw the belief display (and the sample-counter titles) from current counts.
 function refreshBeliefs(highlight) {
     if (BELIEF_DISPLAY === "counters") {
@@ -99,11 +104,13 @@ function wireButtons(onPress, onCheck) {
 function make_room_intro(room_num) {
     return {
         type: jsPsychHtmlKeyboardResponse,
-        stimulus: `<div style="text-align:center">
-            <h2>Room ${room_num} of ${N_ROOMS}</h2>
-            <h3>Sample the two buttons over ${N_TRIALS} trials to learn where each one takes you.</h3>
-            <h3>Press any key to begin.</h3>
-        </div>`,
+        stimulus: screenHTML({
+            title: `Room ${room_num} of ${N_ROOMS}`,
+            lines: [
+                `Test out the two buttons over up to ${N_TRIALS} choices to learn where each one takes you.`,
+                `Press any key to begin.`
+            ]
+        }),
         data: { task: "room_intro", room_num: room_num },
         on_start: function () {
             for (const b of BUTTONS) {
@@ -159,17 +166,19 @@ function make_room_sampling(room_num, opts) {
     return {
         type: jsPsychHtmlKeyboardResponse,
         choices: "NO_KEYS",
-        stimulus: `
-            <div class="task-row">
-                ${checkButtonHTML()}
-                ${initialize_agent()}
-                ${buttonStackHTML()}
-                ${beliefPanelHTML()}
-            </div>
-            <div class="prompt">
-                <h4 class="trial-counter">Trial 1 of ${N_TRIALS}</h4>
-                <h3>Click a button to move, or the tick to finish testing.</h3>
-            </div>`,
+        stimulus: screenHTML({
+            lines: [
+                `<span class="trial-counter">${choicesRemainingText(N_TRIALS)}</span>`,
+                `Click a button to move, or the tick to finish testing.`
+            ],
+            stage: `
+                <div class="task-row">
+                    ${checkButtonHTML()}
+                    ${initialize_agent()}
+                    ${buttonStackHTML()}
+                    ${beliefPanelHTML()}
+                </div>`
+        }),
         data: { task: "room_sampling", room_num: room_num, practice: practice },
         on_start: function () {
             // agent starts in the central cell
@@ -202,7 +211,7 @@ function make_room_sampling(room_num, opts) {
                 const cs = row.querySelector(".check-stack");
                 if (cs) cs.outerHTML = checkButtonHTML();
                 const counter = document.querySelector(".trial-counter");
-                if (counter) counter.textContent = `Trial ${trial_num} of ${N_TRIALS}`;
+                if (counter) counter.textContent = choicesRemainingText(N_TRIALS - trial_num + 1);
                 wireButtons(onPress, onCheck);
             }
 
@@ -282,18 +291,19 @@ function make_gold_trial(room_num) {
     return {
         type: jsPsychHtmlKeyboardResponse,
         choices: "NO_KEYS",
-        stimulus: `
-            <div class="task-row">
-                ${checkButtonHTML({ placeholder: true })}
-                ${initialize_agent_gold()}
-                ${buttonStackHTML()}
-                ${beliefPanelHTML()}
-            </div>
-            <div class="prompt">
-                <h4 class="trial-counter">Gold time!</h4>
-                <h3>A gold coin appeared. Click the button most likely to reach it.</h3>
-                <h2 id="gold-feedback"></h2>
-            </div>`,
+        stimulus: screenHTML({
+            lines: [
+                `<span class="trial-counter">Gold time!</span>`,
+                `A gold coin appeared. Click the button most likely to reach it.`
+            ],
+            stage: `
+                <div class="task-row">
+                    ${checkButtonHTML({ placeholder: true })}
+                    ${initialize_agent_gold()}
+                    ${buttonStackHTML()}
+                    ${beliefPanelHTML()}
+                </div>`
+        }),
         data: { task: "gold", room_num: room_num },
         on_start: function () {
             agent_topPos = topPos0;
@@ -349,15 +359,9 @@ function make_gold_trial(room_num) {
                 moveAgent(revealOutcome);
 
                 setTimeout(function () {
-                    // show whether the gold was obtained, once the agent has arrived
-                    const fb = document.getElementById("gold-feedback");
-                    if (success) {
-                        fb.textContent = "You got the gold!";
-                        fb.style.color = "green";
-                    } else {
-                        fb.textContent = "Missed it...";
-                        fb.style.color = "red";
-                    }
+                    // once the agent has arrived, the result replaces the prompt above
+                    // the room (as in the coin demos)
+                    showScreenFeedback(success ? "You got the gold!" : "Missed it...", success);
 
                     // save data so far
                     var ppt_data = jsPsych.data.get().json();
