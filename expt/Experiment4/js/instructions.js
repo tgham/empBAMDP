@@ -1,7 +1,7 @@
 //----------------------------------------------------------------------------//
-// Instructions phase: slide-based text (jsPsychInstructions, next/prev) with two
+// Instructions phase: slide-based text (jsPsychInstructions, next/prev) with
 // interactive demo trials interleaved so participants practise clicking a button
-// and watch the heatmap update (and weaken when a different outcome is observed).
+// and watch a coloured token appear on the location the agent reached.
 //----------------------------------------------------------------------------//
 
 //----------------------------------------------------------------------------//
@@ -25,24 +25,13 @@ function postFromCounts(cntObj, outcome) {
 // the main room with the K reachable cells highlighted (no heatmaps)
 function reachableRoomStaticHTML() {
     let cells = "";
-    for (const outcome of OUTCOMES) {
-        cells += `<div class="reachable-cell" style="${cellPosStyle(OUTCOME_CELL[outcome], 0.08, 0.84)}"></div>`;
-    }
+    // for (const outcome of OUTCOMES) {
+    //     cells += `<div class="reachable-cell" style="${cellPosStyle(OUTCOME_CELL[outcome], 0.08, 0.84)}"></div>`;
+    // }
     return `
         <div class="container">
-            <img src="img/BaseAction.png" alt="Base" class="base-image">
+            <img src="img/BaseAction_4k.png" alt="Base" class="base-image">
             <div class="belief-overlay">${cells}</div>
-            <img src="img/Agent.png" alt="Agent" class="agent-image">
-        </div>`;
-}
-
-// the main room with a gold coin at one location (illustration)
-function goldRoomStaticHTML(outcome) {
-    const { top, left } = outcomePercent(outcome);
-    return `
-        <div class="container">
-            <img src="img/BaseAction.png" alt="Base" class="base-image">
-            <img src="img/Goal.png" alt="Gold" class="gold-image" style="top:${top}%; left:${left}%;">
             <img src="img/Agent.png" alt="Agent" class="agent-image">
         </div>`;
 }
@@ -78,8 +67,16 @@ function beliefBlockStaticHTML(button, label, cntObj) {
         </div>`;
 }
 
-// a full static illustration: room + buttons + two heatmaps, for given counts
+// a full static illustration: room + buttons + belief display, for given counts.
+// Adapts to BELIEF_DISPLAY (counters -> single grid of tokens; else two heatmaps).
 function exampleDisplayStaticHTML(redCounts, blueCounts) {
+    if (BELIEF_DISPLAY === "counters") {
+        return `
+            <div class="task-row" style="pointer-events:none;">
+                ${roomCountersStaticHTML(redCounts, blueCounts)}
+                ${buttonStackHTML()}
+            </div>`;
+    }
     return `
         <div class="task-row" style="pointer-events:none;">
             ${reachableRoomStaticHTML()}
@@ -104,15 +101,25 @@ function roomButtonsStaticHTML() {
 function plainRoomStaticHTML() {
     return `
         <div class="container">
-            <img src="img/BaseAction.png" alt="Base" class="base-image">
+            <img src="img/BaseAction_4k.png" alt="Base" class="base-image">
             <img src="img/Agent.png" alt="Agent" class="agent-image">
         </div>`;
 }
 
-// the usual task display (tick + room + buttons + heatmaps), illustrating early stop
+// the usual task display (tick + room + buttons + belief display), illustrating
+// early stop. Adapts to BELIEF_DISPLAY.
 function earlyStopStaticHTML() {
-    const blueC = { up: 2, right: 0, down: 0, left: 1 };
-    const redC = { up: 0, right: 2, down: 1, left: 0 };
+    // blank grid (no tokens) for the "Testing the buttons" slide
+    const blueC = { up: 0, right: 0, down: 0, left: 0 };
+    const redC = { up: 0, right: 0, down: 0, left: 0 };
+    if (BELIEF_DISPLAY === "counters") {
+        return `
+            <div class="task-row" style="pointer-events:none;">
+                ${checkButtonHTML()}
+                ${roomCountersStaticHTML(redC, blueC)}
+                ${buttonStackHTML()}
+            </div>`;
+    }
     return `
         <div class="task-row" style="pointer-events:none;">
             ${checkButtonHTML()}
@@ -136,59 +143,113 @@ function argmaxOutcome(button) {
     return best;
 }
 
+// the cardinal location with the most ("max") or fewest ("min") total tokens
+// across both buttons -- used to place the practice coins in a well- vs poorly-
+// sampled cell. Ties resolve to the first outcome in OUTCOMES order.
+function outcomeByTokenCount(which) {
+    let best = OUTCOMES[0];
+    let bestVal = null;
+    for (const outcome of OUTCOMES) {
+        const total = counts.red[outcome] + counts.blue[outcome];
+        if (bestVal === null ||
+            (which === "max" && total > bestVal) ||
+            (which === "min" && total < bestVal)) {
+            bestVal = total;
+            best = outcome;
+        }
+    }
+    return best;
+}
+
 //----------------------------------------------------------------------------//
-// Interactive demo trial: the instructed button is active, a fixed outcome is
-// forced (for teaching), and a Continue button appears once the belief updates.
+// Auto-play demo: the computer presses one button `cfg.outcomes.length` times,
+// showing the agent move to each (fixed) outcome and return to the centre. Used
+// to illustrate how reliable vs variable a button can be. A coloured token is
+// placed on each location the agent reaches, so the tally builds up as the demo
+// plays (the tally starts empty). The Next button appears after `cfg.revealAfter`
+// observations (default 5) so the participant may continue early while the rest
+// keep playing.
 //----------------------------------------------------------------------------//
-function make_demo_trial(cfg) {
+function make_auto_demo_trial(cfg) {
+    const revealAfter = cfg.revealAfter || 5;
     return {
         type: jsPsychHtmlKeyboardResponse,
         choices: "NO_KEYS",
         stimulus: `
+            ${cfg.title ? `<h2 style="margin-top:0;">${cfg.title}</h2>` : ``}
             <div class="task-row">
+                ${checkButtonHTML({ placeholder: true })}
                 ${initialize_agent()}
                 ${buttonStackHTML()}
                 ${beliefPanelHTML()}
             </div>
             <div class="prompt">
                 <div id="demo-instruction" class="demo-text">${cfg.instruction}</div>
-                <button id="demo-continue" class="demo-continue" style="display:none;">Continue</button>
+                <button id="demo-continue" class="demo-continue" style="display:none;">Next</button>
             </div>`,
-        data: { task: "demo" },
+        data: { task: "auto_demo", demo_button: cfg.button },
         on_start: function () {
             agent_topPos = topPos0;
             agent_leftPos = leftPos0;
-            if (cfg.reset) {
+            // start from an empty tally so the tokens accumulate during the demo,
+            // unless cfg.reset === false (the 2nd demo keeps the 1st demo's tokens)
+            if (cfg.reset !== false) {
                 for (const b of BUTTONS) {
                     for (const o of OUTCOMES) counts[b][o] = 0;
                 }
             }
         },
         on_load: function () {
-            refreshBeliefs();
+            refreshBeliefs(); // empty tally to begin with
 
             const active = document.getElementById("btn-" + cfg.button);
             const other = document.getElementById("btn-" + (cfg.button === "red" ? "blue" : "red"));
-            // the other button looks normal but isn't clickable; it disappears on
-            // selection, exactly as the unselected button does in the real task
+            // buttons are computer-controlled here; fade the one not being demoed
+            active.classList.add("inert");
             other.classList.add("inert");
-            const cont = document.getElementById("demo-continue");
+            other.style.opacity = "0.2";
 
-            active.addEventListener("click", function () {
-                active.classList.add("disabled");
-                other.classList.add("hidden");
-                const outcome = cfg.outcome; // forced outcome for a predictable demo
-                counts[cfg.button][outcome] += 1;
-                moveAgent(outcome);
+            const cont = document.getElementById("demo-continue");
+            const agentEl = document.getElementById("agent");
+            const seq = cfg.outcomes;
+            let i = 0;
+            let stopped = false; // set when the participant clicks Next early
+
+            function toCentre() {
+                agent_topPos = topPos0;
+                agent_leftPos = leftPos0;
+                agentEl.style.top = topPos0 + "%";
+                agentEl.style.left = leftPos0 + "%";
+            }
+            function step() {
+                if (stopped || i >= seq.length) return;
+                active.classList.add("pressing"); // the computer "presses" the button
                 setTimeout(function () {
-                    refreshBeliefs(); // reveal the updated heatmap once the agent arrives
-                    document.getElementById("demo-instruction").innerHTML = cfg.resultText;
-                    cont.style.display = "inline-block";
-                }, MOVE_MS);
-            });
+                    if (stopped) return;
+                    active.classList.remove("pressing");
+                    const outcome = seq[i];
+                    moveAgent(outcome);
+                    i += 1;
+                    // let the participant continue once they've seen enough
+                    if (i >= revealAfter) cont.style.display = "inline-block";
+                    // place the token once the agent has reached the location
+                    setTimeout(function () {
+                        if (stopped) return;
+                        counts[cfg.button][outcome] += 1;
+                        refreshBeliefs({ button: cfg.button, outcome: outcome });
+                    }, MOVE_MS);
+                    setTimeout(function () {
+                        if (stopped) return;
+                        toCentre();
+                        setTimeout(step, 550); // pause at the centre before the next press
+                    }, 800); // view the outcome
+                }, 450); // press pulse before the move
+            }
+            setTimeout(step, 500);
 
             cont.addEventListener("click", function () {
-                jsPsych.finishTrial({ task: "demo", demo_button: cfg.button, demo_outcome: cfg.outcome });
+                stopped = true; // halt any in-flight animation before the trial ends
+                jsPsych.finishTrial({ task: "auto_demo", demo_button: cfg.button, observations: i });
             });
         }
     };
@@ -196,12 +257,15 @@ function make_demo_trial(cfg) {
 
 //----------------------------------------------------------------------------//
 // Coin-selection trial for instructions.
-//   default    -> illustrative beliefs (blue uncertain between up & right, red
-//                 strongly left), coin at the top; the button goes to its favoured
-//                 outcome deterministically.
-//   opts.useCurrentBeliefs -> keep the beliefs already learned (used by the
-//                 early-stop practice); coin at a random location; outcome sampled
-//                 from the true transition function.
+//   opts.fixedCounts -> set an illustrative tally {red:{...}, blue:{...}} for the
+//                 room (overrides the global counts for this demo).
+//   opts.useCurrentBeliefs -> keep the tokens already accumulated; the revealed
+//                 outcome is sampled from that room's true transition function.
+//   opts.goldOutcome -> "maxTokens"/"minTokens" place the coin in the best-/least-
+//                 sampled cell; "random"; or a fixed outcome name.
+//   opts.reachButton -> that button reaches the coin, the other misses.
+//   opts.forceOutcome -> "reach" (any button reaches) / "miss" (any button misses).
+//   opts.missFeedback -> feedback text shown on a miss (default "You missed the coin.").
 //----------------------------------------------------------------------------//
 function make_gold_demo_trial(opts) {
     opts = opts || {};
@@ -215,6 +279,7 @@ function make_gold_demo_trial(opts) {
         choices: "NO_KEYS",
         stimulus: `
             <div class="task-row">
+                ${checkButtonHTML({ placeholder: true })}
                 ${initialize_agent_gold()}
                 ${buttonStackHTML()}
                 ${beliefPanelHTML()}
@@ -222,15 +287,22 @@ function make_gold_demo_trial(opts) {
             <div class="prompt">
                 <div id="demo-instruction" class="demo-text">${introText}</div>
                 <h2 id="gold-feedback"></h2>
+                ${opts.note ? `<div id="demo-note" class="demo-text">${opts.note}</div>` : ``}
                 <button id="demo-continue" class="demo-continue" style="display:none;">Continue</button>
             </div>`,
         data: { task: useCurrent ? "practice_gold" : "demo_gold" },
         on_start: function () {
             agent_topPos = topPos0;
             agent_leftPos = leftPos0;
-            if (!useCurrent) {
-                // illustrative beliefs: blue looks about as likely to go up as right
-                // (i.e. uncertain), red strongly left.
+            if (opts.fixedCounts) {
+                // illustrative room: set the tally from opts.fixedCounts
+                for (const b of BUTTONS) {
+                    for (const o of OUTCOMES) {
+                        counts[b][o] = (opts.fixedCounts[b] && opts.fixedCounts[b][o]) || 0;
+                    }
+                }
+            } else if (!useCurrent) {
+                // fallback illustrative beliefs: blue uncertain up/right, red left
                 for (const b of BUTTONS) {
                     for (const o of OUTCOMES) counts[b][o] = 0;
                 }
@@ -240,9 +312,16 @@ function make_gold_demo_trial(opts) {
             }
         },
         on_load: function () {
-            const goldOutcome = (opts.goldOutcome === "random")
-                ? OUTCOMES[Math.floor(Math.random() * OUTCOMES.length)]
-                : (opts.goldOutcome || "up");
+            let goldOutcome;
+            if (opts.goldOutcome === "random") {
+                goldOutcome = OUTCOMES[Math.floor(Math.random() * OUTCOMES.length)];
+            } else if (opts.goldOutcome === "maxTokens") {
+                goldOutcome = outcomeByTokenCount("max");
+            } else if (opts.goldOutcome === "minTokens") {
+                goldOutcome = outcomeByTokenCount("min");
+            } else {
+                goldOutcome = opts.goldOutcome || "up";
+            }
             placeGold(goldOutcome);
             refreshBeliefs();
 
@@ -256,26 +335,34 @@ function make_gold_demo_trial(opts) {
                 btnBlue.classList.add("disabled");
                 (button === "red" ? btnBlue : btnRed).classList.add("hidden");
 
-                if (!SHOW_GOLD_OUTCOME) {
-                    instr.innerHTML = `You chose the <strong>${button}</strong> button.<br>` +
-                        `In this experiment the outcome is <strong>not revealed</strong> —<br>` +
-                        `you won't find out whether you reached the coin,<br>` +
-                        `so pick the button you most believe in.`;
-                    cont.style.display = "inline-block";
-                    return;
+                // the demos always reveal the outcome (for teaching), even though the
+                // real experiment keeps it hidden (SHOW_GOLD_OUTCOME).
+                // Scripted results: reachButton -> that button reaches the coin and
+                // the other misses; forceOutcome "reach"/"miss" ignores the button.
+                // A "miss" moves to the button's most-sampled non-coin cell.
+                function missCell() {
+                    return OUTCOMES.reduce(function (best, o) {
+                        if (o === goldOutcome) return best;
+                        return (best === null || counts[button][o] > counts[button][best]) ? o : best;
+                    }, null);
                 }
-
-                // reveal: sample the real outcome (practice) or use the favoured one (demo)
-                const outcome = useCurrent ? sampleCategorical(TRUE_T[button]) : argmaxOutcome(button);
+                let outcome;
+                if (opts.reachButton) {
+                    outcome = (button === opts.reachButton) ? goldOutcome : missCell();
+                } else if (opts.forceOutcome === "reach") {
+                    outcome = goldOutcome;
+                } else if (opts.forceOutcome === "miss") {
+                    outcome = missCell();
+                } else {
+                    outcome = useCurrent ? sampleCategorical(TRUE_T[button]) : argmaxOutcome(button);
+                }
                 const success = outcome === goldOutcome;
                 moveAgent(outcome);
                 setTimeout(function () {
                     const fb = document.getElementById("gold-feedback");
                     if (success) { fb.textContent = "You reached the coin!"; fb.style.color = "green"; }
-                    else { fb.textContent = "You missed the coin."; fb.style.color = "red"; }
-                    instr.innerHTML = opts.revealText ||
-                        (`Because outcomes are <strong>revealed</strong> in this experiment,<br>` +
-                         `you find out whether you reached the coin.`);
+                    else { fb.textContent = opts.missFeedback || "You missed the coin."; fb.style.color = "red"; }
+                    instr.innerHTML = opts.revealText || `Click <strong>Continue</strong>.`;
                     cont.style.display = "inline-block";
                 }, MOVE_MS);
             }
@@ -331,124 +418,87 @@ function make_instructions_timeline() {
     const zeroCounts = { up: 0, right: 0, down: 0, left: 0 };
     const P = `max-width:680px; margin:14px auto;`; // paragraph style, generous spacing
 
-    // ---- Block 1: overview + first (empty) heatmap ----
+    // ---- Overview + testing intro + token explanation (before the demos) ----
     tl.push(instructionBlock([
-        `<h2>How the room task works</h2>
-         <p style="${P}">In the next phase you will explore a series of <strong>${N_ROOMS} rooms</strong>, one at a time.</p>
-         <p style="${P}">In each room you have <strong>${N_BUTTONS} buttons</strong> to press (below), and there are
-         <strong>${K_OUTCOMES} locations</strong> you can be taken to (highlighted).</p>
+        `<h2>Button task</h2>
+         <p style="${P}">In the next phase you will explore a series of rooms, one at a time.</p>
+         <p style="${P}">In each room you have <strong>${N_BUTTONS} coloured buttons</strong> to press, and there are
+         <strong>${K_OUTCOMES} locations</strong> you can reach - i.e. up, down, left or right.</p>
+         <p style="${P}">Each button takes you to one of these ${K_OUTCOMES} locations, but
+         <strong>you don't know which location each button is most likely to lead to</strong>.</p>
+         <p style="${P}">NOTE: the colour of the buttons has <strong>no relation</strong> to the locations they reach.</p>
          ${roomButtonsStaticHTML()}`,
 
         `<h2>Testing the buttons</h2>
-         <p style="${P}">Each button takes you to one of these ${K_OUTCOMES} locations, but
-         <strong>you don't know which location each button is most likely to lead to</strong>.</p>
-         <p style="${P}">You can test the buttons up to <strong>${N_TRIALS} times</strong> in total. Each time you
-         press a button, the agent moves and you see where it took you.</p>
-         ${roomButtonsStaticHTML()}`,
-
-        `<h2>The heatmaps</h2>
-         <p style="${P}">To the right of the buttons you'll see a <strong>separate heatmap for each button</strong>,
-         reflecting the history of outcomes you've observed for that button.</p>
-         <p style="${P}">The two buttons are <strong>independent</strong>: each has its own heatmap, and the locations
-         one button tends to reach <strong>may or may not overlap</strong> with those the other reaches.</p>
-         <p style="${P}">Learning about one button therefore tells you nothing about the other.</p>
-         <p style="${P}"><strong>So far, neither button below has been tried</strong>, so every location looks equally
-         reachable — all four cells share the same faint colour. Only once you start testing do the colours diverge.</p>
+        <p style="${P}">Whenever you press a button, a <strong>coloured token</strong> will be placed on the location
+        that you reached.</p>
+        <p style="${P}">Hence, the tokens in each location reflect the <strong>number of times</strong> each button has
+        taken you there.</p>
+        <p style="${P}">While there is <strong>always some degree of randomness</strong> in where a button leads,
+        buttons can vary in how <strong>reliable</strong> they are.</p>
+         <p style="${P}">Let's look at two examples.</p>
          ${exampleDisplayStaticHTML(zeroCounts, zeroCounts)}`
     ]));
 
-    // ---- Demos 1a / 1b: test each button once, watch its colour appear ----
-    tl.push(make_demo_trial({
+    // ---- Reliability animations (computer presses each button; Next after 5) ----
+    tl.push(make_auto_demo_trial({
         button: "blue",
-        outcome: "up",
-        reset: true,
+        title: "Testing the buttons",
+        outcomes: ["up", "up", "up", "right", "up", "up", "left", "up",
+            // "up", "up"
+        ],
         instruction: sayLines(
-            `Let's try it.`,
-            `<strong>Click the blue button</strong> to test it.`
-        ),
-        resultText: sayLines(
-            `The agent moved <strong>up</strong>.`,
-            `The blue heatmap now shows strong evidence that blue leads upward.`,
-            `Click <strong>Continue</strong>.`
+            `For example, a button may have a preferred direction, reliably leading you to one location.`,
+            `See how this <strong>blue</strong> button often takes you <strong>upwards</strong> &mdash; although not all the time.`
         )
     }));
-    tl.push(make_demo_trial({
+    tl.push(make_auto_demo_trial({
         button: "red",
-        outcome: "left",
-        reset: false,
-        instruction: `Now <strong>click the red button</strong> to test the other one.`,
-        resultText: sayLines(
-            `The red button led <strong>left</strong>, so the red heatmap now shows strong evidence for that outcome.`,
-            `Notice this is <strong>independent</strong> of blue &mdash; each button has its own heatmap.`,
-            `Click <strong>Continue</strong>.`
-        )
-    }));
-
-    // ---- Demo 2: fading. Explanation stays on screen with the display. ----
-    tl.push(make_demo_trial({
-        button: "blue",
-        outcome: "left",
-        reset: false,
+        title: "Testing the buttons",
+        reset: false, // keep the blue tokens from the first demo, to show independence
+        outcomes: ["up", "left", "right", "up", "down", "left", "down", "down",
+            // "up", "left"
+        ],
         instruction: sayLines(
-            `When one location is reached, the colours for the other locations <strong>fade</strong>.`,
-            `This is because the heatmap shows the <em>share</em> of observations that reached each location, so new evidence rebalances it.`,
-            `<strong>Click the blue button again</strong> and watch.`
-        ),
-        resultText: sayLines(
-            `The blue button led <strong>left</strong> this time.`,
-            `Its "up" colour has <strong>faded</strong>, as the evidence now splits between up and left.`,
-            `The two locations blue has <em>never</em> reached (right and down) have become <strong>even fainter</strong> &mdash; the more you sample without seeing them, the less reachable they look.`,
-            `Click <strong>Continue</strong>.`
+            `Other buttons may be more random, taking you to many different locations.`,
+            `See how this <strong>red</strong> button is much more variable in the outcomes it leads to.`,
+            `The two buttons are <strong>independent</strong>. This means the locations one button tends to reach
+            may or may not overlap with those the other reaches.`,
+            `Learning about one button therefore tells you nothing about the other.`,
         )
     }));
 
-    // ---- Block 3a: budgeting samples + the gold phase ----
+    // ---- Interpreting the tokens: blank grid at first, then how tokens in one
+    //      location make the others less likely. ----
     tl.push(instructionBlock([
-        `<h2>Spend your presses how you like</h2>
-         <p style="${P}">You can split your <strong>${N_TRIALS} presses</strong> between the ${N_BUTTONS} buttons
-         however you like — test one a lot and the other a little, or share them evenly.</p>
-         <p style="${P}">Use them to learn where each button tends to take you.</p>`,
+        `<h2>Interpreting the tokens</h2>
+         <p style="${P}">At the beginning, before a button has been tested, there are <strong>no tokens</strong>.
+         So it's reasonable to believe each button is just as likely to lead <strong>anywhere</strong>.</p>
+         ${exampleDisplayStaticHTML(zeroCounts, zeroCounts)}`,
 
-        `<h2>Collecting the gold</h2>
-         <p style="${P}">Once you've finished testing, a <strong>gold coin</strong> will appear at one of the
-         ${K_OUTCOMES} locations.</p>
-         <p style="${P}">You must then choose the <strong>button you think is most likely to take you to the
-         coin</strong>, based on what you learned. Let's try one.</p>
-         ${goldRoomStaticHTML("up")}`
+        `<h2>Interpreting the tokens</h2>
+         <p style="${P}">If, however, testing a button adds more tokens to one location, this indicates the button is 
+         <strong>less</strong> likely to lead to the others.</p>
+         <p style="${P}">For example, in the room below the tokens suggest the <strong>blue</strong> button is likely
+         to lead <strong>up</strong> &mdash; suggesting it is less likely to lead to any of the other locations.</p>
+         ${exampleDisplayStaticHTML({ up: 0, right: 0, down: 0, left: 0 }, { up: 5, right: 0, down: 0, left: 0 })}`
     ]));
 
-    // ---- Coin-selection demo 1: a reachable coin ----
-    tl.push(make_gold_demo_trial());
+    // (No single-selection practice here: participants practise a full room below.)
 
-    // ---- Coin-selection demo 2: a coin neither button reliably reaches ----
-    tl.push(make_gold_demo_trial({
-        goldOutcome: "down",
-        instruction: sayLines(
-            `Here's another coin.`,
-            `Again, click the button you think is most likely to reach it.`
-        ),
-        revealText: sayLines(
-            `This coin appeared in a location that <strong>neither button</strong> is likely to reach.`,
-            `There's no guarantee the coin will appear somewhere a button can reliably reach &mdash; sometimes you simply won't be able to get it.`
-        )
-    }));
-
-    // ---- Block 3b: stopping early + practice intro (resets for the practice room) ----
+    // ---- Testing the buttons: pressing, budget, and the tick to finish early.
+    //      Full task display beneath. on_start sets up the practice room that
+    //      follows (also runs on review, before the conditional practice trials). ----
     tl.push(instructionBlock([
-        `<h2>Stopping early</h2>
-         <p style="${P}">Of course, you don't have to use up all your samples.</p>
-         <p style="${P}">If at any point you feel you've learned enough about the two buttons, you can click the
-         <strong>tick button</strong> (to the left of the room) to move on to the coin selection straight away.</p>
-         ${earlyStopStaticHTML()}`,
-
-        `<h2>Let's practise</h2>
-         <p style="${P}">The next part works exactly like a real room.</p>
-         <p style="${P}">For this practice, take <strong>3 samples</strong>, then click the <strong>tick
-         button</strong> to finish early and go to the coin.</p>`
+        `<h2>Testing the buttons</h2>
+         <p style="${P}">You can press a button by clicking it, and then observing where it took you.</p>
+         <p style="${P}">You can test the buttons up to <strong>${N_TRIALS} times</strong> in total, splitting your
+         presses between the buttons however you like.</p>
+         <p style="${P}">You do not have to use all ${N_TRIALS} choices, though &mdash; if you already feel certain
+         enough, you can click the <strong>tick button</strong> to move on to the next phase.</p>
+         ${earlyStopStaticHTML()}`
     ], {
         on_start: function () {
-            // set up the practice room (also runs when reviewing, before the
-            // conditional practice trials are reached)
             for (const b of BUTTONS) {
                 for (const o of OUTCOMES) counts[b][o] = 0;
             }
@@ -457,21 +507,71 @@ function make_instructions_timeline() {
         }
     }));
 
-    // ---- Early-stop practice: a real room (room_num 0), asking to stop after 3 ----
-    for (let t = 1; t <= N_TRIALS; t++) {
-        tl.push({
-            timeline: [make_trial(0, t, { practice: true })],
-            conditional_function: function () { return !sampling_ended; }
-        });
-    }
+    // ---- Practice: press the buttons (up to N_TRIALS) until certain, then tick ----
+    tl.push(instructionBlock([
+        `<h2>Let's practise</h2>
+         <p style="${P}">The next part works exactly like a real room.</p>
+         <p style="${P}">Press the buttons to test them, and click the tick button when you feel
+         you've learned enough.</p>`
+    ]));
+    tl.push(make_room_sampling(0, { practice: true }));
+
+    // ---- The gold-collection phase. A fresh illustrative room (unrelated to the
+    //      practice): red reaches "up" reliably, blue tends "right", and "down" is
+    //      never reached by either -- used to script the two coin demos. ----
+    const goldDemoCounts = {
+        red:  { up: 5, right: 0, down: 0, left: 0 },
+        blue: { up: 0, right: 2, down: 0, left: 1 }
+    };
+    tl.push(instructionBlock([
+        `<h2>Collecting the gold</h2>
+         <p style="${P}">Once you've finished testing, a <strong>gold coin</strong> will appear at one of the
+         ${K_OUTCOMES} locations.</p>
+         <p style="${P}">You must then choose the <strong>button you think is most likely to take you to the
+         coin</strong>, based on the tokens you've collected for each button.</p>
+         <p style="${P}">Here's a fresh room. Let's try a couple of examples.</p>`
+    ]));
+
+    // ---- Coin-selection demo 1: coin at "up", where red is reliable. Red reaches
+    //      it (success message); blue does not. ----
     tl.push(make_gold_demo_trial({
-        useCurrentBeliefs: true,
-        goldOutcome: "random",
+        fixedCounts: goldDemoCounts,
+        goldOutcome: "up",
+        reachButton: "red", // red reaches the coin; the other button misses
+        missFeedback: "The button you selected didn't take you to the coin this time.",
         instruction: sayLines(
-            `A gold coin appeared.`,
+            `A <strong>gold coin</strong> has appeared.`,
             `Click the button you think is most likely to reach it.`
+        ),
+        note: `<em style="font-size:0.85em; color:#555;">(Note that in the real experiment, you will not see whether or not you actually reached the coin.)</em>`,
+    }));
+
+    // ---- Coin-selection demo 2: coin at "down", which neither button reaches. ----
+    tl.push(make_gold_demo_trial({
+        fixedCounts: goldDemoCounts,
+        goldOutcome: "down",
+        forceOutcome: "miss", // neither button reaches this coin
+        instruction: sayLines(
+            `Here's another coin.`,
+            `Again, click the button you think is most likely to reach it.`
+        ),
+        note: `<em style="font-size:0.85em; color:#555;">(Note that in the real experiment, you will not see whether or not you actually reached the coin.)</em>`,
+        revealText: sayLines(
+            `There's no guarantee the coin will appear somewhere a button can reliably reach &mdash; sometimes it might simply be unlikely that you will get it.`
         )
     }));
+
+    // ---- The aim of the task (bonus) + note that the real task hides the outcome ----
+    tl.push(instructionBlock([
+        `<h2>The aim of the task</h2>
+         <p style="${P}">The aim of the task is to collect <strong>as many gold coins as possible</strong>.</p>
+         <p style="${P}">The more coins you collect, the <strong>bigger the bonus</strong> you will receive on Prolific.</p>
+         <p style="${P}">So in each room, test out the buttons until you feel <strong>certain enough</strong> to continue to the
+         gold selection phase.</p>
+         <p style="${P}">Remember: in the practice we <strong>showed you whether you reached the coin</strong>.
+         In the real experiment you will <strong>not</strong> see this, so just choose the button you
+         most believe will take you to the coin.</p>`
+    ]));
 
     // ---- End: start, or review the instructions again ----
     tl.push(make_review_choice_trial());

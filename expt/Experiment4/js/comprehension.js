@@ -49,11 +49,11 @@ const QUIZ_QUESTIONS = [
     },
     {
         name: "heatmap",
-        prompt: "What information does a button's heatmap show?",
-        correct: "How likely each location is to be reachable by that button, based on what I've observed so far.",
+        prompt: "What information does a button's tokens show?",
+        correct: "The number of times each location has been reached by that button during testing.",
         distractors: [
-            "The true, exact probability that the button reaches each location.",
-            "Where the gold coin is going to appear."
+            "How likely it is that a gold coin will appear in each location.",
+            "How many points I have earned by pressing that button."
         ]
     },
     {
@@ -64,7 +64,25 @@ const QUIZ_QUESTIONS = [
             "I collect a gold coin.",
             "I reset the room and start it again."
         ]
-    }
+    },
+    {
+        name: "coin",
+        prompt: "In the coin selection phase, which button should I choose?",
+        correct: "The button that I believe will most likely lead to the location with the coin.",
+        distractors: [
+            "The button with the highest number of combined tokens.",
+            "The button with the most tokens in any single location."
+        ]
+    },
+    {
+        name: "coin_correct",
+        prompt: "In the coin selection phase, is there a button that guarantees leading to the location with the coin?",
+        correct: "Not necessarily - sometimes neither button reliably leads to the location with the coin.",
+        distractors: [
+            "Yes - there is always one button that certainly leads to the location with the coin.",
+            "Yes - the button with the most tokens certainly leads to the location with the coin."
+        ]
+    },
 ];
 
 const QUIZ_PASS_FRACTION = 2 / 3;
