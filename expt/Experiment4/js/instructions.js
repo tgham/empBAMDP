@@ -106,6 +106,13 @@ function plainRoomStaticHTML() {
         </div>`;
 }
 
+// a lone gold coin, for slides that talk about the coin without drawing a room.
+// The in-room .gold-image is absolutely positioned inside .container, so it can't
+// be reused on a text slide -- .gold-coin-static is the free-standing version.
+function goldCoinStaticHTML() {
+    return `<img src="img/Goal.png" alt="Gold coin" class="gold-coin-static">`;
+}
+
 // the usual task display (tick + room + buttons + belief display), illustrating
 // early stop. Adapts to BELIEF_DISPLAY.
 function earlyStopStaticHTML() {
@@ -363,6 +370,9 @@ function make_gold_demo_trial(opts) {
                     const fb = document.getElementById("gold-feedback");
                     if (success) { fb.textContent = "You reached the coin!"; fb.style.color = "green"; }
                     else { fb.textContent = opts.missFeedback || "You missed the coin."; fb.style.color = "red"; }
+                    // the prompt was blanked on click; reuse it for the lesson this
+                    // demo teaches, if it has one (otherwise it stays empty)
+                    if (opts.revealText) instr.innerHTML = opts.revealText;
                     cont.style.display = "inline-block";
                 }, MOVE_MS);
             }
@@ -530,7 +540,8 @@ function make_instructions_timeline() {
          ${K_OUTCOMES} locations.</p>
          <p style="${P}">You must then choose the <strong>button you think is most likely to take you to the
          coin</strong>, based on the tokens you've collected for each button.</p>
-         <p style="${P}">Here's a fresh room. Let's try a couple of examples.</p>`
+         <p style="${P}">Here's a fresh room. Let's try a couple of examples.</p>
+         ${goldCoinStaticHTML()}`
     ]));
 
     // ---- Coin-selection demo 1: coin at "up", where red is reliable. Red reaches
@@ -539,7 +550,7 @@ function make_instructions_timeline() {
         fixedCounts: goldDemoCounts,
         goldOutcome: "up",
         reachButton: "red", // red reaches the coin; the other button misses
-        missFeedback: "The button you selected didn't take you to the coin this time.",
+        missFeedback: "You missed the coin.",
         instruction: sayLines(
             `A <strong>gold coin</strong> has appeared.`,
             `Click the button you think is most likely to reach it.`
