@@ -110,8 +110,8 @@
                 <p>This is a psychology experiment conducted by Dr. Peter Dayan, director of the Max Planck Institute for Biological Cybernetics, and the members of his lab.</p>
                 <p>All data collected will be anonymous. We will not ask for any additional personally identifying information and will handle responses as confidentially as possible. However, we cannot guarantee the confidentiality of information transmitted over the Internet. We will keep de-identified data collected as part of this experiment indefinitely, and such data may be used as part of future studies and/or made available to the wider research community for follow-up analyses. Data used in scientific publications will remain completely anonymous.</p>
                 <p>Your participation in this research is voluntary. You may refrain from answering any questions that make you uncomfortable and may withdraw your participation at any time without penalty by exiting this task. You may choose not to complete certain parts of the task or answer certain questions.</p>
-                <p>Other than monetary compensation, participating in this study will provide no direct benefits to you. However, we hope that this research will benefit society at large by contributing towards establishing a scientific foundation for improving people’s learning and cognitive control abilities.</p>
-                <p>By selecting the “consent” button below, you consent to taking part in this study.</p>
+                <p>Other than monetary compensation, participating in this study will provide no direct benefits to you. However, we hope that this research will benefit society at large by contributing towards establishing a scientific foundation for improving people's learning and cognitive control abilities.</p>
+                <p>By selecting the 'consent' button below, you consent to taking part in this study.</p>
                 <div style="text-align: center; margin-top: 20px;">
                     <button id="consent-given" style="background-color: #2C3E50; color: white; padding: 10px 20px; border: none; cursor: pointer; margin-right: 10px;">I consent to participate</button>
                 </div>
@@ -205,8 +205,8 @@
                 timeline: [make_gold_trial(r, { buttonOrder: roomButtonOrder })],
                 conditional_function: function () { return !attention_failed; }
             });
-            // attention-check block after every 2 rooms (not after the final room)
-            if (r % 2 === 0 && r < N_ROOMS) {
+            // attention-check block after every 10 rooms (not after the final room)
+            if (r % 10 === 0 && r < N_ROOMS) {
                 experiment_timeline.push({
                     timeline: make_attention_block(),
                     conditional_function: function () { return !attention_failed; }
