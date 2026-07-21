@@ -256,7 +256,7 @@ function make_intro_click_demo_trial() {
             title: `Button task`,
             lines: [
                 `Pressing a button takes you to one of these ${K_OUTCOMES} locations with some probability. However, <strong>you don't know which locations each button is likely to lead to</strong>.`,
-                `NOTE: the colour of the buttons has <strong>no relation</strong> to the locations they reach.`,
+                `NOTE: neither the colour nor the position of the buttons has <strong>any relation</strong> to the locations they reach.`,
                 `To begin, <strong>click one of the buttons</strong> to see where it takes you.`,
             ],
             stage: `
