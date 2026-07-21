@@ -6,7 +6,7 @@
 // conditional on it), and the Prolific redirect at the end is suppressed.
 // MUST be false for any real run: it bypasses the comprehension gate.
 //----------------------------------------------------------------------------//
-const DEBUGGING = false;
+const DEBUGGING = true;
 
 //----------------------------------------------------------------------------//
 // Experiment parameters
@@ -65,7 +65,12 @@ const BTN_COLOR = { red: "220,40,40", blue: "40,90,220" }; // rgb triples for rg
 // colour->position mapping is randomised once per participant. This prevents a
 // spatial bias (e.g. reading "blue = up, red = down" from a fixed vertical stack).
 // BUTTON_ORDER = [upper colour, lower colour]; the lower button sits to the right.
-const BUTTON_ORDER = Math.random() < 0.5 ? ["blue", "red"] : ["red", "blue"];
+// ROOM_BUTTON_ORDERS is pre-generated once per experiment so each room has a
+// consistent, predetermined layout that persists across all trials in that room.
+let BUTTON_ORDER = Math.random() < 0.5 ? ["blue", "red"] : ["red", "blue"];
+const ROOM_BUTTON_ORDERS = Array.from({ length: N_ROOMS }, () => 
+    Math.random() < 0.5 ? ["blue", "red"] : ["red", "blue"]
+);
 
 //----------------------------------------------------------------------------//
 // Belief display mode:

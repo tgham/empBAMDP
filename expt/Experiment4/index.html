@@ -159,7 +159,10 @@
                 loop_function: function () { return review_instructions; }
             };
             timeline.push({
-                timeline: [instructions_block, make_comprehension_quiz(), make_quiz_result_trial()],
+                timeline: [
+                    instructions_block, 
+                make_comprehension_quiz(), 
+                make_quiz_result_trial()],
                 loop_function: function () {
                     return !quiz_passed && quiz_attempts < QUIZ_MAX_ATTEMPTS;
                 }
@@ -182,6 +185,8 @@
         // so the task halts and falls through to the exclusion screen below.
         var experiment_timeline = [];
         for (let r = 1; r <= N_ROOMS; r++) {
+            // Use the pre-generated button order for this room
+            const roomButtonOrder = ROOM_BUTTON_ORDERS[r - 1];
             experiment_timeline.push({
                 timeline: [make_room_intro(r)],
                 conditional_function: function () { return !attention_failed; }
@@ -189,11 +194,15 @@
             // whole sampling phase for the room is a single trial (handles the
             // per-press loop and the early-stop tick internally -> no flicker)
             experiment_timeline.push({
-                timeline: [make_room_sampling(r)],
+                timeline: [make_room_sampling(r, { buttonOrder: roomButtonOrder })],
                 conditional_function: function () { return !attention_failed; }
             });
             experiment_timeline.push({
-                timeline: [make_gold_trial(r)],
+                timeline: [make_gold_pause(r)],
+                conditional_function: function () { return !attention_failed; }
+            });
+            experiment_timeline.push({
+                timeline: [make_gold_trial(r, { buttonOrder: roomButtonOrder })],
                 conditional_function: function () { return !attention_failed; }
             });
             // attention-check block after every 2 rooms (not after the final room)
@@ -225,8 +234,8 @@
         var expfeedback = {
             type: jsPsychSurveyFeedback,
             mental_demand: false,
-            task_instructions: false,
-            performance: false,
+            task_instructions: true,
+            performance: true,
             effort: false,
             frustration: false,
             strategy: true,
@@ -234,7 +243,9 @@
             data: { task: "expfeedback" }
         };
         experiment_timeline.push({
-            timeline: [ius12, loc74_1, loc74_2, expfeedback],
+            timeline: [
+                // ius12, loc74_1, loc74_2, 
+            expfeedback],
             conditional_function: function () { return !attention_failed; }
         });
         // bonus: fraction of coins collected x GBP 2 (only if not excluded)

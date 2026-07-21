@@ -106,7 +106,8 @@ p.screen-note {
    slides that have nav and screens that don't. */
 .screen-nav,
 .jspsych-instructions-nav,
-.jspsych-content:has(.screen) .jspsych-btn-group {
+.jspsych-content:has(.screen) .jspsych-btn-group,
+.jspsych-content:has(.screen) #jspsych-html-button-response-btngroup {
     position: fixed;
     left: 0;
     right: 0;
@@ -270,11 +271,35 @@ p.screen-note {
     align-items: flex-start;
     gap: 48px;
 }
+.button-stack-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    width: 140px;
+}
+.button-label {
+    font-family: Arial, sans-serif;
+    font-size: 25px;
+    color: #000000;
+    text-align: center;
+    line-height: 1.50;
+    font-weight: bold;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+}
+.button-label.hidden {
+    visibility: hidden;
+}
 /* the lower button is offset to the right so the pair sits on a 45-degree
    diagonal rather than a vertical stack (which could imply a spatial colour
    mapping). Offset = centre-to-centre vertical distance = button (140) + gap (48). */
 .cbtn-lower {
     margin-left: 188px;
+    margin-top: -40px;
 }
 .cbtn {
     width: 140px;
@@ -357,10 +382,11 @@ p.screen-note {
 }
 .check-label {
     font-family: Arial, sans-serif;
-    font-size: 16px;
-    color: #333;
+    font-size: 25px;
+    color: #000000;
     text-align: center;
-    line-height: 1.15;
+    line-height: 1.50;
+    font-weight: bold;
 }
 
 /* ------------------------------------ */

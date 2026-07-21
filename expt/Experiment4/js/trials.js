@@ -3,13 +3,26 @@
 //----------------------------------------------------------------------------//
 // The two circle buttons, to the right of the room. Stacked upper/lower but
 // offset diagonally, with the colour->position mapping randomised per participant
-// (BUTTON_ORDER) so position isn't associated with a colour.
-function buttonStackHTML() {
-    const upper = BUTTON_ORDER[0], lower = BUTTON_ORDER[1];
+// so position isn't associated with a colour. buttonOrder parameter allows each
+// room to capture its own layout independently.
+function buttonStackHTML(opts) {
+    opts = opts || {};
+    const label_on = opts.label_on === true;
+    const buttonOrder = opts.buttonOrder || BUTTON_ORDER;
+    const upper = buttonOrder[0], lower = buttonOrder[1];
+    function labelFor(color) {
+        return color === "red" ? "Red button" : "Blue button";
+    }
     return `
         <div class="button-stack">
-            <div class="cbtn ${upper}" id="btn-${upper}"></div>
-            <div class="cbtn ${lower} cbtn-lower" id="btn-${lower}"></div>
+            <div class="button-stack-item">
+                <div class="button-label${label_on ? "" : " hidden"}">${label_on ? labelFor(upper) : ""}</div>
+                <div class="cbtn ${upper}" id="btn-${upper}"></div>
+            </div>
+            <div class="button-stack-item cbtn-lower">
+                <div class="button-label${label_on ? "" : " hidden"}">${label_on ? labelFor(lower) : ""}</div>
+                <div class="cbtn ${lower}" id="btn-${lower}"></div>
+            </div>
         </div>`;
 }
 
@@ -18,10 +31,11 @@ function buttonStackHTML() {
 // layout footprint) so grids without a tick don't shift horizontally.
 function checkButtonHTML(opts) {
     const placeholder = opts && opts.placeholder;
+    const tick_label = opts && opts.tick_label;
     return `
         <div class="check-stack${placeholder ? " hidden" : ""}"${placeholder ? " aria-hidden=\"true\"" : ""}>
+            ${tick_label ? `<div class="check-label">Tick button</div>` : ""}
             <div class="checkbtn" id="btn-check"><img src="img/Check.png" alt="Done testing"></div>
-            <div class="check-label">Done<br>testing</div>
         </div>`;
 }
 
@@ -145,6 +159,7 @@ function make_room_sampling(room_num, opts) {
     opts = opts || {};
     const practice = opts.practice === true;
     const taskName = practice ? "practice_sample" : "sample";
+    const buttonOrder = opts.buttonOrder || BUTTON_ORDER;
 
     // Manually-pushed rows don't get the session-level fields that jsPsych
     // auto-applies to rows it writes itself, so stamp them on here to match.
@@ -157,8 +172,8 @@ function make_room_sampling(room_num, opts) {
         row.contextual = CONTEXTUAL;
         row.alpha_ctx1 = ALPHA_CTX1;
         row.alpha_ctx2 = ALPHA_CTX2;
-        row.button_upper = BUTTON_ORDER[0];
-        row.button_lower = BUTTON_ORDER[1];
+        row.button_upper = buttonOrder[0];
+        row.button_lower = buttonOrder[1];
         row.trial_type = "html-keyboard-response";
         return row;
     }
@@ -175,7 +190,7 @@ function make_room_sampling(room_num, opts) {
                 <div class="task-row">
                     ${checkButtonHTML()}
                     ${initialize_agent()}
-                    ${buttonStackHTML()}
+                    ${buttonStackHTML({ buttonOrder: buttonOrder })}
                     ${beliefPanelHTML()}
                 </div>`
         }),
@@ -207,7 +222,7 @@ function make_room_sampling(room_num, opts) {
             function armPress() {
                 const row = document.querySelector(".task-row");
                 const bs = row.querySelector(".button-stack");
-                if (bs) bs.outerHTML = buttonStackHTML();
+                if (bs) bs.outerHTML = buttonStackHTML({ buttonOrder: buttonOrder });
                 const cs = row.querySelector(".check-stack");
                 if (cs) cs.outerHTML = checkButtonHTML();
                 const counter = document.querySelector(".trial-counter");
@@ -282,25 +297,47 @@ function make_room_sampling(room_num, opts) {
 }
 
 //----------------------------------------------------------------------------//
+// Gold pause: brief interlude showing a gold coin in the centre.
+//----------------------------------------------------------------------------//
+function make_gold_pause(room_num) {
+    return {
+        type: jsPsychHtmlKeyboardResponse,
+        choices: "NO_KEYS",
+        response_ends_trial: false,
+        trial_duration: 1000,
+        stimulus: screenHTML({
+            title: "Gold time!",
+            stage: `
+                <div style="display:flex; justify-content:center; align-items:center; min-height:220px;">
+                    ${goldCoinStaticHTML()}
+                </div>`
+        }),
+        data: { task: "gold_pause", room_num: room_num }
+    };
+}
+
+//----------------------------------------------------------------------------//
 // Gold collection: a coin appears at a random reachable cell; the participant
 // picks a button to try to reach it.
 //   SHOW_GOLD_OUTCOME true  -> agent moves per the transition function, feedback shown.
 //   SHOW_GOLD_OUTCOME false -> no outcome shown; move straight on to the next room.
 //----------------------------------------------------------------------------//
-function make_gold_trial(room_num) {
+function make_gold_trial(room_num, opts) {
+    opts = opts || {};
+    const buttonOrder = opts.buttonOrder || BUTTON_ORDER;
     return {
         type: jsPsychHtmlKeyboardResponse,
         choices: "NO_KEYS",
         stimulus: screenHTML({
+            title: "Gold time!",
             lines: [
-                `<span class="trial-counter">Gold time!</span>`,
                 `A gold coin appeared. Click the button most likely to reach it.`
             ],
             stage: `
                 <div class="task-row">
                     ${checkButtonHTML({ placeholder: true })}
                     ${initialize_agent_gold()}
-                    ${buttonStackHTML()}
+                    ${buttonStackHTML({ buttonOrder: buttonOrder })}
                     ${beliefPanelHTML()}
                 </div>`
         }),

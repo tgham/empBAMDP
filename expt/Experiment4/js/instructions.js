@@ -82,21 +82,22 @@ function taskDisplayStaticHTML(redCounts, blueCounts, opts) {
     const zero = { up: 0, right: 0, down: 0, left: 0 };
     const redC = redCounts || zero;
     const blueC = blueCounts || zero;
-    const tick = checkButtonHTML({ placeholder: opts.tick !== true });
+    const tick = checkButtonHTML({ placeholder: opts.tick !== true, tick_label: opts.tick_label });
+    const buttonStack = buttonStackHTML({ label_on: opts.label_on === true });
 
     if (BELIEF_DISPLAY === "counters") {
         return `
             <div class="task-row" style="pointer-events:none;">
                 ${tick}
                 ${roomCountersStaticHTML(redC, blueC)}
-                ${buttonStackHTML()}
+                ${buttonStack}
             </div>`;
     }
     return `
         <div class="task-row" style="pointer-events:none;">
             ${tick}
             ${reachableRoomStaticHTML()}
-            ${buttonStackHTML()}
+            ${buttonStack}
             <div class="belief-stack">
                 ${beliefBlockStaticHTML("blue", "Blue button", blueC)}
                 ${beliefBlockStaticHTML("red", "Red button", redC)}
@@ -160,7 +161,7 @@ function outcomeByTokenCount(which) {
 // keep playing.
 //----------------------------------------------------------------------------//
 function make_auto_demo_trial(cfg) {
-    const revealAfter = cfg.revealAfter || 5;
+    const revealAfter = cfg.revealAfter || 1;
     return {
         type: jsPsychHtmlKeyboardResponse,
         choices: "NO_KEYS",
@@ -239,6 +240,85 @@ function make_auto_demo_trial(cfg) {
                 stopped = true; // halt any in-flight animation before the trial ends
                 jsPsych.finishTrial({ task: "auto_demo", demo_button: cfg.button, observations: i });
             });
+        }
+    };
+}
+
+//----------------------------------------------------------------------------//
+// Intro click demo: the participant makes the first press themselves, the room
+// animates, and the resulting token remains visible for the following slide.
+//----------------------------------------------------------------------------//
+function make_intro_click_demo_trial() {
+    return {
+        type: jsPsychHtmlKeyboardResponse,
+        choices: "NO_KEYS",
+        stimulus: screenHTML({
+            title: `Button task`,
+            lines: [
+                `Pressing a button takes you to one of these ${K_OUTCOMES} locations with some probability. However, <strong>you don't know which locations each button is likely to lead to</strong>.`,
+                `NOTE: the colour of the buttons has <strong>no relation</strong> to the locations they reach.`,
+                `To begin, <strong>click one of the buttons</strong> to see where it takes you.`,
+            ],
+            stage: `
+                <div class="task-row">
+                    ${checkButtonHTML({ placeholder: true })}
+                    ${initialize_agent()}
+                    ${buttonStackHTML()}
+                    ${beliefPanelHTML()}
+                </div>`
+        }),
+        data: { task: "instructions_intro_demo" },
+        on_start: function () {
+            for (const b of BUTTONS) {
+                for (const o of OUTCOMES) counts[b][o] = 0;
+            }
+            sampleTrueT();
+            sampling_ended = false;
+            agent_topPos = topPos0;
+            agent_leftPos = leftPos0;
+        },
+        on_load: function () {
+            refreshBeliefs();
+
+            const btnRed = document.getElementById("btn-red");
+            const btnBlue = document.getElementById("btn-blue");
+            const agentEl = document.getElementById("agent");
+
+            function toCentre() {
+                agent_topPos = topPos0;
+                agent_leftPos = leftPos0;
+                agentEl.style.top = topPos0 + "%";
+                agentEl.style.left = leftPos0 + "%";
+            }
+
+            function handle(button) {
+                btnRed.classList.add("disabled");
+                btnBlue.classList.add("disabled");
+                (button === "red" ? btnBlue : btnRed).classList.add("hidden");
+
+                const outcome = sampleCategorical(TRUE_T[button]);
+                counts[button][outcome] += 1;
+                moveAgent(outcome);
+
+                setTimeout(function () {
+                    refreshBeliefs({ button: button, outcome: outcome });
+                }, MOVE_MS);
+
+                setTimeout(function () {
+                    toCentre();
+                }, 800);
+
+                setTimeout(function () {
+                    jsPsych.finishTrial({
+                        task: "instructions_intro_demo",
+                        chosen_button: button,
+                        outcome: outcome
+                    });
+                }, 1350);
+            }
+
+            btnRed.addEventListener("click", () => handle("red"));
+            btnBlue.addEventListener("click", () => handle("blue"));
         }
     };
 }
@@ -406,30 +486,35 @@ function instructionBlock(pages, extra) {
 function make_instructions_timeline() {
     const tl = [];
 
-    // ---- Overview + testing intro + token explanation (before the demos) ----
-    tl.push(instructionBlock([
-        screenHTML({
-            title: `Button task`,
-            lines: [
+    // ---- Overview click demo + testing intro + token explanation ----
+    tl.push(instructionBlock(function () {
+        return [
+            screenHTML({
+                title: `Button task`,
+                lines: [
                 `In the next phase you will explore a series of rooms, one at a time.`,
-                `Each room has <strong>${N_BUTTONS} buttons</strong> to press, and there are <strong>${K_OUTCOMES} locations</strong> you can reach from the central location - i.e. up, down, left or right.`,
-                `Each button takes you to one of these ${K_OUTCOMES} locations, but <strong>you don't know which location each button is most likely to lead to</strong>.`,
-                `NOTE: the colour of the buttons has <strong>no relation</strong> to the locations they reach.`
-            ],
-            stage: taskDisplayStaticHTML()
-        }),
-
-        screenHTML({
-            title: `Testing the buttons`,
-            lines: [
-                `Whenever you press a button, a <strong>coloured token</strong> will be placed on the location that you reached.`,
-                `Hence, the tokens in each location reflect the <strong>number of times</strong> each button has taken you there.`,
-                `While there is <strong>always some degree of randomness</strong> in where a button leads, buttons can vary in how <strong>reliable</strong> they are.`,
-                `Let's look at two examples.`
-            ],
-            stage: taskDisplayStaticHTML()
-        })
-    ]));
+                `Each room has <strong>${N_BUTTONS} buttons</strong> to press, shown below in <strong>blue</strong> and <strong>red</strong>, diagonally opposite each other.`,
+                `There are <strong>${K_OUTCOMES} locations</strong> you can reach from the central location - i.e. up, down, left or right.`,
+                ],
+                stage: taskDisplayStaticHTML(null, null, { label_on: true })
+            })
+        ];
+    }));
+    tl.push(make_intro_click_demo_trial());
+    tl.push(instructionBlock(function () {
+        return [
+            screenHTML({
+                title: `Testing the buttons`,
+                lines: [
+                    `Whenever you press a button, a <strong>coloured token</strong> will be placed on the location that you reached.`,
+                    `Hence, the tokens in each location reflect the <strong>number of times</strong> each button has taken you there.`,
+                    `While there is <strong>always some degree of randomness</strong> in where a button leads, buttons can vary in how <strong>reliable</strong> they are.`,
+                    `Let's look at two examples.`
+                ],
+                stage: taskDisplayStaticHTML(counts.red, counts.blue)
+            })
+        ];
+    }));
 
     // ---- Reliability animations (computer presses each button; Next after 5) ----
     tl.push(make_auto_demo_trial({
@@ -452,7 +537,7 @@ function make_instructions_timeline() {
         ],
         lines: [
             `Other buttons may be more random, taking you to many different locations.`,
-            `See how this <strong>red</strong> button is much more variable in the outcomes it leads to.`
+            `See how this <strong>red</strong> button is much more <strong>variable</strong> in the outcomes it leads to.`
         ]
     }));
 
@@ -506,11 +591,11 @@ function make_instructions_timeline() {
         screenHTML({
             title: `Testing the buttons`,
             lines: [
-                `You can press a button by clicking it, and then observing where it took you.`,
+                // `You can press a button by clicking it, and then observing where it took you.`,
                 `You can test the buttons up to <strong>${N_TRIALS} times</strong> in total, splitting your presses between the buttons however you like.`,
-                `You do not have to use all ${N_TRIALS} choices, though &mdash; if you already feel you've learned enough, you can click the <strong>tick button</strong> to move on.`
+                `You do not have to use all ${N_TRIALS} choices, though &mdash; if you already feel you've learned enough about the buttons, you can click the <strong>tick button</strong> to move on.`
             ],
-            stage: taskDisplayStaticHTML(null, null, { tick: true })
+            stage: taskDisplayStaticHTML(null, null, { tick: true , tick_label: true})
         })
     ], {
         on_start: function () {
