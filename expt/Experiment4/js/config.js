@@ -6,7 +6,7 @@
 // conditional on it), and the Prolific redirect at the end is suppressed.
 // MUST be false for any real run: it bypasses the comprehension gate.
 //----------------------------------------------------------------------------//
-const DEBUGGING = true;
+const DEBUGGING = false;
 
 //----------------------------------------------------------------------------//
 // Experiment parameters
@@ -15,8 +15,7 @@ const DEBUGGING = true;
 const N_BUTTONS = 2;
 const K_OUTCOMES = 4;
 const N_TRIALS = 8;   // sampling trials per room
-const N_ROOMS = 20;    // number of rooms (fresh transition functions each)
-const ALPHA = 0.25;
+const N_ROOMS = 25;    // number of rooms (fresh transition functions each)
 
 // CONTEXTUAL controls which prior each button's hidden transition function is
 // drawn from at the start of a room:
@@ -26,7 +25,8 @@ const ALPHA = 0.25;
 //            in a room can come from different priors. The context drawn is
 //            recorded in BUTTON_CTX and logged, but is never cued to the
 //            participant.
-const CONTEXTUAL = true;
+const ALPHA = 0.4;
+const CONTEXTUAL = false;
 const ALPHA_CTX1 = 0.25; // context 1 prior
 const ALPHA_CTX2 = 1; // context 2 prior
 

@@ -65,9 +65,9 @@ function choicesRemainingText(remaining) {
 }
 
 // Redraw the belief display (and the sample-counter titles) from current counts.
-function refreshBeliefs(highlight) {
+function refreshBeliefs(highlight, buttonOrder) {
     if (BELIEF_DISPLAY === "counters") {
-        renderMainCounters(highlight);
+        renderMainCounters(highlight, buttonOrder);
     } else if (BELIEF_DISPLAY === "overlay") {
         renderMainBeliefOverlay();
     } else {
@@ -201,7 +201,7 @@ function make_room_sampling(room_num, opts) {
             agent_leftPos = leftPos0;
         },
         on_load: function () {
-            refreshBeliefs();
+            refreshBeliefs(null, buttonOrder);
 
             let trial_num = 1;   // 1..N_TRIALS; the press currently being made
             let ended = false;
@@ -256,7 +256,7 @@ function make_room_sampling(room_num, opts) {
 
                 setTimeout(function () {
                     // arrived -> reveal the updated belief; pop in the new token
-                    refreshBeliefs({ button: button, outcome: outcome });
+                    refreshBeliefs({ button: button, outcome: outcome }, buttonOrder);
                     setTimeout(function () {
                         // slide the agent back to the centre (animated) for the next press
                         const agentEl = document.getElementById("agent");
@@ -322,6 +322,18 @@ function make_gold_pause(room_num) {
 //   SHOW_GOLD_OUTCOME true  -> agent moves per the transition function, feedback shown.
 //   SHOW_GOLD_OUTCOME false -> no outcome shown; move straight on to the next room.
 //----------------------------------------------------------------------------//
+// Draws a single outcome from a button's true transition distribution.
+// transitionProbs: object mapping outcome -> probability (should sum to ~1 over OUTCOMES)
+function sampleOutcome(transitionProbs) {
+    const r = Math.random();
+    let cumulative = 0;
+    for (const o of OUTCOMES) {
+        cumulative += transitionProbs[o];
+        if (r < cumulative) return o;
+    }
+    return OUTCOMES[OUTCOMES.length - 1]; // floating-point fallback
+}
+
 function make_gold_trial(room_num, opts) {
     opts = opts || {};
     const buttonOrder = opts.buttonOrder || BUTTON_ORDER;
@@ -350,18 +362,24 @@ function make_gold_trial(room_num, opts) {
             // gold appears at a random reachable (cardinal) cell
             const goldOutcome = OUTCOMES[Math.floor(Math.random() * OUTCOMES.length)];
             placeGold(goldOutcome);
-            refreshBeliefs();
+            refreshBeliefs(null, buttonOrder);
 
             wireButtons(function (button, rt) {
                 // "correct" = chose the button with the objectively highest true
-                // probability of reaching the coin (no sampling). Tally it for the
-                // bonus. Ties (equal best true prob) count as correct for either.
+                // probability of reaching the coin (no sampling). Purely a measure
+                // of decision quality against the true model. Ties count as correct.
                 const chosen_gold_prob = TRUE_T[button][goldOutcome];
                 const best_gold_prob = Math.max.apply(
                     null, BUTTONS.map(function (b) { return TRUE_T[b][goldOutcome]; })
                 );
-                const success = chosen_gold_prob === best_gold_prob;
-                if (success) collected_gold += 1;
+                const correct = chosen_gold_prob === best_gold_prob;
+
+                // "collected_gold" = an actual draw from the chosen button's true
+                // transition distribution. This is what really happens in the room,
+                // independent of whether the choice was the optimal one.
+                const sampled_outcome = sampleOutcome(TRUE_T[button]);
+                const collected = sampled_outcome === goldOutcome;
+                if (collected) collected_gold += 1;
 
                 const trial_data = {
                     chosen_button: button,
@@ -373,8 +391,10 @@ function make_gold_trial(room_num, opts) {
                     chosen_button_ctx: BUTTON_CTX[button],
                     chosen_gold_prob: chosen_gold_prob,       // true P(chosen button -> coin)
                     best_gold_prob: best_gold_prob,           // best true P(any button -> coin)
-                    success: success,
-                    collected_gold: collected_gold,
+                    correct: correct,                         // did they pick the best button?
+                    sampled_outcome: sampled_outcome,          // what the transition actually sampled
+                    collected: collected,                      // did that sample match the gold cell?
+                    collected_gold_total: collected_gold,       // running tally for the bonus
                     outcome_shown: SHOW_GOLD_OUTCOME
                 };
 
@@ -386,19 +406,15 @@ function make_gold_trial(room_num, opts) {
                     return;
                 }
 
-                // reveal (only if SHOW_GOLD_OUTCOME): move the agent to the coin on a
-                // correct choice, else to the chosen button's most likely location.
-                const revealOutcome = success
-                    ? goldOutcome
-                    : OUTCOMES.reduce(function (bestO, o) {
-                        return TRUE_T[button][o] > TRUE_T[button][bestO] ? o : bestO;
-                    }, OUTCOMES[0]);
-                moveAgent(revealOutcome);
+                // reveal (only if SHOW_GOLD_OUTCOME): move the agent to wherever the
+                // sampled transition actually sent them — this is the true stochastic
+                // consequence of the button press, regardless of whether it was "correct".
+                moveAgent(sampled_outcome);
 
                 setTimeout(function () {
                     // once the agent has arrived, the result replaces the prompt above
                     // the room (as in the coin demos)
-                    showScreenFeedback(success ? "You got the gold!" : "Missed it...", success);
+                    showScreenFeedback(collected ? "You got the gold!" : "Missed it...", collected);
 
                     // save data so far
                     var ppt_data = jsPsych.data.get().json();

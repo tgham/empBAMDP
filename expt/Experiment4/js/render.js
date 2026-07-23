@@ -75,6 +75,11 @@ function outcomePercent(outcome) {
     return { top, left };
 }
 
+function goldInRoomStaticHTML(outcome) {
+    const { top, left } = outcomePercent(outcome);
+    return `<img src="img/Goal.png" alt="Gold Coin" class="gold-image" style="top:${top}%; left:${left}%;">`;
+}
+
 //----------------------------------------------------------------------------//
 // Move the agent to a cardinal outcome cell. Same nudging logic as Experiment3.
 //----------------------------------------------------------------------------//
@@ -309,25 +314,38 @@ function renderMainBeliefOverlay() {
 //----------------------------------------------------------------------------//
 // `highlightButton` ("red"/"blue"/null): pop in the last filled token of that
 // half (used to animate the token placed once the agent reaches the cell).
-function counterCellHTML(redN, blueN, highlightButton) {
-    function half(button, n) {
+function counterCellHTML(redN, blueN, highlightButton, buttonOrder) {
+    buttonOrder = buttonOrder || BUTTON_ORDER;
+    function half(button, n, LR) {
         let slots = "";
         for (let k = 0; k < N_TRIALS; k++) {
-            const isNew = button === highlightButton && k === n - 1;
-            slots += (k < n)
+            // For blue, swap fill-order within each row pair (k, k+1) so
+            // the *outer* (rightmost) slot of each row fills before the
+            // *inner* (leftmost) one — same "outside → inside" direction
+            // as red, just mirrored. Leave unpaired trailing slot (odd
+            // N_TRIALS) untouched.
+            let idx = k;
+            if (LR === "right") {
+                const partner = (k % 2 === 0) ? k + 1 : k - 1;
+                if (partner < N_TRIALS) idx = partner;
+            }
+            const isNew = button === highlightButton && idx === n - 1;
+            slots += (idx < n)
                 ? `<div class="counter-slot"><div class="counter-token${isNew ? " token-new" : ""}" style="background:rgb(${BTN_COLOR[button]})"></div></div>`
                 : `<div class="counter-slot"></div>`;
         }
-        // 2 columns, ceil(N_TRIALS/2) rows
         return `<div class="counter-half" style="grid-template-rows:repeat(${Math.ceil(N_TRIALS / 2)},1fr)">${slots}</div>`;
     }
-    // red on the left, blue on the right (no visible divider between them)
-    return half("red", redN) + half("blue", blueN);
+    const upperButton = buttonOrder[0];
+    const lowerButton = buttonOrder[1];
+    const upperN = upperButton === "red" ? redN : blueN;
+    const lowerN = lowerButton === "red" ? redN : blueN;
+    return half(upperButton, upperN, "left") + half(lowerButton, lowerN, "right");
 }
 
 // build the counter tokens into the given overlay layer from a counts object.
 // `highlight` ({button, outcome}) optionally animates the just-placed token.
-function renderCountersInto(layer, cnts, highlight) {
+function renderCountersInto(layer, cnts, highlight, buttonOrder) {
     if (!layer) return;
     // bring the counters in front of the agent and gold coin (see CSS)
     layer.classList.add("counter-layer");
@@ -344,19 +362,19 @@ function renderCountersInto(layer, cnts, highlight) {
         cell.style.width = `${cellPct * 0.84}%`;
         cell.style.height = `${cellPct * 0.84}%`;
         const hl = highlight && highlight.outcome === outcome ? highlight.button : null;
-        cell.innerHTML = counterCellHTML(cnts.red[outcome], cnts.blue[outcome], hl);
+        cell.innerHTML = counterCellHTML(cnts.red[outcome], cnts.blue[outcome], hl, buttonOrder);
         layer.appendChild(cell);
     }
 }
 
 // live: render from the global counts into the main grid's overlay layer.
 // pass {button, outcome} to pop in the token just added for that observation.
-function renderMainCounters(highlight) {
-    renderCountersInto(document.getElementById("belief-overlay"), counts, highlight);
+function renderMainCounters(highlight, buttonOrder) {
+    renderCountersInto(document.getElementById("belief-overlay"), counts, highlight, buttonOrder);
 }
 
 // static: a container (base tile + counter tokens + agent) for instruction slides
-function roomCountersStaticHTML(redCounts, blueCounts) {
+function roomCountersStaticHTML(redCounts, blueCounts, buttonOrder, goldOutcome) {
     const cellPct = 100 / gridSize;
     let cells = "";
     for (const outcome of OUTCOMES) {
@@ -365,12 +383,13 @@ function roomCountersStaticHTML(redCounts, blueCounts) {
         const col = idx % gridSize;
         const style = `left:${col * cellPct + cellPct * 0.08}%; top:${r * cellPct + cellPct * 0.08}%;` +
                       `width:${cellPct * 0.84}%; height:${cellPct * 0.84}%;`;
-        cells += `<div class="counter-cell" style="${style}">${counterCellHTML(redCounts[outcome], blueCounts[outcome])}</div>`;
+        cells += `<div class="counter-cell" style="${style}">${counterCellHTML(redCounts[outcome], blueCounts[outcome], null, buttonOrder)}</div>`;
     }
     return `
         <div class="container">
             <img src="img/BaseAction_4k.png" alt="Base" class="base-image" decoding="sync" fetchpriority="high">
             <div class="belief-overlay counter-layer">${cells}</div>
+            ${goldOutcome ? goldInRoomStaticHTML(goldOutcome) : ""}
             <img src="img/Agent.png" alt="Agent" class="agent-image" decoding="sync">
         </div>`;
 }

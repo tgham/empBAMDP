@@ -22,7 +22,7 @@ const QUIZ_QUESTIONS = [
     },
     {
         name: "blue_up",
-        prompt: "Suppose I press the blue button and it takes me to the upward location. What can I infer about the upward location?",
+        prompt: "Suppose you press the blue button and it takes you to the upward location. What can you infer about the upward location?",
         correct: "It's evidence that blue is fairly likely to lead upward, but not a certainty.",
         distractors: [
             "Blue will now always lead upward.",
@@ -31,7 +31,7 @@ const QUIZ_QUESTIONS = [
     },
     {
         name: "red_left",
-        prompt: "Suppose I press the red button and it takes me to the leftward location. What can I infer about the up, down and rightward locations?",
+        prompt: "Suppose you press the red button and it takes you to the leftward location. What can you infer about the up, down and rightward locations?",
         correct: "It's evidence that red is a little less likely to lead to those locations (though they're still possible).",
         distractors: [
             "Those locations are impossible to reach with the red button.",
@@ -57,6 +57,15 @@ const QUIZ_QUESTIONS = [
         ]
     },
     {
+        name: "new_room",
+        prompt: "Suppose you haven't tried one of the buttons yet. What can you assume about this button, based on your current knowledge?",
+        correct: "Since I haven't tried it, it's reasonable to assume it has a similar chance of reaching each location.",
+        distractors: [
+            "Since I haven't tried it yet, it is almost definitely a reliable button.",
+            "Since I haven't tried it yet, it is almost definitely an unreliable button."
+        ]
+    },
+    {
         name: "tick",
         prompt: "What happens if you press the green tick button?",
         correct: "I stop sampling early and move straight on to the coin selection.",
@@ -67,7 +76,7 @@ const QUIZ_QUESTIONS = [
     },
     {
         name: "coin",
-        prompt: "In the coin selection phase, which button should I choose?",
+        prompt: "In the coin selection phase, which button should you choose?",
         correct: "The button that I believe will most likely lead to the location with the coin.",
         distractors: [
             "The button with the highest number of combined tokens.",
@@ -85,7 +94,7 @@ const QUIZ_QUESTIONS = [
     },
 ];
 
-const QUIZ_PASS_FRACTION = 2 / 3;
+const QUIZ_PASS_FRACTION = 3/4;
 const QUIZ_MAX_ATTEMPTS = 2;
 
 //----------------------------------------------------------------------------//
