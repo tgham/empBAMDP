@@ -47,18 +47,30 @@ def _():
     from pybads import BADS
     import os
     import IPython
+    from IPython.display import display
+
 
     import pingouin as pg
     from scipy.special import expit
     # import addcopyfighandler
 
     # from emp_utils import 
-    from emp_runners import enumerate_curves
+    from emp_runners import enumerate_curves, run_emp
     from plotter import plot_curves, plot_heatmap
 
 
     # warnings.filterwarnings('ignore')
-    return np, pd, plot_curves, plot_heatmap, plt, sns, softmax
+    return (
+        display,
+        np,
+        pd,
+        plot_curves,
+        plot_heatmap,
+        plt,
+        run_emp,
+        sns,
+        softmax,
+    )
 
 
 @app.cell(hide_code=True)
@@ -90,10 +102,11 @@ def _(pd):
     ## load
     n_arms = 2
     n_outcomes = 4
-    n_trials = 6
+    n_trials = 8
     termination_arm = True
-    df_curves = pd.read_csv('useful_saves/sweep/{}arms_{}outcomes_{}trials_{}.csv'.format(n_arms, n_outcomes, n_trials, ['noTermination', 'Termination'][termination_arm]))
+    # df_curves = pd.read_csv('useful_saves/sweep/{}arms_{}outcomes_{}trials_{}.csv'.format(n_arms, n_outcomes, n_trials, ['noTermination', 'Termination'][termination_arm]))
     # df_curves = pd.read_csv('useful_saves/sweep/{}arms_{}outcomes_{}trials_{}_ksweep.csv'.format(n_arms, n_outcomes, n_trials, ['noTermination', 'Termination'][termination_arm]))
+    df_curves = pd.read_csv('useful_saves/sweep/{}arms_{}outcomes_{}trials_{}_0.0k.csv'.format(n_arms, n_outcomes, n_trials, ['noTermination', 'Termination'][termination_arm]))
     # df_curves = pd.read_csv('useful_saves/sweep/{}arms_{}outcomes_{}trials_{}_unknown_contexts_0.0k.csv'.format(n_arms, n_outcomes, n_trials, ['noTermination', 'Termination'][termination_arm]))
 
     print('alphas:', df_curves['alpha'].unique())
@@ -114,18 +127,12 @@ def _(df_curves, n_arms, n_trials, plot_curves, termination_arm):
     ## plots
     alpha_to_plot = 0.1
     horizon_to_plot = n_trials
-    k_to_plot = 0.00
+    k_to_plot = 0.0
     plot_curves(df_curves.loc[(df_curves['alpha'] == alpha_to_plot) 
     & (df_curves['horizon'] == horizon_to_plot)
     # & (df_curves['k'] == k_to_plot)
     ], n_arms=n_arms, y='p', eps_tie=1e-06, termination_arm=termination_arm, info_seeker=True, ncols=7)  #    df_tip=df_tip
     return alpha_to_plot, horizon_to_plot
-
-
-@app.cell
-def _(df_curves):
-    df_curves.loc[df_curves['alpha'] == 'unknown']
-    return
 
 
 @app.cell
@@ -364,14 +371,14 @@ def _(np, plt, sns, softmax):
     plt.figure(figsize=(8, 6))
     sns.heatmap(prefs, annot=True, fmt=".2f", cmap="YlGnBu", xticklabels=[f'Room {i+1}' for i in range(len(room_Ts))], yticklabels=[f'ell={ell}' for ell in ells])
     plt.show()
-
-    return (rooms_2a_4k,)
+    return (rooms_4a_4k,)
 
 
 @app.cell
-def _(np, plt, rooms_2a_4k):
+def _(np, plt, rooms_4a_4k):
     ## plot each room as a 3x3 grid. rooms_2a_4k contains 6 rooms, where each room contains 2 lists of 4 binary values, i.e. 2 actions. these binary values refer to which of the cardinal directions (up, down, left, right) are reachable from that action. For example, if the first list is [1, 0, 1, 0], this means that from the central cell, the first action can take the agent up or left but not down or right
-    roi = rooms_2a_4k
+    # roi = rooms_2a_4k
+    roi = rooms_4a_4k
     # roi = rooms_3a_6k
     fig, axs = plt.subplots(len(roi[0]), len(roi), figsize=(len(roi)*3, len(roi[0])*3))
     for ri, r in enumerate(roi):
@@ -380,7 +387,7 @@ def _(np, plt, rooms_2a_4k):
             action_grid = np.zeros((3, 3))
             for d in range(len(action)):
                 if action[d] == 1:
-                    if len(roi[0]) == 2:  # 2a_4k, i.e. cardinal directions
+                    if (len(roi[0]) == 2) or (len(roi[0]) == 4):  # 2a_4k or 4a_4k, i.e. cardinal directions
                         if d == 0:  # up
                             action_grid[0, 1] = 1
                         elif d == 1:  # down
@@ -467,6 +474,152 @@ def _(np, plt):
         plt.suptitle(f'Trial {t+1}')
         plt.tight_layout()
         plt.show()
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    # Behavioural analysis
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Load
+    """)
+    return
+
+
+@app.cell
+def _(display):
+    from load_data import load_directory, load_reversed_pid_map, print_bonuses
+    data = load_directory('expt/Experiment4/data/pilot')
+    print(data.keys())
+    display(data['sample'])
+    n_participants = len(data['sample']['subject_id'].unique())
+    print('n_participants:', n_participants)
+    return data, n_participants
+
+
+app._unparsable_cell(
+    r"""
+    print_bonuses(data['sample'])
+
+    6a19c458f4de39e9027a133b,0.48
+    664df048885a07d315d9236e,0.56
+    5f25419d6c25411a2b68ddd8,0.56
+    65651805d1afb42ba1a55476,0.48
+    66fc6b9f6f3d2324420c1f1a,0.80
+    """,
+    name="_"
+)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Basic plots
+    """)
+    return
+
+
+@app.cell
+def _(data, plt, sns):
+    ## plot least_sampled choices
+    fig, axs = plt.subplots(1, 2, figsize=(12, 6))
+    sns.lineplot(data=data['sample'], x='trial', y='chose_least_sampled', ax=axs[0])
+    axs[0].set_title('Chose Least Sampled')
+    sns.lineplot(data=data['sample'], x='trial', y='chose_most_sampled', ax=axs[1])
+    axs[1].set_title('Chose Most Sampled')
+    plt.tight_layout()
+    plt.show()
+
+    ## plot chosen counts
+    plt.figure()
+    sns.lineplot(data=data['sample'], x='trial', y='chosen_counts_diff')
+    plt.show()
+
+    ## plot repeat choices
+    plt.figure()
+    sns.lineplot(data=data['sample'], x='trial', y='repeat_choice')
+    plt.show()
+
+    ## entropy of chosen and unchosen arms
+    plt.figure()
+    sns.lineplot(data=data['sample'], x='trial', y='entropy_chosen', label='Chosen')
+    # sns.lineplot(data=data['sample'], x='trial', y='entropy_unchosen', label='Unchosen')
+    # plt.legend()
+    plt.show()
+    return
+
+
+@app.cell
+def _(data, plt, sns):
+    ## plot counts_diff on final trial
+    plt.figure()
+    sns.histplot(data=data['sample'].loc[data['sample']['trial']==8], x='counts_post_diff', bins=20, kde=True)
+    plt.show()
+
+    ## early stops
+    early_stops = data['sample'].groupby('subject_id').agg({'ended_early': 'sum'})
+    sns.histplot(data=early_stops, x='ended_early', bins=range(0, 10), discrete=True, stat = 'proportion')
+    plt.xlabel('Number of Early Stops')
+    plt.show()
+    return
+
+
+@app.cell
+def _(switch_counts):
+    switch_counts['subject_id']
+    return
+
+
+@app.cell
+def _(data, n_participants, plt, sns):
+    ## examine number of switch trials per room
+    switch_counts = data['sample'].groupby(['subject_id', 'room']).agg({'repeat_choice': lambda x: (x==False).sum()})
+    plt.figure()
+    sns.histplot(data=switch_counts, x='repeat_choice', bins=range(0, 10), discrete=True,
+    # hue = 'subject_id',legend=False,
+     stat = 'proportion')
+    plt.xlabel('Number of Switch Trials per Room')
+    plt.show()
+
+
+    ## how much within-subject variability is there in the number of switch trials across rooms? 
+    switch_counts_var = switch_counts.groupby('subject_id').agg({'repeat_choice': 'var'})
+    fig2, axs2 = plt.subplots(5, n_participants//5 + 1, figsize=(15, 10))
+    for pid in switch_counts.index.get_level_values('subject_id').unique():
+        sns.histplot(data=switch_counts[switch_counts.index.get_level_values('subject_id') == pid]
+        , x='repeat_choice', bins=range(0, 10), discrete=True,stat = 'proportion', ax=axs2.flatten()[pid])
+        axs2.flatten()[pid].set_title(f'Subject {pid}')
+    plt.tight_layout()
+    plt.show()
+
+
+    ## examine trials where ppt did not stick with the same arm
+    df_switch = data['sample'].loc[data['sample']['repeat_choice']==False]
+    # df_switch
+    return (switch_counts,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Compare against ell agents
+    """)
+    return
+
+
+@app.cell
+def _(data, run_emp):
+    ell = 1
+    init_t = 2
+    df_ell = run_emp(data['sample'], ell=ell, horizon=8, k=0.0, termination_arm=True, init_t=init_t)
+
     return
 
 
