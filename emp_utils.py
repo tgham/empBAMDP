@@ -98,8 +98,8 @@ class EmpAgent:
         ## InfoSeekingAgent must leave this at 0 (a negative term would corrupt it).
         self.cost = float(cost)
 
-        alphas = np.array([float(a) for a, _ in contexts], dtype=float)
-        priors = np.array([float(p) for _, p in contexts], dtype=float)
+        alphas = np.array([float(a) for a, _ in contexts], dtype=float) ## i.e. the alpha for each context
+        priors = np.array([float(p) for _, p in contexts], dtype=float) ## i.e. the prior probability of each context
         priors = priors / priors.sum()
         self.alphas_z = alphas                       # (Z,) symmetric concentrations
         with np.errstate(divide='ignore'):           # a zero prior -> -inf is intended
@@ -398,15 +398,19 @@ def canonical_states(n_arms, n_outcomes, n_trials):
     tasks = []
     for t, st in enumerate(states):
         for canon_C in st.values():
-            canon_counts = tuple(
-                ((int(a), int(o)), int(canon_C[a, o]))
-                for a in range(n_arms) for o in range(n_outcomes)
-                if canon_C[a, o] > 0
-            )
-            history_str = '-'.join(f'a{a}o{o}:{c}' for ((a, o), c) in canon_counts) or 'init'
+            canon_counts, history_str = array_to_hist(canon_C, n_arms, n_outcomes)
             tasks.append((t, canon_C, canon_counts, history_str, orbit_sequence_count(canon_C)))
     return tasks
 
+## useful func for converting canonical count matrices to history_counts representation
+def array_to_hist(canon_C, n_arms, n_outcomes):
+    canon_counts = tuple(
+        ((int(a), int(o)), int(canon_C[a, o]))
+        for a in range(n_arms) for o in range(n_outcomes)
+        if canon_C[a, o] > 0
+    )
+    history_str = '-'.join(f'a{a}o{o}:{c}' for ((a, o), c) in canon_counts) or 'init'
+    return canon_counts, history_str
 
 
 
