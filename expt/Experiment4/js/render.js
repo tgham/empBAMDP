@@ -411,7 +411,7 @@ function renderMainCounters(highlight, buttonOrder) {
 }
 
 // static: a container (base tile + counter tokens + agent) for instruction slides
-function roomCountersStaticHTML(countsByOutcomeAndButton, buttonOrder, goldOutcome) {
+function roomCountersStaticHTML(countsByButton, buttonOrder, goldOutcome) {
     const cellPct = 100 / gridSize;
     let cells = "";
     for (const outcome of OUTCOMES) {
@@ -420,9 +420,11 @@ function roomCountersStaticHTML(countsByOutcomeAndButton, buttonOrder, goldOutco
         const col = idx % gridSize;
         const style = `left:${col * cellPct + cellPct * 0.08}%; top:${r * cellPct + cellPct * 0.08}%;` +
                       `width:${cellPct * 0.84}%; height:${cellPct * 0.84}%;`;
-        cells += `<div class="counter-cell" style="${style}">` +
-            counterCellHTML(countsByOutcomeAndButton[outcome], null, buttonOrder) +
-            `</div>`;
+        const outcomeCounts = {};
+        for (const b of BUTTONS) {
+            outcomeCounts[b] = (countsByButton[b] && countsByButton[b][outcome]) || 0;
+        }
+        cells += `<div class="counter-cell" style="${style}">${counterCellHTML(outcomeCounts, null, buttonOrder)}</div>`;
     }
     return `
         <div class="container">
