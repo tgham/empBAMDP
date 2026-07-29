@@ -491,7 +491,7 @@ def _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cos
 def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      contexts=None, context_prior=None,
                      independent_contexts=False,
-                     df_tip=None, termination_arm=True, temp=1,
+                     termination_arm=True, temp=1,
                      horizons = None,
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50,
@@ -499,17 +499,9 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      tied_only=False, skip_t0=True, n_jobs=1):
     """Q / softmax-prob curves over ell for canonical histories.
 
-    Two modes, switched by whether `df_tip` is provided:
-
-    - `df_tip is None`: enumerate ALL canonical histories at all trials,
+    - enumerate ALL canonical histories at all trials,
       sampling `n_ell_samples` log-spaced ells in `[ell_lo, ell_hi]` for each.
       Coarse but exhaustive picture of how Q/p vary with ell.
-
-    - `df_tip is not None`: iterate only the (history, t) pairs present in
-      `df_tip`, and for each, sample `n_ell_samples` log-spaced ells between
-      `min(ell_lo)` and `max(ell_hi)` of that history's df_tip rows. Focuses
-      the sweep on each history's interesting range. With `tied_only=True`,
-      restrict to histories that have at least one `has_ties=True` row.
 
     Each curve is produced by one belief agent (`EmpAgent`). Two kinds are
     swept into the same DataFrame for comparison:
@@ -547,83 +539,71 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     `alpha`, `current_emp`). If `df_max` is None and any `k != 0` is requested,
     it is derived internally as the max `current_emp` over all swept histories
     for each (alpha, ell) -- i.e. the `k=0` pass seeds the costed ones, so a
-    single call is self-contained. (Internal derivation requires `df_tip is
-    None`, since the per-history ell grids otherwise differ; pass `df_max`
-    explicitly in that case.)
+    single call is self-contained. 
 
     Returns a long-format DataFrame with one row per (history_str, t, ell,
     agent), columns: alpha, context_set, Q_0, Q_1, ..., Q_terminate (if
     applicable), p_0, p_1, ..., p_terminate, and matching info_* columns.
     `n_jobs` parallelises the inner ell sweep.
     """
+
+    ## generate all canonical histories for the given (n_arms, n_outcomes, n_trials)
     states = canonical_states(n_arms, n_outcomes, n_trials)
-    states_by_th = {(int(t), hs): C for (t, C, _, hs, _) in states}
+    states_by_t_and_h = {(int(t), hs): C for (t, C, _, hs, _) in states}
     if n_jobs != 1:
         print(f"Running in parallel with n_cores = {n_jobs}")
+    
 
-    ## set horizon
+    ## if no horizon, set to full horizon
     if horizons is None:
         horizons = [n_trials]
 
-    ## agents to sweep: known (one per alpha) + optional one unknown-context agent.
-    ## entries: (alpha_label, context_set_str, contexts=[(alpha, prior), ...])
-    agent_specs = [(alpha_val, str(alpha_val), [(float(alpha_val), 1.0)])
-                   for alpha_val in alphas]
+    
+    
+    ## agents to sweep: 
+    
+    # known context, i.e. one agent per tested alpha
+    agent_specs = [(alpha_val, str(alpha_val), [(float(alpha_val), 1.0)]) # (alpha_label, context_set_str, contexts=[(alpha, prior), ...])
+                   for alpha_val in alphas] 
+    
+    # unknown-context agent
     if contexts is not None:
         if context_prior is None:
-            context_prior = [1.0 / len(contexts)] * len(contexts)
+            context_prior = [1.0 / len(contexts)] * len(contexts) ## flat prior over contexts 
         ctx_unknown = [(float(a), float(p)) for a, p in zip(contexts, context_prior)]
         context_set_str = 'ctx' + str(tuple(float(a) for a in contexts))
         agent_specs.append(('unknown', context_set_str, ctx_unknown))
 
-    if df_tip is None:
-        ## sweep all canonical histories with the predefined range
-        sweep_tasks = [(int(t), history_str, ell_lo, ell_hi)
-                       for (t, _, _, history_str, _) in states]
-    else:
-        df_tmp = df_tip[df_tip['has_ties']] if tied_only else df_tip
-        if len(df_tmp) == 0:
-            return pd.DataFrame()
-        ranges = (df_tmp.groupby(['history_str', 't'])
-                  .agg(ell_min=('ell_lo', 'min'),
-                       ell_max=('ell_hi', 'max'))
-                  .reset_index())
-        sweep_tasks = [(int(r['t']), r['history_str'],
-                        float(r['ell_min']), float(r['ell_max']))
-                       for _, r in ranges.iterrows()]
 
-    ## t=0 is the empty history: the agent has observed nothing, so it has equal
-    ## preference over the actions -- uninteresting, and the costliest to sweep
-    ## (largest remaining horizon). Skip it by default.
-    if skip_t0:
+    ## define tasks: i.e. sweep all canonical histories with the predefined ell range
+    sweep_tasks = [(int(t), history_str, ell_lo, ell_hi)
+                    for (t, _, _, history_str, _) in states]
+    if skip_t0: ## skip first trial (uninteresting + costly)
         sweep_tasks = [task for task in sweep_tasks if task[0] != 0]
 
-    ## current empowerment (cost-free leaf) for one belief context at one ell
+    ## function for quickly getting current empowerment for one belief state at one ell
     def _leaf_emp(ctx, e, canon_C):
         agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e,
                                  termination_arm=termination_arm,
                                  independent_contexts=independent_contexts)
-        ## canon_C is the RAW count matrix; the agent adds the prior alpha
-        ## internally (predictive: alpha + counts), so do NOT pre-offset here.
         return agent.leaf_value(canon_C)
 
+    
+    ### cost info
+    
     ## sampling costs to sweep
     ks = [ks] if np.isscalar(ks) else list(ks)
     need_cost = any(float(k) != 0 for k in ks)
 
-    ## per-pull sampling cost: c = k * (max achievable emp for this alpha, ell),
-    ## looked up from df_max. If df_max is absent, derive it from the cost-free
-    ## leaf empowerment, taking the max over all swept histories per (alpha, ell).
+
+    ## get the max achievable empowerment over all histories
     if df_max is None and need_cost:
-        if df_tip is not None:
-            raise ValueError("enumerate_curves: pass df_max explicitly when df_tip "
-                             "is set (per-history ell grids prevent internal derivation)")
         sample_ells = np.logspace(np.log10(ell_lo), np.log10(ell_hi), n_ell_samples)
         max_rows = []
         for alpha_label, _, ctx in agent_specs:
             max_emp = np.full(n_ell_samples, -np.inf)
             for (t, _, _, history_str, _) in states:
-                canon_C = states_by_th[(int(t), history_str)]
+                canon_C = states_by_t_and_h[(int(t), history_str)]
                 for ei, e in enumerate(sample_ells):
                     max_emp[ei] = max(max_emp[ei], _leaf_emp(ctx, e, canon_C))
             for ei, e in enumerate(sample_ells):
@@ -631,7 +611,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                                  'current_emp': max_emp[ei]})
         df_max = pd.DataFrame(max_rows)
 
-    ## build per-alpha (ell, current_emp) arrays once for fast lookup
+    ## convert to table for fast lookup
     cost_tables = None
     if df_max is not None:
         cost_tables = {}
@@ -639,6 +619,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
             cost_tables[key] = (grp['ell'].to_numpy(dtype=float),
                                 grp['current_emp'].to_numpy(dtype=float))
 
+    ## actual cost = k * (max achievable emp for this alpha, ell)
     def cost_for(alpha_label, e, k):
         if k == 0 or cost_tables is None:
             return 0.0
@@ -651,40 +632,38 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
             raise KeyError(f"df_max has no current_emp for alpha={alpha_label!r}, ell={e}")
         return k * float(emps_arr[hits[0]])
 
+    ## big loop
     rows = []
     for alpha_label, context_set, ctx in agent_specs:
         for horizon in horizons:
-            ## info-seeking agent (ell-free) over this context set
+            
+            ## also define the info-seeking agent (ell-free) over this context set
             info_agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm,
                                           independent_contexts=independent_contexts)
             for i in tqdm(range(len(sweep_tasks)), desc=f"Enumerating curves (alpha={alpha_label})"):
                 t, history_str, e_lo, e_hi = sweep_tasks[i]
-                canon_C = states_by_th[(t, history_str)]
-                # h_remaining = horizon - t
+                canon_C = states_by_t_and_h[(t, history_str)]
                 h_remaining = int(np.min([horizon, n_trials - t]))
                 sample_ells = np.logspace(np.log10(e_lo), np.log10(e_hi), n_ell_samples)
 
-                ## info-seeking agent: ell-free, same across all sampled ells for this history
+                ## info-seeking agent (not parameterised by ell)
                 info_Q = info_agent.bellman_Q(canon_C, h_remaining)
-                info_best_a = int(np.argmin(info_Q))
+                info_best_a = int(np.argmin(info_Q)) # NB seeks to minimise posterior var
                 info_probs = _softmax(-info_Q / temp)
 
-                ## current emp (cost-free leaf): k-independent, computed once
+                ## emp of current belief state for each ell agent
                 current_emps = [_leaf_emp(ctx, e, canon_C) for e in sample_ells]
 
-                ## posterior prob of contexts (same for all agents, since they share the same prior and history).
-                ## global: p_ctx shape (Z,); independent: shape (A, Z) -- per-arm posteriors.
+                ## posterior prob of context if unknown
                 if context_set.startswith('ctx'):
                     agent_tmp = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=sample_ells[0],
                                                  termination_arm=termination_arm,
                                                  independent_contexts=independent_contexts)
-                    ## context_posterior expects RAW counts (it adds alpha_z internally).
                     p_ctx = agent_tmp.context_posterior(canon_C)
-                    # print(f"  history {history_str}, t={t}, p_ctx={p_ctx}")
-                else:
+                else: # known context, so no posterior needed
                     p_ctx = np.array([1.0])
                     
-                ## sweep the sampling costs: re-evaluate Q at each k, stack rows
+                ## evaluate Q at each k
                 for k in ks:
                     costs = [cost_for(alpha_label, e, k) for e in sample_ells]
 
@@ -701,6 +680,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                             for e, c in zip(sample_ells, costs)
                         )
 
+                    ## save data
                     for ei in range(len(sample_ells)):
                         e = sample_ells[ei]
                         Q = Qs[ei]
