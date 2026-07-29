@@ -496,7 +496,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50,
                      df_max=None, ks=(0.0,),
-                     tied_only=False, skip_t0=True, n_jobs=1):
+                     tied_only=False, init_t=0, n_jobs=1):
     """Q / softmax-prob curves over ell for canonical histories.
 
     - enumerate ALL canonical histories at all trials,
@@ -578,8 +578,9 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     ## define tasks: i.e. sweep all canonical histories with the predefined ell range
     sweep_tasks = [(int(t), history_str, ell_lo, ell_hi)
                     for (t, _, _, history_str, _) in states]
-    if skip_t0: ## skip first trial (uninteresting + costly)
-        sweep_tasks = [task for task in sweep_tasks if task[0] != 0]
+    # if skip_t0: ## skip first trial (uninteresting + costly)
+    #     sweep_tasks = [task for task in sweep_tasks if task[0] != 0]
+    sweep_tasks = [task for task in sweep_tasks if task[0] >= init_t] ## skip first init_t trials (uninteresting + costly)
 
     ## function for quickly getting current empowerment for one belief state at one ell
     def _leaf_emp(ctx, e, canon_C):
