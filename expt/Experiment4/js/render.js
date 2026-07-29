@@ -20,7 +20,7 @@ let GOLD_FRACTION = 1;
 function goldMaskStyle(fraction) {
     const f = Math.max(0, Math.min(1, fraction));
     const deg = f * 360;
-    const mask = `conic-gradient(#000 ${deg}deg, transparent ${deg}deg)`;
+    const mask = `conic-gradient(from 180deg, #000 ${deg}deg, transparent ${deg}deg)`;
     return `-webkit-mask-image:${mask}; mask-image:${mask}; -webkit-mask-size:100% 100%; mask-size:100% 100%;`;
 }
 
@@ -304,7 +304,7 @@ function renderMainBeliefOverlay() {
     const layer = document.getElementById("belief-overlay");
     if (!layer) return;
     layer.innerHTML = "";
-    const cellPct = 100 / gridSize; // 33.33
+    const cellPct = 100 / gridSize;
 
     for (const outcome of OUTCOMES) {
         const idx = OUTCOME_CELL[outcome];
@@ -313,50 +313,47 @@ function renderMainBeliefOverlay() {
 
         const cell = document.createElement("div");
         cell.className = "overlay-cell";
-        // inset within the cell so the base grid lines stay visible (same 0.1/0.8
-        // convention as the target images in Experiment3)
         cell.style.left = `${col * cellPct + cellPct * 0.1}%`;
         cell.style.top = `${r * cellPct + cellPct * 0.1}%`;
         cell.style.width = `${cellPct * 0.8}%`;
         cell.style.height = `${cellPct * 0.8}%`;
 
-        const pRed = posteriorMean("red", outcome);
-        const pBlue = posteriorMean("blue", outcome);
+        const stripeW = 100 / BUTTONS.length;
+        let svg = "";
+        BUTTONS.forEach((button, i) => {
+            const p = posteriorMean(button, outcome);
+            const x = i * stripeW;
+            svg += `<rect x="${x}" y="0" width="${stripeW}" height="100"
+                        fill="rgb(${BTN_COLOR[button]})" fill-opacity="${p}"></rect>`;
+            svg += `<text x="${x + stripeW / 2}" y="54" text-anchor="middle" class="overlay-num">${p.toFixed(2)}</text>`;
+        });
+        for (let i = 1; i < BUTTONS.length; i++) {
+            const x = i * stripeW;
+            svg += `<line x1="${x}" y1="0" x2="${x}" y2="100" stroke="#999" stroke-width="1.5"></line>`;
+        }
 
-        cell.innerHTML = `
-            <svg viewBox="0 0 100 100" class="overlay-svg">
-                <polygon points="0,0 100,0 100,100"
-                         fill="rgb(${BTN_COLOR.red})" fill-opacity="${pRed}"></polygon>
-                <polygon points="0,0 100,100 0,100"
-                         fill="rgb(${BTN_COLOR.blue})" fill-opacity="${pBlue}"></polygon>
-                <line x1="0" y1="0" x2="100" y2="100" stroke="#999" stroke-width="1.5"></line>
-                <text x="72" y="30" class="overlay-num">${pRed.toFixed(2)}</text>
-                <text x="28" y="76" class="overlay-num">${pBlue.toFixed(2)}</text>
-            </svg>`;
+        cell.innerHTML = `<svg viewBox="0 0 100 100" class="overlay-svg" preserveAspectRatio="none">${svg}</svg>`;
         layer.appendChild(cell);
     }
 }
 
-//----------------------------------------------------------------------------//
-// Counter/token mode: a single grid whose four reachable cells each hold a red
-// half and a blue half. Each half has N_TRIALS (invisible) slots that fill with
-// small button-coloured tokens as that button is observed reaching that outcome.
-// The token count in a half == the number of times that button led there.
-//----------------------------------------------------------------------------//
-// `highlightButton` ("red"/"blue"/null): pop in the last filled token of that
-// half (used to animate the token placed once the agent reaches the cell).
-function counterCellHTML(redN, blueN, highlightButton, buttonOrder) {
+// `outcomeCounts`: {button: count} — how many times each button has led to
+// this outcome so far. `buttonOrder`: the 3 buttons in left-to-right display
+// order for this room's counter grid (reuse the room's triangle buttonOrder,
+// or a fixed order — whichever you're using elsewhere for consistency).
+function counterCellHTML(outcomeCounts, highlightButton, buttonOrder) {
     buttonOrder = buttonOrder || BUTTON_ORDER;
-    function half(button, n, LR) {
+    if (!Array.isArray(buttonOrder) || buttonOrder.length !== BUTTONS.length) {
+        // console.error("counterCellHTML: invalid buttonOrder", buttonOrder);
+        buttonOrder = BUTTONS.slice(); // safe fallback, avoids a hard crash
+    }
+    const rows = Math.ceil(N_TRIALS / 2);
+
+    function section(button, n, mirrored) {
         let slots = "";
         for (let k = 0; k < N_TRIALS; k++) {
-            // For blue, swap fill-order within each row pair (k, k+1) so
-            // the *outer* (rightmost) slot of each row fills before the
-            // *inner* (leftmost) one — same "outside → inside" direction
-            // as red, just mirrored. Leave unpaired trailing slot (odd
-            // N_TRIALS) untouched.
             let idx = k;
-            if (LR === "right") {
+            if (mirrored) {
                 const partner = (k % 2 === 0) ? k + 1 : k - 1;
                 if (partner < N_TRIALS) idx = partner;
             }
@@ -365,20 +362,27 @@ function counterCellHTML(redN, blueN, highlightButton, buttonOrder) {
                 ? `<div class="counter-slot"><div class="counter-token${isNew ? " token-new" : ""}" style="background:rgb(${BTN_COLOR[button]})"></div></div>`
                 : `<div class="counter-slot"></div>`;
         }
-        return `<div class="counter-half" style="grid-template-rows:repeat(${Math.ceil(N_TRIALS / 2)},1fr)">${slots}</div>`;
+        return `<div class="counter-section" style="grid-template-rows:repeat(${rows},1fr)">${slots}</div>`;
     }
-    const upperButton = buttonOrder[0];
-    const lowerButton = buttonOrder[1];
-    const upperN = upperButton === "red" ? redN : blueN;
-    const lowerN = lowerButton === "red" ? redN : blueN;
-    return half(upperButton, upperN, "left") + half(lowerButton, lowerN, "right");
+
+    // index instead of destructure — avoids the "not iterable" crash entirely
+    // even if something malformed still gets through, and is functionally
+    // identical.
+    const leftButton = buttonOrder[0];
+    const midButton = buttonOrder[1];
+    const rightButton = buttonOrder[2];
+
+    return (
+        section(leftButton, outcomeCounts[leftButton], false) +
+        section(midButton, outcomeCounts[midButton], false) +
+        section(rightButton, outcomeCounts[rightButton], false)
+    );
 }
 
 // build the counter tokens into the given overlay layer from a counts object.
 // `highlight` ({button, outcome}) optionally animates the just-placed token.
 function renderCountersInto(layer, cnts, highlight, buttonOrder) {
     if (!layer) return;
-    // bring the counters in front of the agent and gold coin (see CSS)
     layer.classList.add("counter-layer");
     layer.innerHTML = "";
     const cellPct = 100 / gridSize;
@@ -393,7 +397,9 @@ function renderCountersInto(layer, cnts, highlight, buttonOrder) {
         cell.style.width = `${cellPct * 0.84}%`;
         cell.style.height = `${cellPct * 0.84}%`;
         const hl = highlight && highlight.outcome === outcome ? highlight.button : null;
-        cell.innerHTML = counterCellHTML(cnts.red[outcome], cnts.blue[outcome], hl, buttonOrder);
+        const outcomeCounts = {};
+        for (const b of BUTTONS) outcomeCounts[b] = cnts[b][outcome];
+        cell.innerHTML = counterCellHTML(outcomeCounts, hl, buttonOrder);
         layer.appendChild(cell);
     }
 }
@@ -405,7 +411,7 @@ function renderMainCounters(highlight, buttonOrder) {
 }
 
 // static: a container (base tile + counter tokens + agent) for instruction slides
-function roomCountersStaticHTML(redCounts, blueCounts, buttonOrder, goldOutcome) {
+function roomCountersStaticHTML(countsByOutcomeAndButton, buttonOrder, goldOutcome) {
     const cellPct = 100 / gridSize;
     let cells = "";
     for (const outcome of OUTCOMES) {
@@ -414,7 +420,9 @@ function roomCountersStaticHTML(redCounts, blueCounts, buttonOrder, goldOutcome)
         const col = idx % gridSize;
         const style = `left:${col * cellPct + cellPct * 0.08}%; top:${r * cellPct + cellPct * 0.08}%;` +
                       `width:${cellPct * 0.84}%; height:${cellPct * 0.84}%;`;
-        cells += `<div class="counter-cell" style="${style}">${counterCellHTML(redCounts[outcome], blueCounts[outcome], null, buttonOrder)}</div>`;
+        cells += `<div class="counter-cell" style="${style}">` +
+            counterCellHTML(countsByOutcomeAndButton[outcome], null, buttonOrder) +
+            `</div>`;
     }
     return `
         <div class="container">

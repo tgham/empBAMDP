@@ -8,21 +8,23 @@
 function buttonStackHTML(opts) {
     opts = opts || {};
     const label_on = opts.label_on === true;
-    const buttonOrder = opts.buttonOrder || BUTTON_ORDER;
-    const upper = buttonOrder[0], lower = buttonOrder[1];
+    const order = opts.buttonOrder || BUTTON_ORDER; // [top, bottomLeft, bottomRight]
+    const [top, bl, br] = order;
     function labelFor(color) {
-        return color === "red" ? "Red button" : "Blue button";
+        return color.charAt(0).toUpperCase() + color.slice(1) + " button";
+    }
+    function item(color, posClass) {
+        return `
+            <div class="button-triangle-item ${posClass}">
+                <div class="button-label${label_on ? "" : " hidden"}">${label_on ? labelFor(color) : ""}</div>
+                <div class="cbtn ${color}" id="btn-${color}"></div>
+            </div>`;
     }
     return `
-        <div class="button-stack">
-            <div class="button-stack-item">
-                <div class="button-label${label_on ? "" : " hidden"}">${label_on ? labelFor(upper) : ""}</div>
-                <div class="cbtn ${upper}" id="btn-${upper}"></div>
-            </div>
-            <div class="button-stack-item cbtn-lower">
-                <div class="button-label${label_on ? "" : " hidden"}">${label_on ? labelFor(lower) : ""}</div>
-                <div class="cbtn ${lower}" id="btn-${lower}"></div>
-            </div>
+        <div class="button-triangle">
+            ${item(top, "pos-top")}
+            ${item(bl, "pos-bottom-left")}
+            ${item(br, "pos-bottom-right")}
         </div>`;
 }
 
@@ -35,28 +37,17 @@ function checkButtonHTML(opts) {
     return `
         <div class="check-stack${placeholder ? " hidden" : ""}"${placeholder ? " aria-hidden=\"true\"" : ""}>
             ${tick_label ? `<div class="check-label">Tick button</div>` : ""}
-            <div class="checkbtn" id="btn-check"><img src="img/Check.png" alt="Done testing"></div>
+            <div class="checkbtn" id="btn-check"><img src="img/Check_orange.png" alt="Done testing"></div>
         </div>`;
 }
 
 // Right-hand belief panel: colorbar legend (overlay) or two belief grids (separate).
 function beliefPanelHTML() {
-    // counters + overlay draw into the main grid; counters has no side panel.
-    if (BELIEF_DISPLAY === "counters") {
-        return ``;
-    }
+    if (BELIEF_DISPLAY === "counters") return ``;
     if (BELIEF_DISPLAY === "overlay") {
-        return `
-            <div class="belief-stack">
-                ${colorbarLegendHTML("red")}
-                ${colorbarLegendHTML("blue")}
-            </div>`;
+        return `<div class="belief-stack">${BUTTONS.map(colorbarLegendHTML).join("")}</div>`;
     }
-    return `
-        <div class="belief-stack">
-            ${beliefBlockHTML("blue")}
-            ${beliefBlockHTML("red")}
-        </div>`;
+    return `<div class="belief-stack">${BUTTONS.map(beliefBlockHTML).join("")}</div>`;
 }
 
 // How many of the room's presses are still to come, e.g. "8 choices remaining".
@@ -71,8 +62,9 @@ function refreshBeliefs(highlight, buttonOrder) {
     } else if (BELIEF_DISPLAY === "overlay") {
         renderMainBeliefOverlay();
     } else {
-        renderBeliefGrid("red", document.getElementById("belief-red"));
-        renderBeliefGrid("blue", document.getElementById("belief-blue"));
+        for (const b of BUTTONS) {
+            renderBeliefGrid(b, document.getElementById("belief-" + b));
+        }
     }
     updateBeliefLabels();
 }
@@ -81,27 +73,28 @@ function refreshBeliefs(highlight, buttonOrder) {
 // choice. If a tick button is present and `onCheck` is given, `onCheck(rt)` fires
 // when it is clicked. rt is measured from when the buttons become available.
 function wireButtons(onPress, onCheck) {
-    const btnRed = document.getElementById("btn-red");
-    const btnBlue = document.getElementById("btn-blue");
+    const btnEls = {};
+    for (const b of BUTTONS) btnEls[b] = document.getElementById("btn-" + b);
     const btnCheck = document.getElementById("btn-check");
     const t0 = performance.now();
 
     function disableAll() {
-        btnRed.classList.add("disabled");
-        btnBlue.classList.add("disabled");
+        for (const b of BUTTONS) btnEls[b].classList.add("disabled");
         if (btnCheck) btnCheck.classList.add("disabled");
     }
 
     function handle(button) {
         const rt = Math.round(performance.now() - t0);
         disableAll();
-        // hide the unselected colour button and the whole tick (button + label)
-        (button === "red" ? btnBlue : btnRed).classList.add("hidden");
+        for (const b of BUTTONS) {
+            if (b !== button) btnEls[b].classList.add("hidden");
+        }
         if (btnCheck) (btnCheck.closest(".check-stack") || btnCheck).classList.add("hidden");
         onPress(button, rt);
     }
-    btnRed.addEventListener("click", () => handle("red"));
-    btnBlue.addEventListener("click", () => handle("blue"));
+    for (const b of BUTTONS) {
+        btnEls[b].addEventListener("click", () => handle(b));
+    }
 
     if (btnCheck && onCheck) {
         btnCheck.addEventListener("click", function () {
@@ -171,8 +164,10 @@ function make_room_sampling(room_num, opts) {
         row.contextual = CONTEXTUAL;
         row.alpha_ctx1 = ALPHA_CTX1;
         row.alpha_ctx2 = ALPHA_CTX2;
-        row.button_upper = buttonOrder[0];
-        row.button_lower = buttonOrder[1];
+        row.button_top = buttonOrder[0];
+        row.button_bottom_left = buttonOrder[1];
+        row.button_bottom_right = buttonOrder[2];
+        row.button_order = buttonOrder.slice(); // full array, for convenience downstream
         row.trial_type = "html-keyboard-response";
         return row;
     }
@@ -222,7 +217,7 @@ function make_room_sampling(room_num, opts) {
             // press. The agent grid + counters layer are left in place (persist).
             function armPress() {
                 const row = document.querySelector(".task-row");
-                const bs = row.querySelector(".button-stack");
+                const bs = row.querySelector(".button-triangle");
                 if (bs) bs.outerHTML = buttonStackHTML({ buttonOrder: buttonOrder });
                 const cs = row.querySelector(".check-stack");
                 if (cs) cs.outerHTML = checkButtonHTML();
