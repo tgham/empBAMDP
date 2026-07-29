@@ -130,9 +130,8 @@ function make_room_intro(room_num) {
             for (const b of BUTTONS) {
                 for (const o of OUTCOMES) counts[b][o] = 0;
             }
-            // draw this room's hidden transition functions from the Dirichlet prior
+            GOLD_FRACTION = 1;              // <-- new: fresh coin for this room
             sampleTrueT();
-            // allow sampling again in this new room
             sampling_ended = false;
         },
         on_finish: function (data) {
@@ -186,6 +185,7 @@ function make_room_sampling(room_num, opts) {
                 `<span class="trial-counter">${choicesRemainingText(N_TRIALS)}</span>`,
                 `Click a button to move, or the tick to finish testing.`
             ],
+            gap: goldCostCoinHTML(),
             stage: `
                 <div class="task-row">
                     ${checkButtonHTML()}
@@ -199,6 +199,7 @@ function make_room_sampling(room_num, opts) {
             // agent starts in the central cell
             agent_topPos = topPos0;
             agent_leftPos = leftPos0;
+            GOLD_FRACTION = 1;               // <-- new
         },
         on_load: function () {
             refreshBeliefs(null, buttonOrder);
@@ -231,14 +232,17 @@ function make_room_sampling(room_num, opts) {
             }
 
             function onPress(button, rt) {
-                // belief state the choice was based on (before this observation)
                 const counts_pre = countsSnapshot();
                 const posteriors_pre = posteriorSnapshot();
+                const gold_fraction_pre = GOLD_FRACTION;
+
+                // sampling cost: each click removes a 1/(T+1) slice of the coin
+                GOLD_FRACTION = Math.max(0, GOLD_FRACTION - 1 / (N_TRIALS+1));
+                updateGoldCostCoin();
 
                 const outcome = sampleCategorical(TRUE_T[button]);
                 counts[button][outcome] += 1;
 
-                // the agent moves first; beliefs update only once it has arrived
                 moveAgent(outcome);
 
                 jsPsych.data.get().push(stampSession({
@@ -249,16 +253,16 @@ function make_room_sampling(room_num, opts) {
                     outcome: outcome,
                     rt: rt,
                     ended_early: false,
-                    counts: counts_pre,            // transition counts at decision time
+                    counts: counts_pre,
                     posterior_means: posteriors_pre,
-                    counts_post: countsSnapshot()  // counts after this observation
+                    counts_post: countsSnapshot(),
+                    gold_fraction_pre: gold_fraction_pre,      // <-- new
+                    gold_fraction_post: GOLD_FRACTION          // <-- new
                 }));
 
                 setTimeout(function () {
-                    // arrived -> reveal the updated belief; pop in the new token
                     refreshBeliefs({ button: button, outcome: outcome }, buttonOrder);
                     setTimeout(function () {
-                        // slide the agent back to the centre (animated) for the next press
                         const agentEl = document.getElementById("agent");
                         agent_topPos = topPos0;
                         agent_leftPos = leftPos0;
@@ -305,13 +309,15 @@ function make_gold_pause(room_num) {
         choices: "NO_KEYS",
         response_ends_trial: false,
         trial_duration: 1000,
-        stimulus: screenHTML({
-            title: "Gold time!",
-            stage: `
-                <div style="display:flex; justify-content:center; align-items:center; min-height:220px;">
-                    ${goldCoinStaticHTML()}
-                </div>`
-        }),
+        stimulus: function () {
+            return screenHTML({
+                title: "Gold time!",
+                stage: `
+                    <div style="display:flex; justify-content:center; align-items:center; min-height:220px;">
+                        ${goldCoinStaticHTML(GOLD_FRACTION)}
+                    </div>`
+            });
+        },
         data: { task: "gold_pause", room_num: room_num }
     };
 }
@@ -385,17 +391,18 @@ function make_gold_trial(room_num, opts) {
                     chosen_button: button,
                     gold_outcome: goldOutcome,
                     rt: rt,
-                    counts: countsSnapshot(),                 // final transition counts for the room
-                    posterior_means: posteriorSnapshot(),     // belief the choice was based on
-                    button_ctx: JSON.parse(JSON.stringify(BUTTON_CTX)), // prior each button came from
+                    counts: countsSnapshot(),
+                    posterior_means: posteriorSnapshot(),
+                    button_ctx: JSON.parse(JSON.stringify(BUTTON_CTX)),
                     chosen_button_ctx: BUTTON_CTX[button],
-                    chosen_gold_prob: chosen_gold_prob,       // true P(chosen button -> coin)
-                    best_gold_prob: best_gold_prob,           // best true P(any button -> coin)
-                    correct: correct,                         // did they pick the best button?
-                    sampled_outcome: sampled_outcome,          // what the transition actually sampled
-                    collected: collected,                      // did that sample match the gold cell?
-                    collected_gold_total: collected_gold,       // running tally for the bonus
-                    outcome_shown: SHOW_GOLD_OUTCOME
+                    chosen_gold_prob: chosen_gold_prob,
+                    best_gold_prob: best_gold_prob,
+                    correct: correct,
+                    sampled_outcome: sampled_outcome,
+                    collected: collected,
+                    collected_gold_total: collected_gold,
+                    outcome_shown: SHOW_GOLD_OUTCOME,
+                    gold_fraction_remaining: GOLD_FRACTION   // <-- new: how much coin was left to win
                 };
 
                 if (!SHOW_GOLD_OUTCOME) {

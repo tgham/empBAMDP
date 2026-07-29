@@ -163,6 +163,31 @@ p.screen-note {
     margin: 0;
 }
 
+.screen-gap {
+    position: absolute;
+    top: var(--text-top);
+    height: calc(50% - var(--room-size) / 2.75 - var(--text-top));
+    left: 50%;
+    transform: translateX(-50%);
+    width: var(--screen-width);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.gold-cost-wrap {
+    width: 100px;
+    height: 100px;
+}
+
+.gold-cost-coin {
+    width: 100%;
+    height: 100%;
+    display: block;
+    transition: -webkit-mask-image 0.25s linear, mask-image 0.25s linear;
+}
+
 /* ------------------------------------ */
 /*  belief overlay on the main grid       */
 /*  (overlay display mode)                */

@@ -107,11 +107,12 @@ function taskDisplayStaticHTML(redCounts, blueCounts, opts) {
         </div>`;
 }
 
-// a lone gold coin, for slides that talk about the coin without drawing a room.
-// The in-room .gold-image is absolutely positioned inside .container, so it can't
-// be reused on a text slide -- .gold-coin-static is the free-standing version.
-function goldCoinStaticHTML() {
-    return `<img src="img/Goal.png" alt="Gold coin" class="gold-coin-static">`;
+// fraction defaults to 1 (full coin) so existing callers are unaffected.
+function goldCoinStaticHTML(fraction) {
+    const f = fraction === undefined ? 1 : fraction;
+    return `
+        <img src="img/Goal.png" alt="Gold Coin" class="gold-coin-static"
+             style="${goldMaskStyle(f)}">`;
 }
 
 // The demo trials' own advance button. It is pinned to the bottom of the screen

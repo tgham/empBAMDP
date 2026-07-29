@@ -10,6 +10,35 @@ const MOVE_MS = 400; // agent move animation duration (must match #agent CSS tra
 let agent_topPos = topPos0;
 let agent_leftPos = leftPos0;
 
+// Fraction (1..0) of the gold coin remaining in this room's sampling phase.
+// Depleted by 1/N_TRIALS on every button click (not on tick clicks).
+let GOLD_FRACTION = 1;
+
+// Inline CSS implementing a pie-chart depletion mask: reveals only the
+// remaining `fraction` (0..1) of an image, wiped away clockwise from 12 o'clock,
+// i.e. removes a growing "slice" of the coin as fraction shrinks.
+function goldMaskStyle(fraction) {
+    const f = Math.max(0, Math.min(1, fraction));
+    const deg = f * 360;
+    const mask = `conic-gradient(#000 ${deg}deg, transparent ${deg}deg)`;
+    return `-webkit-mask-image:${mask}; mask-image:${mask}; -webkit-mask-size:100% 100%; mask-size:100% 100%;`;
+}
+
+// The depleting coin shown top-centre during sampling.
+function goldCostCoinHTML() {
+    return `
+        <div class="gold-cost-wrap">
+            <img id="gold-cost-coin" src="img/Goal.png" alt="Gold coin remaining"
+                 class="gold-cost-coin" style="${goldMaskStyle(GOLD_FRACTION)}">
+        </div>`;
+}
+
+// Redraw the top-centre coin from the current GOLD_FRACTION.
+function updateGoldCostCoin() {
+    const el = document.getElementById("gold-cost-coin");
+    if (el) el.setAttribute("style", goldMaskStyle(GOLD_FRACTION));
+}
+
 //----------------------------------------------------------------------------//
 // Screen scaffold, shared by every screen of the task and the instructions. See
 // css/style.css for the geometry: the stage sits dead centre and the text is
@@ -34,6 +63,7 @@ function screenHTML(opts) {
                 ${title}
                 <div id="screen-lines">${linesHTML(opts.lines)}</div>
             </div>
+            ${opts.gap ? `<div class="screen-gap">${opts.gap}</div>` : ``}
             ${opts.stage ? `<div class="screen-stage">${opts.stage}</div>` : ``}
             ${opts.below ? `<div class="screen-below">${opts.below}</div>` : ``}
         </div>`;
@@ -111,6 +141,7 @@ function placeGold(outcome) {
     const gold = document.getElementById("gold");
     gold.style.top = top + "%";
     gold.style.left = left + "%";
+    gold.style.cssText += goldMaskStyle(GOLD_FRACTION);   // <-- new
 }
 
 //----------------------------------------------------------------------------//
