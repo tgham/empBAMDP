@@ -164,7 +164,7 @@ function make_room_sampling(room_num, opts) {
     // Manually-pushed rows don't get the session-level fields that jsPsych
     // auto-applies to rows it writes itself, so stamp them on here to match.
     function stampSession(row) {
-        row.subject_id = subject_id;
+        row.subject_id = id;  // use the internal id from the backend rather than the Prolific PID
         row.study_id = study_id;
         row.session_id = session_id;
         row.belief_display = BELIEF_DISPLAY;
