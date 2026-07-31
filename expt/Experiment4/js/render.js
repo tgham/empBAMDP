@@ -337,14 +337,15 @@ function renderMainBeliefOverlay() {
 }
 
 // `outcomeCounts`: {button: count} — how many times each button has led to
-// this outcome so far. `buttonOrder`: the 3 buttons in left-to-right display
-// order for this room's counter grid (reuse the room's triangle buttonOrder,
-// or a fixed order — whichever you're using elsewhere for consistency).
+// this outcome so far. `buttonOrder`: [top, bottomLeft, bottomRight] — the
+// room's triangle layout. Displayed left-to-right as
+// [bottomLeft, top, bottomRight], so each token column lines up under/above
+// its corresponding button.
 function counterCellHTML(outcomeCounts, highlightButton, buttonOrder) {
     buttonOrder = buttonOrder || BUTTON_ORDER;
     if (!Array.isArray(buttonOrder) || buttonOrder.length !== BUTTONS.length) {
-        // console.error("counterCellHTML: invalid buttonOrder", buttonOrder);
-        buttonOrder = BUTTONS.slice(); // safe fallback, avoids a hard crash
+        console.error("counterCellHTML: invalid buttonOrder", buttonOrder);
+        buttonOrder = BUTTONS.slice();
     }
     const rows = Math.ceil(N_TRIALS / 2);
 
@@ -364,17 +365,18 @@ function counterCellHTML(outcomeCounts, highlightButton, buttonOrder) {
         return `<div class="counter-section" style="grid-template-rows:repeat(${rows},1fr)">${slots}</div>`;
     }
 
-    // index instead of destructure — avoids the "not iterable" crash entirely
-    // even if something malformed still gets through, and is functionally
-    // identical.
-    const leftButton = buttonOrder[0];
-    const midButton = buttonOrder[1];
-    const rightButton = buttonOrder[2];
+    // buttonOrder is [top, bottomLeft, bottomRight]; remap to display order
+    // [bottomLeft, top, bottomRight] so each column matches its button's
+    // horizontal position in the triangle.
+    const [topButton, bottomLeftButton, bottomRightButton] = buttonOrder;
+    const leftButton = bottomLeftButton;
+    const midButton = topButton;
+    const rightButton = bottomRightButton;
 
     return (
         section(leftButton, outcomeCounts[leftButton], false) +
         section(midButton, outcomeCounts[midButton], false) +
-        section(rightButton, outcomeCounts[rightButton], false)
+        section(rightButton, outcomeCounts[rightButton], true)
     );
 }
 

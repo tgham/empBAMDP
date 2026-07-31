@@ -68,16 +68,16 @@ const QUIZ_QUESTIONS = [
     {
         name: "cost",
         prompt: "What is the cost of testing a button?",
-        correct: "Testing a button reduces the size, and therefore value, of the gold coin that you can possibly collect in the current room.",
+        correct: "Testing a button reduces the size, and therefore value, of the gold coin that I can possibly collect in the current room.",
         distractors: [
-            "Testing a button reduces the number of rooms you can visit.",
+            "Testing a button reduces the number of rooms I can visit.",
             "None - testing a button is always beneficial."
         ]
     },
     {
         name: "tick",
         prompt: "What happens if you press the orange tick button?",
-        correct: "I stop testing early and move straight on to the gold selection.",
+        correct: "I stop testing early and move straight on to the gold collection phase.",
         distractors: [
             "I collect a gold coin.",
             "I reset the room and start it again."
@@ -85,7 +85,7 @@ const QUIZ_QUESTIONS = [
     },
     {
         name: "coin_size",
-        prompt: "In the gold selection phase, what is the value of the gold coin that can possibly be collected?",
+        prompt: "In the gold collection phase, what is the value of the gold coin that can possibly be collected?",
         correct: "The value depends on the size of the coin, which is determined by the number of buttons pressed.",
         distractors: [
             "The gold coin is always the same size, so the value is always the same.",
@@ -94,7 +94,7 @@ const QUIZ_QUESTIONS = [
     },
     {
         name: "coin",
-        prompt: "In the gold selection phase, which button should you choose?",
+        prompt: "In the gold collection phase, which button should you choose?",
         correct: "The button that I believe will most likely lead to the location with the coin.",
         distractors: [
             "The button with the highest number of combined tokens.",
@@ -103,7 +103,7 @@ const QUIZ_QUESTIONS = [
     },
     {
         name: "coin_correct",
-        prompt: "In the gold selection phase, is there a button that guarantees leading to the location with the coin?",
+        prompt: "In the gold collection phase, is there a button that guarantees leading to the location with the coin?",
         correct: "Not necessarily - sometimes neither button reliably leads to the location with the coin.",
         distractors: [
             "Yes - there is always one button that certainly leads to the location with the coin.",

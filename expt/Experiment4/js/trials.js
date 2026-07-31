@@ -114,7 +114,8 @@ function make_room_intro(room_num) {
         stimulus: screenHTML({
             title: `Room ${room_num} of ${N_ROOMS}`,
             lines: [
-                `Test out the two buttons over up to ${N_TRIALS} choices to learn where each one takes you.`,
+                `You are in a new room with new buttons.`,
+                `Test out the ${BUTTONS.length} buttons over up to ${N_TRIALS} choices to learn how they work.`,
                 `Press any key to begin.`
             ]
         }),

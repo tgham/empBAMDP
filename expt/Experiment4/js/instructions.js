@@ -167,7 +167,7 @@ function outcomeByTokenCount(which) {
 // keep playing.
 //----------------------------------------------------------------------------//
 function make_auto_demo_trial(cfg) {
-    const revealAfter = cfg.revealAfter || 1;
+    const revealAfter = cfg.revealAfter || 5;
     return {
         type: jsPsychHtmlKeyboardResponse,
         choices: "NO_KEYS",
@@ -265,7 +265,7 @@ function make_intro_click_demo_trial() {
             lines: [
                 `Fortunately, before the gold appears, you can test the buttons to learn how they work.`,
                 `NOTE: neither the colour nor the position of the buttons has <strong>any relation</strong> to the locations they reach.`,
-                `To begin, <strong>click one of the buttons</strong> to see where it takes you.`,
+                `To begin, <strong>click one of the buttons</strong> to see what happens.`,
             ],
             stage: `
                 <div class="task-row">
@@ -341,8 +341,7 @@ function make_testing_cost_demo_trial() {
         stimulus: screenHTML({
             title: `Testing cost`,
             lines: [
-                `Each time you test a button, a portion of the room's gold coin is lost.`,
-                `Click any of the buttons four times to see how this affects the room's gold coin's size.`
+                `Each time you test a button, a portion of the room's gold coin <strong>is lost</strong>.`
             ],
             gap: goldCostCoinHTML(),
             stage: `
@@ -351,7 +350,8 @@ function make_testing_cost_demo_trial() {
                     ${initialize_agent()}
                     ${buttonStackHTML()}
                     ${beliefPanelHTML()}
-                </div>`
+                </div>`,
+            below: `<p>Click any of the buttons a few times to see how this affects the room's gold coin's size.</p>`
         }) + navHTML("Continue"),
         data: { task: "instructions_testing_cost_demo" },
         on_start: function () {
@@ -423,8 +423,7 @@ function make_finish_testing_early_demo_trial() {
         stimulus: screenHTML({
             title: `Finishing testing early`,
             lines: [
-                `Although you have up to ${N_TRIALS} tests, you have the option to finish testing early, and stop losing any more of the gold.`,
-                `Click the tick button to move on.`
+                `Although you have up to ${N_TRIALS} tests, you have the option to <strong>finish testing early</strong>.`,
             ],
             gap: goldCostCoinHTML(),
             stage: `
@@ -433,7 +432,8 @@ function make_finish_testing_early_demo_trial() {
                     ${initialize_agent()}
                     ${buttonStackHTML()}
                     ${beliefPanelHTML()}
-                </div>`
+                </div>`,
+            below: `<p>Click the tick button to move on to the gold collection phase.</p>`
         }),
         data: { task: "instructions_finish_early_demo" },
         on_start: function () {
@@ -758,7 +758,7 @@ function make_instructions_timeline() {
             useCurrentBeliefs: true,
             title: `Collecting the gold`,
             lines: [
-                `Once you've finished testing the buttons, the room's <strong>gold coin</strong> will appear at one of the ${K_OUTCOMES} locations.`,
+                `Once you've finished testing the buttons, whatever is left of the room's <strong>gold coin</strong> will appear at one of the ${K_OUTCOMES} locations.`,
                 `You must then choose the button you think is <strong>most likely to take you to the gold</strong>, based on what you have learned about each button.`,
                 `Note that the size of the gold coin, and therefore its value, is determined by how many times you just tested the buttons.`,
                 `Here's a fresh room. Let's try a couple of examples.`
@@ -818,7 +818,7 @@ function make_instructions_timeline() {
             title: `Let's practise`,
             lines: [
                 `The next part works exactly like a real room.`,
-                `Press the buttons to test them, and then try the gold selection phase.`,
+                `Press the buttons to test them, and then try the gold collection phase.`,
                 `Feel free to use all ${N_TRIALS} presses, or to click the tick button when you feel you've learned enough.`
             ]
         })
@@ -847,7 +847,7 @@ function make_instructions_timeline() {
                 `The more gold coins you collect, and the more valuable they are, the <strong>bigger the bonus</strong> you will receive on Prolific.`,
                 `Remember: the bigger the gold coin, the more valuable it is.`,
                 `Remember also: the more times you test the buttons in a room, the smaller the gold coin that will appear in that room.`,
-                `So in each room, test out the buttons until you feel you've learned enough to continue to the gold selection phase.`,
+                `So in each room, test out the buttons until you feel you've learned enough to continue to the gold collection phase.`,
             ]
         })
     ]));
