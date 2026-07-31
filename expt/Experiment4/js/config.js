@@ -12,7 +12,7 @@ const DEBUGGING = false;
 // Experiment parameters
 //----------------------------------------------------------------------------//
 // N=2 buttons, K=4 outcomes (cardinal directions), T=6 trials, Dirichlet alpha=1
-const N_BUTTONS = 2;
+const N_BUTTONS = 3;
 const K_OUTCOMES = 4;
 const N_TRIALS = 8;   // sampling trials per room
 const N_ROOMS = 25;    // number of rooms (fresh transition functions each)
@@ -58,19 +58,19 @@ const OUTCOME_CELL = { up: 1, right: 5, down: 7, left: 3 };
 //----------------------------------------------------------------------------//
 // Buttons
 //----------------------------------------------------------------------------//
-const BUTTONS = ["red", "blue"];
-const BTN_COLOR = { red: "220,40,40", blue: "40,90,220" }; // rgb triples for rgba() shading
+const BUTTONS = ["red", "blue", "green"];
+const BTN_COLOR = { red: "220,40,40", blue: "40,90,220", green: "40,170,70" };
 
-// The two buttons are shown one above the other, but offset diagonally, and the
-// colour->position mapping is randomised once per participant. This prevents a
-// spatial bias (e.g. reading "blue = up, red = down" from a fixed vertical stack).
-// BUTTON_ORDER = [upper colour, lower colour]; the lower button sits to the right.
-// ROOM_BUTTON_ORDERS is pre-generated once per experiment so each room has a
-// consistent, predetermined layout that persists across all trials in that room.
-let BUTTON_ORDER = Math.random() < 0.5 ? ["blue", "red"] : ["red", "blue"];
-const ROOM_BUTTON_ORDERS = Array.from({ length: N_ROOMS }, () => 
-    Math.random() < 0.5 ? ["blue", "red"] : ["red", "blue"]
-);
+function randomButtonOrder() {
+    const arr = BUTTONS.slice();
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
+let BUTTON_ORDER = randomButtonOrder();
+const ROOM_BUTTON_ORDERS = Array.from({ length: N_ROOMS }, () => randomButtonOrder());
 
 //----------------------------------------------------------------------------//
 // Belief display mode:
@@ -85,29 +85,20 @@ const ROOM_BUTTON_ORDERS = Array.from({ length: N_ROOMS }, () =>
 // const BELIEF_DISPLAY = "separate";
 const BELIEF_DISPLAY = "counters";
 
-//----------------------------------------------------------------------------//
-// Hidden true transition distributions (categorical over OUTCOMES).
-// These are unknown to the participant; each press samples one outcome from them.
-// They are drawn fresh for each room from a symmetric Dirichlet(ALPHA) prior --
-// the SAME prior the participant's posterior assumes -- via sampleTrueT() (see
-// render.js), called at the start of each block.
-//----------------------------------------------------------------------------//
-let TRUE_T = {
-    red:  { up: 0.25, right: 0.25, down: 0.25, left: 0.25 },
-    blue: { up: 0.25, right: 0.25, down: 0.25, left: 0.25 }
-};
+function freshOutcomeMap(fillFn) {
+    const m = {};
+    for (const o of OUTCOMES) m[o] = fillFn ? fillFn() : 0;
+    return m;
+}
+function freshButtonMap(fillFn) {
+    const m = {};
+    for (const b of BUTTONS) m[b] = fillFn ? fillFn() : freshOutcomeMap();
+    return m;
+}
 
-// Which context (1 or 2) each button's TRUE_T was drawn from in the current room.
-// Set by sampleTrueT(); null for every button when CONTEXTUAL is false.
-let BUTTON_CTX = { red: null, blue: null };
-
-//----------------------------------------------------------------------------//
-// Observation counts. Persist across trials so beliefs accumulate over T trials.
-//----------------------------------------------------------------------------//
-let counts = {
-    red:  { up: 0, right: 0, down: 0, left: 0 },
-    blue: { up: 0, right: 0, down: 0, left: 0 }
-};
+let TRUE_T = freshButtonMap(() => freshOutcomeMap(() => 1 / OUTCOMES.length));
+let BUTTON_CTX = Object.fromEntries(BUTTONS.map(b => [b, null]));
+let counts = freshButtonMap();
 
 // running total of gold coins collected across rooms
 let collected_gold = 0;

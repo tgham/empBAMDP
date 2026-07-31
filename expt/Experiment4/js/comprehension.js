@@ -13,7 +13,7 @@
 const QUIZ_QUESTIONS = [
     {
         name: "buttons",
-        prompt: "In each room, what do the two buttons let you do?",
+        prompt: "In each room, what do the buttons let you do?",
         correct: "Pressing a button moves me to one of the locations, tending to reach some locations more often than others.",
         distractors: [
             "Pressing a button always moves me to the same single, fixed location.",
@@ -40,11 +40,11 @@ const QUIZ_QUESTIONS = [
     },
     {
         name: "relationship",
-        prompt: "What is the relationship between the two buttons?",
+        prompt: "What is the relationship between the buttons?",
         correct: "They both control movement in the same room, but the locations they reach are independent of each other.",
         distractors: [
             "They always reach the same locations as each other.",
-            "They operate in two completely separate rooms."
+            "They operate in completely separate rooms."
         ]
     },
     {
@@ -66,17 +66,35 @@ const QUIZ_QUESTIONS = [
         ]
     },
     {
+        name: "cost",
+        prompt: "What is the cost of testing a button?",
+        correct: "Testing a button reduces the size, and therefore value, of the gold coin that I can possibly collect in the current room.",
+        distractors: [
+            "Testing a button reduces the number of rooms I can visit.",
+            "None - testing a button is always beneficial."
+        ]
+    },
+    {
         name: "tick",
-        prompt: "What happens if you press the green tick button?",
-        correct: "I stop sampling early and move straight on to the coin selection.",
+        prompt: "What happens if you press the orange tick button?",
+        correct: "I stop testing early and move straight on to the gold collection phase.",
         distractors: [
             "I collect a gold coin.",
             "I reset the room and start it again."
         ]
     },
     {
+        name: "coin_size",
+        prompt: "In the gold collection phase, what is the value of the gold coin that can possibly be collected?",
+        correct: "The value depends on the size of the coin, which is determined by the number of buttons pressed.",
+        distractors: [
+            "The gold coin is always the same size, so the value is always the same.",
+            "The value depends on the number of gold coins I have already collected."
+        ]
+    },
+    {
         name: "coin",
-        prompt: "In the coin selection phase, which button should you choose?",
+        prompt: "In the gold collection phase, which button should you choose?",
         correct: "The button that I believe will most likely lead to the location with the coin.",
         distractors: [
             "The button with the highest number of combined tokens.",
@@ -85,7 +103,7 @@ const QUIZ_QUESTIONS = [
     },
     {
         name: "coin_correct",
-        prompt: "In the coin selection phase, is there a button that guarantees leading to the location with the coin?",
+        prompt: "In the gold collection phase, is there a button that guarantees leading to the location with the coin?",
         correct: "Not necessarily - sometimes neither button reliably leads to the location with the coin.",
         distractors: [
             "Yes - there is always one button that certainly leads to the location with the coin.",
@@ -94,7 +112,7 @@ const QUIZ_QUESTIONS = [
     },
 ];
 
-const QUIZ_PASS_FRACTION = 3/4;
+const QUIZ_PASS_FRACTION = 2/3;
 const QUIZ_MAX_ATTEMPTS = 2;
 
 //----------------------------------------------------------------------------//

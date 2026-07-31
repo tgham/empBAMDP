@@ -8,21 +8,23 @@
 function buttonStackHTML(opts) {
     opts = opts || {};
     const label_on = opts.label_on === true;
-    const buttonOrder = opts.buttonOrder || BUTTON_ORDER;
-    const upper = buttonOrder[0], lower = buttonOrder[1];
+    const order = opts.buttonOrder || BUTTON_ORDER; // [top, bottomLeft, bottomRight]
+    const [top, bl, br] = order;
     function labelFor(color) {
-        return color === "red" ? "Red button" : "Blue button";
+        return color.charAt(0).toUpperCase() + color.slice(1) + " button";
+    }
+    function item(color, posClass) {
+        return `
+            <div class="button-triangle-item ${posClass}">
+                <div class="button-label${label_on ? "" : " hidden"}">${label_on ? labelFor(color) : ""}</div>
+                <div class="cbtn ${color}" id="btn-${color}"></div>
+            </div>`;
     }
     return `
-        <div class="button-stack">
-            <div class="button-stack-item">
-                <div class="button-label${label_on ? "" : " hidden"}">${label_on ? labelFor(upper) : ""}</div>
-                <div class="cbtn ${upper}" id="btn-${upper}"></div>
-            </div>
-            <div class="button-stack-item cbtn-lower">
-                <div class="button-label${label_on ? "" : " hidden"}">${label_on ? labelFor(lower) : ""}</div>
-                <div class="cbtn ${lower}" id="btn-${lower}"></div>
-            </div>
+        <div class="button-triangle">
+            ${item(top, "pos-top")}
+            ${item(bl, "pos-bottom-left")}
+            ${item(br, "pos-bottom-right")}
         </div>`;
 }
 
@@ -35,28 +37,17 @@ function checkButtonHTML(opts) {
     return `
         <div class="check-stack${placeholder ? " hidden" : ""}"${placeholder ? " aria-hidden=\"true\"" : ""}>
             ${tick_label ? `<div class="check-label">Tick button</div>` : ""}
-            <div class="checkbtn" id="btn-check"><img src="img/Check.png" alt="Done testing"></div>
+            <div class="checkbtn" id="btn-check"><img src="img/Check_orange.png" alt="Done testing"></div>
         </div>`;
 }
 
 // Right-hand belief panel: colorbar legend (overlay) or two belief grids (separate).
 function beliefPanelHTML() {
-    // counters + overlay draw into the main grid; counters has no side panel.
-    if (BELIEF_DISPLAY === "counters") {
-        return ``;
-    }
+    if (BELIEF_DISPLAY === "counters") return ``;
     if (BELIEF_DISPLAY === "overlay") {
-        return `
-            <div class="belief-stack">
-                ${colorbarLegendHTML("red")}
-                ${colorbarLegendHTML("blue")}
-            </div>`;
+        return `<div class="belief-stack">${BUTTONS.map(colorbarLegendHTML).join("")}</div>`;
     }
-    return `
-        <div class="belief-stack">
-            ${beliefBlockHTML("blue")}
-            ${beliefBlockHTML("red")}
-        </div>`;
+    return `<div class="belief-stack">${BUTTONS.map(beliefBlockHTML).join("")}</div>`;
 }
 
 // How many of the room's presses are still to come, e.g. "8 choices remaining".
@@ -71,8 +62,9 @@ function refreshBeliefs(highlight, buttonOrder) {
     } else if (BELIEF_DISPLAY === "overlay") {
         renderMainBeliefOverlay();
     } else {
-        renderBeliefGrid("red", document.getElementById("belief-red"));
-        renderBeliefGrid("blue", document.getElementById("belief-blue"));
+        for (const b of BUTTONS) {
+            renderBeliefGrid(b, document.getElementById("belief-" + b));
+        }
     }
     updateBeliefLabels();
 }
@@ -81,27 +73,28 @@ function refreshBeliefs(highlight, buttonOrder) {
 // choice. If a tick button is present and `onCheck` is given, `onCheck(rt)` fires
 // when it is clicked. rt is measured from when the buttons become available.
 function wireButtons(onPress, onCheck) {
-    const btnRed = document.getElementById("btn-red");
-    const btnBlue = document.getElementById("btn-blue");
+    const btnEls = {};
+    for (const b of BUTTONS) btnEls[b] = document.getElementById("btn-" + b);
     const btnCheck = document.getElementById("btn-check");
     const t0 = performance.now();
 
     function disableAll() {
-        btnRed.classList.add("disabled");
-        btnBlue.classList.add("disabled");
+        for (const b of BUTTONS) btnEls[b].classList.add("disabled");
         if (btnCheck) btnCheck.classList.add("disabled");
     }
 
     function handle(button) {
         const rt = Math.round(performance.now() - t0);
         disableAll();
-        // hide the unselected colour button and the whole tick (button + label)
-        (button === "red" ? btnBlue : btnRed).classList.add("hidden");
+        for (const b of BUTTONS) {
+            if (b !== button) btnEls[b].classList.add("hidden");
+        }
         if (btnCheck) (btnCheck.closest(".check-stack") || btnCheck).classList.add("hidden");
         onPress(button, rt);
     }
-    btnRed.addEventListener("click", () => handle("red"));
-    btnBlue.addEventListener("click", () => handle("blue"));
+    for (const b of BUTTONS) {
+        btnEls[b].addEventListener("click", () => handle(b));
+    }
 
     if (btnCheck && onCheck) {
         btnCheck.addEventListener("click", function () {
@@ -121,7 +114,8 @@ function make_room_intro(room_num) {
         stimulus: screenHTML({
             title: `Room ${room_num} of ${N_ROOMS}`,
             lines: [
-                `Test out the two buttons over up to ${N_TRIALS} choices to learn where each one takes you.`,
+                `You are in a new room with new buttons.`,
+                `Test out the ${BUTTONS.length} buttons over up to ${N_TRIALS} choices to learn how they work.`,
                 `Press any key to begin.`
             ]
         }),
@@ -130,9 +124,8 @@ function make_room_intro(room_num) {
             for (const b of BUTTONS) {
                 for (const o of OUTCOMES) counts[b][o] = 0;
             }
-            // draw this room's hidden transition functions from the Dirichlet prior
+            GOLD_FRACTION = 1;              // <-- new: fresh coin for this room
             sampleTrueT();
-            // allow sampling again in this new room
             sampling_ended = false;
         },
         on_finish: function (data) {
@@ -172,8 +165,10 @@ function make_room_sampling(room_num, opts) {
         row.contextual = CONTEXTUAL;
         row.alpha_ctx1 = ALPHA_CTX1;
         row.alpha_ctx2 = ALPHA_CTX2;
-        row.button_upper = buttonOrder[0];
-        row.button_lower = buttonOrder[1];
+        row.button_top = buttonOrder[0];
+        row.button_bottom_left = buttonOrder[1];
+        row.button_bottom_right = buttonOrder[2];
+        row.button_order = buttonOrder.slice(); // full array, for convenience downstream
         row.trial_type = "html-keyboard-response";
         return row;
     }
@@ -186,6 +181,7 @@ function make_room_sampling(room_num, opts) {
                 `<span class="trial-counter">${choicesRemainingText(N_TRIALS)}</span>`,
                 `Click a button to move, or the tick to finish testing.`
             ],
+            gap: goldCostCoinHTML(),
             stage: `
                 <div class="task-row">
                     ${checkButtonHTML()}
@@ -199,6 +195,7 @@ function make_room_sampling(room_num, opts) {
             // agent starts in the central cell
             agent_topPos = topPos0;
             agent_leftPos = leftPos0;
+            GOLD_FRACTION = 1;               // <-- new
         },
         on_load: function () {
             refreshBeliefs(null, buttonOrder);
@@ -221,7 +218,7 @@ function make_room_sampling(room_num, opts) {
             // press. The agent grid + counters layer are left in place (persist).
             function armPress() {
                 const row = document.querySelector(".task-row");
-                const bs = row.querySelector(".button-stack");
+                const bs = row.querySelector(".button-triangle");
                 if (bs) bs.outerHTML = buttonStackHTML({ buttonOrder: buttonOrder });
                 const cs = row.querySelector(".check-stack");
                 if (cs) cs.outerHTML = checkButtonHTML();
@@ -231,14 +228,17 @@ function make_room_sampling(room_num, opts) {
             }
 
             function onPress(button, rt) {
-                // belief state the choice was based on (before this observation)
                 const counts_pre = countsSnapshot();
                 const posteriors_pre = posteriorSnapshot();
+                const gold_fraction_pre = GOLD_FRACTION;
+
+                // sampling cost: each click removes a 1/(T+1) slice of the coin
+                GOLD_FRACTION = Math.max(0, GOLD_FRACTION - 1 / (N_TRIALS+1));
+                updateGoldCostCoin();
 
                 const outcome = sampleCategorical(TRUE_T[button]);
                 counts[button][outcome] += 1;
 
-                // the agent moves first; beliefs update only once it has arrived
                 moveAgent(outcome);
 
                 jsPsych.data.get().push(stampSession({
@@ -249,16 +249,16 @@ function make_room_sampling(room_num, opts) {
                     outcome: outcome,
                     rt: rt,
                     ended_early: false,
-                    counts: counts_pre,            // transition counts at decision time
+                    counts: counts_pre,
                     posterior_means: posteriors_pre,
-                    counts_post: countsSnapshot()  // counts after this observation
+                    counts_post: countsSnapshot(),
+                    gold_fraction_pre: gold_fraction_pre,      // <-- new
+                    gold_fraction_post: GOLD_FRACTION          // <-- new
                 }));
 
                 setTimeout(function () {
-                    // arrived -> reveal the updated belief; pop in the new token
                     refreshBeliefs({ button: button, outcome: outcome }, buttonOrder);
                     setTimeout(function () {
-                        // slide the agent back to the centre (animated) for the next press
                         const agentEl = document.getElementById("agent");
                         agent_topPos = topPos0;
                         agent_leftPos = leftPos0;
@@ -305,13 +305,15 @@ function make_gold_pause(room_num) {
         choices: "NO_KEYS",
         response_ends_trial: false,
         trial_duration: 1000,
-        stimulus: screenHTML({
-            title: "Gold time!",
-            stage: `
-                <div style="display:flex; justify-content:center; align-items:center; min-height:220px;">
-                    ${goldCoinStaticHTML()}
-                </div>`
-        }),
+        stimulus: function () {
+            return screenHTML({
+                title: "Gold time!",
+                stage: `
+                    <div style="display:flex; justify-content:center; align-items:center; min-height:220px;">
+                        ${goldCoinStaticHTML(GOLD_FRACTION)}
+                    </div>`
+            });
+        },
         data: { task: "gold_pause", room_num: room_num }
     };
 }
@@ -336,6 +338,8 @@ function sampleOutcome(transitionProbs) {
 
 function make_gold_trial(room_num, opts) {
     opts = opts || {};
+    const practice = opts.practice === true;
+    const taskName = practice ? "practice_gold" : "gold";
     const buttonOrder = opts.buttonOrder || BUTTON_ORDER;
     return {
         type: jsPsychHtmlKeyboardResponse,
@@ -385,43 +389,66 @@ function make_gold_trial(room_num, opts) {
                     chosen_button: button,
                     gold_outcome: goldOutcome,
                     rt: rt,
-                    counts: countsSnapshot(),                 // final transition counts for the room
-                    posterior_means: posteriorSnapshot(),     // belief the choice was based on
-                    button_ctx: JSON.parse(JSON.stringify(BUTTON_CTX)), // prior each button came from
+                    task: taskName,
+                    practice: practice,
+                    counts: countsSnapshot(),
+                    posterior_means: posteriorSnapshot(),
+                    button_ctx: JSON.parse(JSON.stringify(BUTTON_CTX)),
                     chosen_button_ctx: BUTTON_CTX[button],
-                    chosen_gold_prob: chosen_gold_prob,       // true P(chosen button -> coin)
-                    best_gold_prob: best_gold_prob,           // best true P(any button -> coin)
-                    correct: correct,                         // did they pick the best button?
-                    sampled_outcome: sampled_outcome,          // what the transition actually sampled
-                    collected: collected,                      // did that sample match the gold cell?
-                    collected_gold_total: collected_gold,       // running tally for the bonus
-                    outcome_shown: SHOW_GOLD_OUTCOME
+                    chosen_gold_prob: chosen_gold_prob,
+                    best_gold_prob: best_gold_prob,
+                    correct: correct,
+                    sampled_outcome: sampled_outcome,
+                    collected: collected,
+                    collected_gold_total: collected_gold,
+                    outcome_shown: SHOW_GOLD_OUTCOME,
+                    gold_fraction_remaining: GOLD_FRACTION   // <-- new: how much coin was left to win
                 };
 
-                if (!SHOW_GOLD_OUTCOME) {
+                if (!SHOW_GOLD_OUTCOME && !practice) {
                     // do not reveal (agent stays put); on to the next room
                     var ppt_data_hidden = jsPsych.data.get().json();
                     send_incomplete(id, ppt_data_hidden);
                     setTimeout(() => jsPsych.finishTrial(trial_data), 1000);
                     return;
+                } else {
+
+                    // reveal (only if SHOW_GOLD_OUTCOME): move the agent to wherever the
+                    // sampled transition actually sent them — this is the true stochastic
+                    // consequence of the button press, regardless of whether it was "correct".
+                    moveAgent(sampled_outcome);
+
+                    setTimeout(function () {
+                        // once the agent has arrived, the result replaces the prompt above
+                        // the room (as in the coin demos)
+                        if (practice) {
+                            const extraLines = [
+                                `(Note that in the real experiment, you will not see whether or not you actually reached the gold.)`,
+                                `Press any key to continue.`
+                            ];
+                            showScreenFeedback(collected ? "You got the gold!" : "Missed it...", collected, extraLines);
+                        } else {
+                            const extraLines = []
+                            showScreenFeedback(collected ? "You got the gold!" : "Missed it...", collected, extraLines);
+                        }
+
+                        // save data so far
+                        var ppt_data = jsPsych.data.get().json();
+                        send_incomplete(id, ppt_data);
+
+
+                        // if practice, show the feedback until the participant presses a key; otherwise, move on after a short pause
+                        if (practice) {
+                            document.addEventListener("keydown", function onKey() {
+                                document.removeEventListener("keydown", onKey);
+                                jsPsych.finishTrial(trial_data);
+                            });
+                        } else {
+                            setTimeout(() => jsPsych.finishTrial(trial_data), 1400);
+                        }
+                        
+                    }, MOVE_MS);
                 }
-
-                // reveal (only if SHOW_GOLD_OUTCOME): move the agent to wherever the
-                // sampled transition actually sent them — this is the true stochastic
-                // consequence of the button press, regardless of whether it was "correct".
-                moveAgent(sampled_outcome);
-
-                setTimeout(function () {
-                    // once the agent has arrived, the result replaces the prompt above
-                    // the room (as in the coin demos)
-                    showScreenFeedback(collected ? "You got the gold!" : "Missed it...", collected);
-
-                    // save data so far
-                    var ppt_data = jsPsych.data.get().json();
-                    send_incomplete(id, ppt_data);
-
-                    setTimeout(() => jsPsych.finishTrial(trial_data), 1400);
-                }, MOVE_MS);
             });
         }
     };

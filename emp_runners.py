@@ -13,201 +13,188 @@ _mod = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 EmpBandit = _mod.EmpBandit
 
-def run_emp_bamcp(agent, env, verbose=True):
-    """Run an agent on the empowerment bandit task for n_trials."""
-    n_trials = env.n_trials
-    n_arms = env.n_afc
-    n_outcomes = env.n_outcomes
 
-    p_choice_history = np.zeros((n_trials, n_arms))
-    actions = np.zeros(n_trials, dtype=int)
-    outcomes = np.zeros(n_trials, dtype=int)
-    rewards = np.zeros(n_trials)
-
-    env.reset()
-
-    for t in range(n_trials):
-        env_copy = copy.deepcopy(env)
-        env_copy.set_sim(True)
-        
-
-        Q = agent.compute_Q(env_copy)
-        probs = agent.softmax(Q)
-        mean_probs = agent.sampler.mean_probs()
-        max_Q = np.nanmax(Q)
-        best_arms = np.where(Q == max_Q)[0]
-        if len(best_arms) > 1:
-            action = int(np.random.choice(best_arms))
-        else:            
-            action = int(best_arms[0])
-        
-        p_choice_history[t] = probs
-
-        env.set_sim(False)
-        (_, outcome), reward, terminated, truncated, _ = env.step(action)
-
-        actions[t] = action
-        outcomes[t] = outcome
-        rewards[t] = reward
-
-        if verbose:
-            print(f"  trial {t+1:>3}/{n_trials}  Q-values {np.round(Q, 3)}  pulled arm {action}, outcome {outcome}, "
-                  f"empowerment reward {reward:.4f}")
-
-        if terminated or truncated:
-            break
-
-    return {
-        'p_choice': p_choice_history,
-        'actions': actions,
-        'outcomes': outcomes,
-        'rewards': rewards,
-        'cumulative_reward': np.cumsum(rewards),
-        'true_p_matrix': env.p_matrix.copy(),
-        'posterior_p_matrix': env.posterior_p_matrix.copy(),
-        'ell': env.ell,
-    }
-
-
-def run_emp(agent, env, horizon=None, policy='bellman', termination_arm=None,
-            df_max=None, k=0.0, verbose=True):
-    """Run an empowerment-bandit agent with exact Q estimates.
-
-    `policy='bellman'` (default): Bayes-adaptive optimal Q via the recursion
-        V(h, 0)   = emp_l(h)
-        V(h, d>0) = max( emp_l(h),                                       # terminate
-                         max_a sum_o p(o|a,h) V(h u (a,o), d-1) )        # pull arm a
-        Q(h, a_1) = sum_o p(o|a_1, h) V(h u (a_1, o), H-1)
-        Q(h, terminate) = emp_l(h)
-    Subsequent actions are assumed Bayes-optimal -- this is the value BAMCP
-    approximates.
-
-    `policy='uniform_tail'`: Q under a uniform random follow-up policy --
-    exhaustive enumeration of all (a, o) sequences with posterior-predictive
-    weights, averaged uniformly over the action tail. Lower bound on the
-    Bellman Q; useful as a comparison baseline.
-
-    `termination_arm`: if True (or auto-detected from `env.termination_arm`),
-    the agent has an extra action that immediately collects the current
-    empowerment and ends the episode. `uniform_tail` does not currently
-    support termination.
-
-    `df_max`/`k`: optional per-pull sampling cost. If `df_max` (columns `ell`,
-    `alpha`, `current_emp`) is given, every arm pull is penalised by
-    `c = k * current_emp` for this env's (env.alpha, env.ell); the cost is paid
-    recursively over the horizon and the terminate action is free. Only the
-    `bellman` policy supports a cost.
-
-    H = min(horizon, n_trials - t) is the remaining horizon at each trial,
-    p(o|a, h) is the posterior predictive of the env's Dirichlet posterior.
+def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t = 0, temp = 1):
+    """Run an empowerment-bandit agent yoked to participants' actual trial
+    sequences. Returns a tidy DataFrame, one row per (subject_id, room, trial),
+    tagged with `ell`, so results from several ell-agents can be pd.concat'd.
     """
-    if termination_arm is None:
-        termination_arm = bool(getattr(env, 'termination_arm', False))
 
-    ## per-pull sampling cost for this env's (alpha, ell): c = k * max emp
-    cost = 0.0
-    if df_max is not None and k != 0:
-        m = df_max.loc[(df_max['alpha'].astype(str) == str(env.alpha))
-                       & np.isclose(df_max['ell'].astype(float), float(env.ell)),
-                       'current_emp']
-        if len(m) == 0:
-            raise KeyError(f"df_max has no current_emp for alpha={env.alpha!r}, ell={env.ell!r}")
-        cost = k * float(m.iloc[0])
-
-    if policy == 'bellman':
-        Q_fn = lambda alphas, n_a, n_o, h_, e: bellman_emp_Q(
-            alphas, n_a, n_o, h_, termination_arm, e, verbose=verbose, cost=cost)
-    elif policy == 'uniform_tail':
-        if termination_arm:
-            raise NotImplementedError("uniform_tail policy does not support termination_arm")
-        if k != 0:
-            raise NotImplementedError("uniform_tail policy does not support a sampling cost")
-        Q_fn = uniform_tail_emp_Q
-    else:
-        raise ValueError(f"unknown policy {policy!r}; expected 'bellman' or 'uniform_tail'")
-
-    n_trials = env.n_trials
-    n_arms = getattr(env, 'n_arms', env.n_afc - int(termination_arm))
-    n_outcomes = env.n_outcomes
-    ell = env.ell
+    ## extract info from df_ppt ## hack for now
+    n_trials = 8
+    n_outcomes = 4 
+    n_arms = 2
+    n_rooms = df_ppt['room'].max()  
     n_actions = n_arms + int(termination_arm)
     terminate_idx = n_arms if termination_arm else None
+    alpha = 0.4
+    contexts = [(float(alpha), 1.0)]
 
-    Q_history = np.zeros((n_trials, n_actions))
-    p_choice_history = np.zeros((n_trials, n_actions))
-    p_repeat_choice = np.zeros(n_trials)
-    emp_improvement = np.zeros((n_trials, n_actions))
-    actions = np.zeros(n_trials, dtype=int)
-    outcomes = np.zeros(n_trials, dtype=int)
-    rewards = np.zeros(n_trials)
+    cost = 0.0
+    button_map = {'blue': 0, 'red': 1}
+    outcome_map = {'up': 0, 'left': 1, 'down': 2, 'right': 3}
 
-    env.reset()
+    records = []
 
-    ## calculate initial empowerment under flat prior
-    flat_prior_p = np.ones((n_arms, n_outcomes)) / n_outcomes
-    prev_emp = env.empowerment(flat_prior_p, ell)
-    print('initial emp:', prev_emp)
+    ## current empowerment (cost-free leaf) for one belief context at one ell
+    def _leaf_emp(ctx, e, canon_C):
+        agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e,
+                                 termination_arm=termination_arm,
+                                 )
+        ## canon_C is the RAW count matrix; the agent adds the prior alpha
+        ## internally (predictive: alpha + counts), so do NOT pre-offset here.
+        return agent.leaf_value(canon_C)
 
-    last_t = n_trials - 1
-    for t in range(n_trials):
-        h = (n_trials - t) if horizon is None else min(horizon, n_trials - t)
+    # for pid in df_ppt['subject_id'].unique():
+    for p in tqdm(range(len(df_ppt['subject_id'].unique()))):
+        pid = df_ppt['subject_id'].unique()[p]
+        df_p = df_ppt.loc[df_ppt['subject_id'] == pid]
 
-        Q = Q_fn(env.alphas.copy(), n_arms, n_outcomes, h, ell)
-        probs = agent.softmax(Q)
+        for r in range(n_rooms):
+            df_pr = df_p.loc[df_p['room'] == r+1]
 
-        max_Q = np.nanmax(Q)
-        best_arms = np.where(Q == max_Q)[0]
-        if len(best_arms) > 1:
-            action = int(np.random.choice(best_arms))
-        else:
-            action = int(best_arms[0])
+            prev_action = None
 
-        Q_history[t] = Q
-        p_choice_history[t] = probs
+            canon_C = np.zeros((n_arms, n_outcomes), dtype=int)
 
-        env.set_sim(False)
-        (_, outcome), reward, terminated, truncated, _ = env.step(action)
+            ## fill in canon_C with the actual counts from the participant's history up to init_t
+            for t in range(init_t):
+                row_df = df_pr.loc[df_pr['trial'] == t+1]
+                if not row_df['ended_early'].values[0]:
+                    actual_action = button_map[row_df['chosen_button'].values[0]]
+                    actual_outcome = outcome_map[row_df['outcome'].values[0]]
+                    canon_C[actual_action, actual_outcome] += 1
+                
+                    ## since we're not simulating the agent, fill with nans
+                    actual_action = n_arms + 1
+                    actual_outcome = np.nan
+                    Q_a0 = np.nan
+                    Q_a1 = np.nan
+                    p_a0 = np.nan
+                    p_a1 = np.nan
+                    chose_a0 = np.nan
+                    chose_a1 = np.nan
+                    current_emp = np.nan
+                    row = {
+                        'subject_id': pid, 'room': r+1, 'trial': t+1, 'ell': ell,
+                        'chose_a0': chose_a0, 'chose_a1': chose_a1,
+                        'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
+                        'current_emp': current_emp,
+                        'Q_a0': Q_a0, 'Q_a1': Q_a1,
+                        'Q_terminate': np.nan if not termination_arm else np.nan,
+                        'p_terminate': np.nan if not termination_arm else np.nan,
+                        # 'p_repeat_choice': np.nan if prev_action is None else probs[prev_action],
+                    }
+                    records.append(row)
+                else:
+                    # for tt in range(t, init_t):
+                    #     row['trial'] = tt + 1
+                    #     records.append(row)
+                    break
 
-        actions[t] = action
-        outcomes[t] = outcome
-        rewards[t] = reward
-        last_t = t
+            for t in range(init_t, n_trials):
+                row_df = df_pr.loc[df_pr['trial'] == t+1]
+                if not row_df.empty:
+                    h = (n_trials - t) if horizon is None else min(horizon, n_trials - t)
 
-        emp_improvement[t] = Q / prev_emp
-        prev_emp = reward
+                    Q = _emp_bellman_Q(n_arms, n_outcomes, contexts, ell,
+                                        termination_arm, canon_C, h, cost = cost,
+                                        )
 
-        if t == 0:
-            p_repeat_choice[t] = np.nan
-        else:
-            last_action = actions[t-1]
-            p_repeat_choice[t] = probs[last_action]
+                    max_Q = np.nanmax(Q)
+                    best_arms = np.where(Q == max_Q)[0]
+                    action = int(np.random.choice(best_arms)) if len(best_arms) > 1 else int(best_arms[0])
+                    probs = _softmax(Q/temp)
 
-        if verbose:
-            action_str = 'terminate' if action == terminate_idx else f'arm {action}'
-            print(f"  trial {t+1:>3}/{n_trials}  Q={np.round(Q, 4)}  "
-                  f"chose {action_str}, outcome {outcome}, "
-                  f"empowerment reward {reward:.4f}")
+                    ## calculate current emp
+                    current_emp = _leaf_emp(contexts, ell, canon_C)
 
-        if terminated or truncated:
-            break
+                    if row_df['ended_early'].values[0]:
+                        terminated = True
+                        actual_action = n_arms+1
+                        actual_outcome = np.nan
+                        Q_a0 = np.nan
+                        Q_a1 = np.nan
+                        p_a0 = np.nan
+                        p_a1 = np.nan
+                        chose_a0 = np.nan
+                        chose_a1 = np.nan
+                    else:
+                        terminated=False
+                        actual_action = button_map[row_df['chosen_button'].values[0]]
+                        actual_outcome = outcome_map[row_df['outcome'].values[0]]
 
-    ## trim trailing zeros if the agent terminated early
-    keep = last_t + 1
-    return {
-        'Q': Q_history[:keep],
-        'p_choice': p_choice_history[:keep],
-        'p_repeat_choice': p_repeat_choice[:keep],
-        'actions': actions[:keep],
-        'outcomes': outcomes[:keep],
-        'emp_improvement': emp_improvement[:keep],
-        'rewards': rewards[:keep],
-        'cumulative_reward': np.cumsum(rewards[:keep]),
-        'true_p_matrix': env.p_matrix.copy(),
-        'posterior_p_matrix': env.posterior_p_matrix.copy(),
-        'ell': ell,
-        'termination_arm': termination_arm,
-        'terminated_early': terminated and (action == terminate_idx) if termination_arm else False,
-    }
+                        ## update canon_C for next trial
+                        canon_C[actual_action, actual_outcome] += 1
+
+                        ## map onto a0 and a1 etc.
+                        if df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r+1) & (df_ppt['trial'] == t+1), 'a0'].values[0] == 'blue':
+                            Q_a0 = Q[0]
+                            Q_a1 = Q[1]
+                            p_a0 = probs[0]
+                            p_a1 = probs[1]
+                            agent_action = 0 if action == 0 else 1
+                            chose_a0 = action == 0
+                            chose_a1 = action == 1
+                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r+1) & (df_ppt['trial'] == t+1), 'a0'].values[0] == 'red':
+                            Q_a0 = Q[1]
+                            Q_a1 = Q[0]
+                            p_a0 = probs[1]
+                            p_a1 = probs[0]
+                            agent_action = 0 if action == 1 else 1
+                            chose_a0 = action == 1
+                            chose_a1 = action == 0
+                        row = {
+                            'subject_id': pid, 'room': r+1, 'trial': t+1, 'ell': ell,
+                            'chose_a0': chose_a0, 'chose_a1': chose_a1,
+                            'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
+                            'current_emp': current_emp,
+                            'Q_a0': Q_a0, 'Q_a1': Q_a1,
+                            # 'p_repeat_choice': np.nan if prev_action is None else probs[prev_action],
+                        }
+
+                    # row = {
+                    #     'subject_id': pid, 'room': r, 'trial': t, 'ell': ell,
+                    #     'agent_action': action, 'actual_action': actual_action,
+                    #     'actual_outcome': actual_outcome,
+                    #     'current_emp': current_emp,
+                    #     'agent_matches_ppt': action == actual_action,
+                    #     'p_repeat_choice': np.nan if prev_action is None else probs[prev_action],
+                    # }
+
+                    if termination_arm:
+                        row['Q_terminate'] = Q[-1]
+                        row['p_terminate'] = probs[-1]
+                    records.append(row)
+
+                    prev_action = actual_action
+
+                    if terminated:
+                        break
+                else:
+                    break
+
+    df_ell = pd.DataFrame.from_records(records)
+
+    # ### concat
+
+    # ## ensure all columns are present
+    # for col in df_ell.columns:
+    #     if col not in df_ppt.columns:
+    #         df_ppt[col] = np.nan
+    # df_ppt['ell'] = 'human'
+    # df_full = pd.concat([df_ppt, df_ell], ignore_index=True, sort=False)
+
+
+    ### or, merge
+    df_ell = df_ell.rename(columns={'chose_a0': 'ell'+str(ell)+'_chose_a0', 'chose_a1': 'ell'+str(ell)+'_chose_a1', 
+                                    'p_choice_a0': 'ell'+str(ell)+'_p_choice_a0', 'p_choice_a1': 'ell'+str(ell)+'_p_choice_a1',
+                                    'Q_a0': 'ell'+str(ell)+'_Q_a0', 'Q_a1': 'ell'+str(ell)+'_Q_a1', 
+                                    'current_emp': 'ell'+str(ell)+'_current_emp',
+                                    'Q_terminate': 'ell'+str(ell)+'_Q_terminate', 'p_terminate': 'ell'+str(ell)+'_p_terminate'})
+    df_full = df_ppt.merge(df_ell, on=['subject_id', 'room', 'trial'], how='left')
+
+    return df_full
 
 def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size, horizon,
                           n_arms, n_outcomes, n_trials, alpha, termination_arm, ells, temp):
@@ -504,25 +491,17 @@ def _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cos
 def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      contexts=None, context_prior=None,
                      independent_contexts=False,
-                     df_tip=None, termination_arm=True, temp=1,
+                     termination_arm=True, temp=1,
                      horizons = None,
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50,
                      df_max=None, ks=(0.0,),
-                     tied_only=False, skip_t0=True, n_jobs=1):
+                     tied_only=False, init_t=0, n_jobs=1):
     """Q / softmax-prob curves over ell for canonical histories.
 
-    Two modes, switched by whether `df_tip` is provided:
-
-    - `df_tip is None`: enumerate ALL canonical histories at all trials,
+    - enumerate ALL canonical histories at all trials,
       sampling `n_ell_samples` log-spaced ells in `[ell_lo, ell_hi]` for each.
       Coarse but exhaustive picture of how Q/p vary with ell.
-
-    - `df_tip is not None`: iterate only the (history, t) pairs present in
-      `df_tip`, and for each, sample `n_ell_samples` log-spaced ells between
-      `min(ell_lo)` and `max(ell_hi)` of that history's df_tip rows. Focuses
-      the sweep on each history's interesting range. With `tied_only=True`,
-      restrict to histories that have at least one `has_ties=True` row.
 
     Each curve is produced by one belief agent (`EmpAgent`). Two kinds are
     swept into the same DataFrame for comparison:
@@ -560,83 +539,72 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     `alpha`, `current_emp`). If `df_max` is None and any `k != 0` is requested,
     it is derived internally as the max `current_emp` over all swept histories
     for each (alpha, ell) -- i.e. the `k=0` pass seeds the costed ones, so a
-    single call is self-contained. (Internal derivation requires `df_tip is
-    None`, since the per-history ell grids otherwise differ; pass `df_max`
-    explicitly in that case.)
+    single call is self-contained. 
 
     Returns a long-format DataFrame with one row per (history_str, t, ell,
     agent), columns: alpha, context_set, Q_0, Q_1, ..., Q_terminate (if
     applicable), p_0, p_1, ..., p_terminate, and matching info_* columns.
     `n_jobs` parallelises the inner ell sweep.
     """
+
+    ## generate all canonical histories for the given (n_arms, n_outcomes, n_trials)
     states = canonical_states(n_arms, n_outcomes, n_trials)
-    states_by_th = {(int(t), hs): C for (t, C, _, hs, _) in states}
+    states_by_t_and_h = {(int(t), hs): C for (t, C, _, hs, _) in states}
     if n_jobs != 1:
         print(f"Running in parallel with n_cores = {n_jobs}")
+    
 
-    ## set horizon
+    ## if no horizon, set to full horizon
     if horizons is None:
         horizons = [n_trials]
 
-    ## agents to sweep: known (one per alpha) + optional one unknown-context agent.
-    ## entries: (alpha_label, context_set_str, contexts=[(alpha, prior), ...])
-    agent_specs = [(alpha_val, str(alpha_val), [(float(alpha_val), 1.0)])
-                   for alpha_val in alphas]
+    
+    
+    ## agents to sweep: 
+    
+    # known context, i.e. one agent per tested alpha
+    agent_specs = [(alpha_val, str(alpha_val), [(float(alpha_val), 1.0)]) # (alpha_label, context_set_str, contexts=[(alpha, prior), ...])
+                   for alpha_val in alphas] 
+    
+    # unknown-context agent
     if contexts is not None:
         if context_prior is None:
-            context_prior = [1.0 / len(contexts)] * len(contexts)
+            context_prior = [1.0 / len(contexts)] * len(contexts) ## flat prior over contexts 
         ctx_unknown = [(float(a), float(p)) for a, p in zip(contexts, context_prior)]
         context_set_str = 'ctx' + str(tuple(float(a) for a in contexts))
         agent_specs.append(('unknown', context_set_str, ctx_unknown))
 
-    if df_tip is None:
-        ## sweep all canonical histories with the predefined range
-        sweep_tasks = [(int(t), history_str, ell_lo, ell_hi)
-                       for (t, _, _, history_str, _) in states]
-    else:
-        df_tmp = df_tip[df_tip['has_ties']] if tied_only else df_tip
-        if len(df_tmp) == 0:
-            return pd.DataFrame()
-        ranges = (df_tmp.groupby(['history_str', 't'])
-                  .agg(ell_min=('ell_lo', 'min'),
-                       ell_max=('ell_hi', 'max'))
-                  .reset_index())
-        sweep_tasks = [(int(r['t']), r['history_str'],
-                        float(r['ell_min']), float(r['ell_max']))
-                       for _, r in ranges.iterrows()]
 
-    ## t=0 is the empty history: the agent has observed nothing, so it has equal
-    ## preference over the actions -- uninteresting, and the costliest to sweep
-    ## (largest remaining horizon). Skip it by default.
-    if skip_t0:
-        sweep_tasks = [task for task in sweep_tasks if task[0] != 0]
+    ## define tasks: i.e. sweep all canonical histories with the predefined ell range
+    sweep_tasks = [(int(t), history_str, ell_lo, ell_hi)
+                    for (t, _, _, history_str, _) in states]
+    # if skip_t0: ## skip first trial (uninteresting + costly)
+    #     sweep_tasks = [task for task in sweep_tasks if task[0] != 0]
+    sweep_tasks = [task for task in sweep_tasks if task[0] >= init_t] ## skip first init_t trials (uninteresting + costly)
 
-    ## current empowerment (cost-free leaf) for one belief context at one ell
+    ## function for quickly getting current empowerment for one belief state at one ell
     def _leaf_emp(ctx, e, canon_C):
         agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e,
                                  termination_arm=termination_arm,
                                  independent_contexts=independent_contexts)
-        ## canon_C is the RAW count matrix; the agent adds the prior alpha
-        ## internally (predictive: alpha + counts), so do NOT pre-offset here.
         return agent.leaf_value(canon_C)
 
+    
+    ### cost info
+    
     ## sampling costs to sweep
     ks = [ks] if np.isscalar(ks) else list(ks)
     need_cost = any(float(k) != 0 for k in ks)
 
-    ## per-pull sampling cost: c = k * (max achievable emp for this alpha, ell),
-    ## looked up from df_max. If df_max is absent, derive it from the cost-free
-    ## leaf empowerment, taking the max over all swept histories per (alpha, ell).
+
+    ## get the max achievable empowerment over all histories
     if df_max is None and need_cost:
-        if df_tip is not None:
-            raise ValueError("enumerate_curves: pass df_max explicitly when df_tip "
-                             "is set (per-history ell grids prevent internal derivation)")
         sample_ells = np.logspace(np.log10(ell_lo), np.log10(ell_hi), n_ell_samples)
         max_rows = []
         for alpha_label, _, ctx in agent_specs:
             max_emp = np.full(n_ell_samples, -np.inf)
             for (t, _, _, history_str, _) in states:
-                canon_C = states_by_th[(int(t), history_str)]
+                canon_C = states_by_t_and_h[(int(t), history_str)]
                 for ei, e in enumerate(sample_ells):
                     max_emp[ei] = max(max_emp[ei], _leaf_emp(ctx, e, canon_C))
             for ei, e in enumerate(sample_ells):
@@ -644,7 +612,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                                  'current_emp': max_emp[ei]})
         df_max = pd.DataFrame(max_rows)
 
-    ## build per-alpha (ell, current_emp) arrays once for fast lookup
+    ## convert to table for fast lookup
     cost_tables = None
     if df_max is not None:
         cost_tables = {}
@@ -652,6 +620,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
             cost_tables[key] = (grp['ell'].to_numpy(dtype=float),
                                 grp['current_emp'].to_numpy(dtype=float))
 
+    ## actual cost = k * (max achievable emp for this alpha, ell)
     def cost_for(alpha_label, e, k):
         if k == 0 or cost_tables is None:
             return 0.0
@@ -664,40 +633,38 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
             raise KeyError(f"df_max has no current_emp for alpha={alpha_label!r}, ell={e}")
         return k * float(emps_arr[hits[0]])
 
+    ## big loop
     rows = []
     for alpha_label, context_set, ctx in agent_specs:
         for horizon in horizons:
-            ## info-seeking agent (ell-free) over this context set
+            
+            ## also define the info-seeking agent (ell-free) over this context set
             info_agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm,
                                           independent_contexts=independent_contexts)
             for i in tqdm(range(len(sweep_tasks)), desc=f"Enumerating curves (alpha={alpha_label})"):
                 t, history_str, e_lo, e_hi = sweep_tasks[i]
-                canon_C = states_by_th[(t, history_str)]
-                # h_remaining = horizon - t
+                canon_C = states_by_t_and_h[(t, history_str)]
                 h_remaining = int(np.min([horizon, n_trials - t]))
                 sample_ells = np.logspace(np.log10(e_lo), np.log10(e_hi), n_ell_samples)
 
-                ## info-seeking agent: ell-free, same across all sampled ells for this history
+                ## info-seeking agent (not parameterised by ell)
                 info_Q = info_agent.bellman_Q(canon_C, h_remaining)
-                info_best_a = int(np.argmin(info_Q))
+                info_best_a = int(np.argmin(info_Q)) # NB seeks to minimise posterior var
                 info_probs = _softmax(-info_Q / temp)
 
-                ## current emp (cost-free leaf): k-independent, computed once
+                ## emp of current belief state for each ell agent
                 current_emps = [_leaf_emp(ctx, e, canon_C) for e in sample_ells]
 
-                ## posterior prob of contexts (same for all agents, since they share the same prior and history).
-                ## global: p_ctx shape (Z,); independent: shape (A, Z) -- per-arm posteriors.
+                ## posterior prob of context if unknown
                 if context_set.startswith('ctx'):
                     agent_tmp = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=sample_ells[0],
                                                  termination_arm=termination_arm,
                                                  independent_contexts=independent_contexts)
-                    ## context_posterior expects RAW counts (it adds alpha_z internally).
                     p_ctx = agent_tmp.context_posterior(canon_C)
-                    # print(f"  history {history_str}, t={t}, p_ctx={p_ctx}")
-                else:
+                else: # known context, so no posterior needed
                     p_ctx = np.array([1.0])
                     
-                ## sweep the sampling costs: re-evaluate Q at each k, stack rows
+                ## evaluate Q at each k
                 for k in ks:
                     costs = [cost_for(alpha_label, e, k) for e in sample_ells]
 
@@ -714,6 +681,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                             for e, c in zip(sample_ells, costs)
                         )
 
+                    ## save data
                     for ei in range(len(sample_ells)):
                         e = sample_ells[ei]
                         Q = Qs[ei]
@@ -743,5 +711,3 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                         rows.append(row)
 
     return pd.DataFrame(rows)
-
-
