@@ -337,6 +337,8 @@ function sampleOutcome(transitionProbs) {
 
 function make_gold_trial(room_num, opts) {
     opts = opts || {};
+    const practice = opts.practice === true;
+    const taskName = practice ? "practice_gold" : "gold";
     const buttonOrder = opts.buttonOrder || BUTTON_ORDER;
     return {
         type: jsPsychHtmlKeyboardResponse,
@@ -386,6 +388,8 @@ function make_gold_trial(room_num, opts) {
                     chosen_button: button,
                     gold_outcome: goldOutcome,
                     rt: rt,
+                    task: taskName,
+                    practice: practice,
                     counts: countsSnapshot(),
                     posterior_means: posteriorSnapshot(),
                     button_ctx: JSON.parse(JSON.stringify(BUTTON_CTX)),
@@ -400,30 +404,50 @@ function make_gold_trial(room_num, opts) {
                     gold_fraction_remaining: GOLD_FRACTION   // <-- new: how much coin was left to win
                 };
 
-                if (!SHOW_GOLD_OUTCOME) {
+                if (!SHOW_GOLD_OUTCOME && !practice) {
                     // do not reveal (agent stays put); on to the next room
                     var ppt_data_hidden = jsPsych.data.get().json();
                     send_incomplete(id, ppt_data_hidden);
                     setTimeout(() => jsPsych.finishTrial(trial_data), 1000);
                     return;
+                } else {
+
+                    // reveal (only if SHOW_GOLD_OUTCOME): move the agent to wherever the
+                    // sampled transition actually sent them — this is the true stochastic
+                    // consequence of the button press, regardless of whether it was "correct".
+                    moveAgent(sampled_outcome);
+
+                    setTimeout(function () {
+                        // once the agent has arrived, the result replaces the prompt above
+                        // the room (as in the coin demos)
+                        if (practice) {
+                            const extraLines = [
+                                `(Note that in the real experiment, you will not see whether or not you actually reached the gold.)`,
+                                `Press any key to continue.`
+                            ];
+                            showScreenFeedback(collected ? "You got the gold!" : "Missed it...", collected, extraLines);
+                        } else {
+                            const extraLines = []
+                            showScreenFeedback(collected ? "You got the gold!" : "Missed it...", collected, extraLines);
+                        }
+
+                        // save data so far
+                        var ppt_data = jsPsych.data.get().json();
+                        send_incomplete(id, ppt_data);
+
+
+                        // if practice, show the feedback until the participant presses a key; otherwise, move on after a short pause
+                        if (practice) {
+                            document.addEventListener("keydown", function onKey() {
+                                document.removeEventListener("keydown", onKey);
+                                jsPsych.finishTrial(trial_data);
+                            });
+                        } else {
+                            setTimeout(() => jsPsych.finishTrial(trial_data), 1400);
+                        }
+                        
+                    }, MOVE_MS);
                 }
-
-                // reveal (only if SHOW_GOLD_OUTCOME): move the agent to wherever the
-                // sampled transition actually sent them — this is the true stochastic
-                // consequence of the button press, regardless of whether it was "correct".
-                moveAgent(sampled_outcome);
-
-                setTimeout(function () {
-                    // once the agent has arrived, the result replaces the prompt above
-                    // the room (as in the coin demos)
-                    showScreenFeedback(collected ? "You got the gold!" : "Missed it...", collected);
-
-                    // save data so far
-                    var ppt_data = jsPsych.data.get().json();
-                    send_incomplete(id, ppt_data);
-
-                    setTimeout(() => jsPsych.finishTrial(trial_data), 1400);
-                }, MOVE_MS);
             });
         }
     };

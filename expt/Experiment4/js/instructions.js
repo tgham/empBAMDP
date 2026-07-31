@@ -333,6 +333,133 @@ function make_intro_click_demo_trial() {
     };
 }
 
+function make_testing_cost_demo_trial() {
+    const totalPresses = 4;
+    return {
+        type: jsPsychHtmlKeyboardResponse,
+        choices: "NO_KEYS",
+        stimulus: screenHTML({
+            title: `Testing cost`,
+            lines: [
+                `Each time you test a button, a portion of the room's gold coin is lost.`,
+                `Click any of the buttons four times to see how this affects the room's gold coin's size.`
+            ],
+            gap: goldCostCoinHTML(),
+            stage: `
+                <div class="task-row">
+                    ${checkButtonHTML({ placeholder: true })}
+                    ${initialize_agent()}
+                    ${buttonStackHTML()}
+                    ${beliefPanelHTML()}
+                </div>`
+        }) + navHTML("Continue"),
+        data: { task: "instructions_testing_cost_demo" },
+        on_start: function () {
+            for (const b of BUTTONS) {
+                for (const o of OUTCOMES) counts[b][o] = 0;
+            }
+            sampleTrueT();
+            GOLD_FRACTION = 1;
+            agent_topPos = topPos0;
+            agent_leftPos = leftPos0;
+        },
+        on_load: function () {
+            refreshBeliefs();
+            updateGoldCostCoin();
+
+            const cont = document.getElementById("demo-continue");
+            let pressesUsed = 0;
+
+            function armPress() {
+                const row = document.querySelector(".task-row");
+                const bs = row.querySelector(".button-triangle");
+                if (bs) bs.outerHTML = buttonStackHTML();
+                const cs = row.querySelector(".check-stack");
+                if (cs) cs.outerHTML = checkButtonHTML({ placeholder: true });
+                wireButtons(onPress, null);
+            }
+
+            function onPress(button) {
+                const outcome = sampleCategorical(TRUE_T[button]);
+                counts[button][outcome] += 1;
+                moveAgent(outcome);
+
+                GOLD_FRACTION = Math.max(0, GOLD_FRACTION - 1 / (N_TRIALS + 1));
+                updateGoldCostCoin();
+
+                setTimeout(function () {
+                    refreshBeliefs({ button: button, outcome: outcome });
+                    setTimeout(function () {
+                        const agentEl = document.getElementById("agent");
+                        agent_topPos = topPos0;
+                        agent_leftPos = leftPos0;
+                        agentEl.style.top = topPos0 + "%";
+                        agentEl.style.left = leftPos0 + "%";
+                        setTimeout(function () {
+                            pressesUsed += 1;
+                            if (pressesUsed >= totalPresses) {
+                                cont.style.display = "inline-block";
+                            } else {
+                                armPress();
+                            }
+                        }, MOVE_MS + 150);
+                    }, 300);
+                }, MOVE_MS);
+            }
+
+            armPress();
+
+            cont.addEventListener("click", function () {
+                jsPsych.finishTrial({ task: "instructions_testing_cost_demo", presses_used: pressesUsed });
+            });
+        }
+    };
+}
+
+function make_finish_testing_early_demo_trial() {
+    return {
+        type: jsPsychHtmlKeyboardResponse,
+        choices: "NO_KEYS",
+        stimulus: screenHTML({
+            title: `Finishing testing early`,
+            lines: [
+                `Although you have up to ${N_TRIALS} tests, you have the option to finish testing early, and stop losing any more of the gold.`,
+                `Click the tick button to move on.`
+            ],
+            gap: goldCostCoinHTML(),
+            stage: `
+                <div class="task-row">
+                    ${checkButtonHTML({ tick_label: true })}
+                    ${initialize_agent()}
+                    ${buttonStackHTML()}
+                    ${beliefPanelHTML()}
+                </div>`
+        }),
+        data: { task: "instructions_finish_early_demo" },
+        on_start: function () {
+            agent_topPos = topPos0;
+            agent_leftPos = leftPos0;
+        },
+        on_load: function () {
+            // this slide deliberately keeps the tokens + coin exactly as left by
+            // the previous (testing cost) trial -- counts and GOLD_FRACTION are
+            // module-level state, so simply not resetting them here reuses it.
+            refreshBeliefs();
+            updateGoldCostCoin();
+
+            // only the tick is interactive on this slide
+            for (const b of BUTTONS) {
+                const el = document.getElementById("btn-" + b);
+                if (el) el.classList.add("disabled");
+            }
+
+            document.getElementById("btn-check").addEventListener("click", function () {
+                jsPsych.finishTrial({ task: "instructions_finish_early_demo" });
+            });
+        }
+    };
+}
+
 //----------------------------------------------------------------------------//
 // Coin-selection trial for instructions.
 //   opts.fixedCounts -> set an illustrative tally {red:{...}, blue:{...}} for the
@@ -604,57 +731,39 @@ function make_instructions_timeline() {
                     red:  { up: 0, right: 0, down: 0, left: 0 },
                     blue: { up: 5, right: 0, down: 0, left: 0 }
                 })
+            }),
+            screenHTML({
+                title: `How much can I test the buttons?`,
+                lines: [
+                    `You can test the buttons up to <strong>${N_TRIALS} times</strong> in total, splitting your presses between the ${BUTTONS.length} buttons however you like.`,
+                    `However, testing <strong>comes at a price...</strong>`
+                ],
+                stage: taskDisplayStaticHTML()
             })
         ];
     }));
 
-    // merge: finishing the testing phase + practice, on_start stays attached here
-    tl.push(instructionBlock([
-        screenHTML({
-            title: `Finishing the testing phase`,
-            lines: [
-                `You can test the buttons up to <strong>${N_TRIALS} times</strong> in total, splitting your presses between the ${BUTTONS.length} buttons however you like.`,
-                `You do not have to use all ${N_TRIALS} choices, though &mdash; if you already feel you've learned enough about the buttons, you can click the orange <strong>tick button</strong> to move on.`
-            ],
-            stage: taskDisplayStaticHTML(null, { tick: true, tick_label: false })
-        }),
-        screenHTML({
-            title: `Let's practise`,
-            lines: [
-                `The next part works exactly like a real room.`,
-                `Press the buttons to test them.`,
-                `Feel free to use all ${N_TRIALS} presses, or to click the tick button when you feel you've learned enough.`
-            ]
-        })
-    ], {
-        on_start: function () {
-            for (const b of BUTTONS) {
-                for (const o of OUTCOMES) counts[b][o] = 0;
-            }
-            sampleTrueT();
-            sampling_ended = false;
-        }
-    }));
-
-
-    tl.push(make_room_sampling(0, { practice: true }));
+    tl.push(make_testing_cost_demo_trial());
+    tl.push(make_finish_testing_early_demo_trial());
 
     // ---- The gold-collection phase. A fresh illustrative room (unrelated to the
     //      practice): red reaches "up" reliably, blue tends "right", and "down" is
     //      never reached by either -- used to script the two coin demos. ----
     const goldDemoCounts = {
-        red:  { up: 5, right: 0, down: 0, left: 0 },
-        blue: { up: 0, right: 2, down: 0, left: 1 }
+        red:  { up: 2, right: 0, down: 0, left: 0 },
+        blue: { up: 0, right: 1, down: 1, left: 0 }
     };
     tl.push(instructionBlock([
         screenHTML({
+            useCurrentBeliefs: true,
             title: `Collecting the gold`,
             lines: [
-                `As we mentioned earlier, a <strong>gold coin</strong> will appear at one of the ${K_OUTCOMES} locations once you've finished testing the buttons.`,
+                `Once you've finished testing the buttons, the room's <strong>gold coin</strong> will appear at one of the ${K_OUTCOMES} locations.`,
                 `You must then choose the button you think is <strong>most likely to take you to the gold</strong>, based on what you have learned about each button.`,
+                `Note that the size of the gold coin, and therefore its value, is determined by how many times you just tested the buttons.`,
                 `Here's a fresh room. Let's try a couple of examples.`
             ],
-            stage: goldCoinStaticHTML()
+            stage: goldCoinStaticHTML(1-4/(N_TRIALS + 1))
         })
     ]));
 
@@ -689,15 +798,56 @@ function make_instructions_timeline() {
         ]
     }));
 
+    tl.push(instructionBlock([
+        screenHTML({
+            useCurrentBeliefs: true,
+            title: `Balancing testing vs gold collection`,
+            lines: [
+                `Remember: if you manage to reach the gold coin, its value is determined by its size.`,
+                `Therefore, you are faced with a trade-off:`,
+                `<strong>• Testing the buttons in order to learn enough about how they work...</strong>`,
+                `<strong>• ...while also balancing this against the cost of testing.</strong>`
+            ],
+            stage: goldCoinStaticHTML(1-4/(N_TRIALS + 1))
+        })
+    ]));    
+
+    // merge: finishing the testing phase + practice, on_start stays attached here
+    tl.push(instructionBlock([
+        screenHTML({
+            title: `Let's practise`,
+            lines: [
+                `The next part works exactly like a real room.`,
+                `Press the buttons to test them, and then try the gold selection phase.`,
+                `Feel free to use all ${N_TRIALS} presses, or to click the tick button when you feel you've learned enough.`
+            ]
+        })
+    ], {
+        on_start: function () {
+            for (const b of BUTTONS) {
+                for (const o of OUTCOMES) counts[b][o] = 0;
+            }
+            sampleTrueT();
+            sampling_ended = false;
+        }
+    }));
+
+
+    tl.push(make_room_sampling(0, { practice: true }));
+    tl.push(make_gold_pause(0));
+    tl.push(make_gold_trial(0, { practice: true }));
+    
+
     // ---- The aim of the task (bonus) + note that the real task hides the outcome ----
     tl.push(instructionBlock([
         screenHTML({
             title: `The aim of the task`,
             lines: [
-                `The aim of the task is to collect <strong>as many gold coins as possible</strong>.`,
-                `The more gold coins you collect, the <strong>bigger the bonus</strong> you will receive on Prolific.`,
+                `The aim of the task is to maximise the <strong>combined value of the gold coins</strong> that you collect.`,
+                `The more gold coins you collect, and the more valuable they are, the <strong>bigger the bonus</strong> you will receive on Prolific.`,
+                `Remember: the bigger the gold coin, the more valuable it is.`,
+                `Remember also: the more times you test the buttons in a room, the smaller the gold coin that will appear in that room.`,
                 `So in each room, test out the buttons until you feel you've learned enough to continue to the gold selection phase.`,
-                `Remember: in the real experiment you will <strong>not</strong> see whether you actually reached the gold, so just choose the button you believe is most likely to take you there.`
             ]
         })
     ]));

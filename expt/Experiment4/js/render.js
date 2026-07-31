@@ -14,11 +14,10 @@ let agent_leftPos = leftPos0;
 // Depleted by 1/N_TRIALS on every button click (not on tick clicks).
 let GOLD_FRACTION = 1;
 
-// Inline CSS implementing a pie-chart depletion mask: reveals only the
-// remaining `fraction` (0..1) of an image, wiped away clockwise from 12 o'clock,
-// i.e. removes a growing "slice" of the coin as fraction shrinks.
 function goldMaskStyle(fraction) {
     const f = Math.max(0, Math.min(1, fraction));
+    if (f >= 1) return ""; // full coin: no mask needed, avoids the conic-gradient seam at the 360deg/0deg boundary
+    if (f <= 0) return "-webkit-mask-image: none; mask-image: none; opacity: 0;"; // fully depleted: hide outright, same seam issue at 0deg
     const deg = f * 360;
     const mask = `conic-gradient(from 180deg, #000 ${deg}deg, transparent ${deg}deg)`;
     return `-webkit-mask-image:${mask}; mask-image:${mask}; -webkit-mask-size:100% 100%; mask-size:100% 100%;`;

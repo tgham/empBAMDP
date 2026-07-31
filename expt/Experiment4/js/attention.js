@@ -1,9 +1,9 @@
 //----------------------------------------------------------------------------//
 // Attention checks.
 // After every 2 rooms we show a short block of grids (ATTENTION_ROOMS_PER_BLOCK),
-// each with a random red/blue token tally in every location, and ask which
-// location has the most tokens of a given colour. The participant presses the
-// ARROW KEY pointing to that location. No feedback is given.
+// each with a random token tally (for every button) in every location, and ask
+// which location has the most tokens of a given colour/button. The participant
+// presses the ARROW KEY pointing to that location. No feedback is given.
 //
 // Once at least ATTENTION_MIN_CHECKS checks have been completed, if accuracy is
 // below ATTENTION_PASS_FRACTION the participant is excluded (attention_failed is
@@ -38,16 +38,20 @@ function strictMaxOutcome(cntObj) {
     return tie ? null : best;
 }
 
-// random red/blue token counts per location, regenerated until `color` has a
-// unique maximum (so there is a single unambiguous correct answer).
+// random token counts (per button, per location), regenerated until `color`
+// (one of BUTTONS) has a unique maximum (so there is a single unambiguous
+// correct answer).
 function makeAttentionCounts(color) {
-    let red, blue, correct;
+    let cnts, correct;
     do {
-        red = {}; blue = {};
-        for (const o of OUTCOMES) { red[o] = randTokenCount(); blue[o] = randTokenCount(); }
-        correct = strictMaxOutcome(color === "red" ? red : blue);
+        cnts = {};
+        for (const b of BUTTONS) {
+            cnts[b] = {};
+            for (const o of OUTCOMES) cnts[b][o] = randTokenCount();
+        }
+        correct = strictMaxOutcome(cnts[color]);
     } while (correct === null);
-    return { red: red, blue: blue, correct: correct };
+    return { counts: cnts, correct: correct };
 }
 
 //----------------------------------------------------------------------------//
@@ -55,7 +59,7 @@ function makeAttentionCounts(color) {
 // <colour> tokens?" question answered with an arrow key. No feedback.
 //----------------------------------------------------------------------------//
 // the grid + "which location has the most <colour> tokens?" question HTML
-function attentionStimulusHTML(color, red, blue) {
+function attentionStimulusHTML(color, cnts) {
     return screenHTML({
         lines: [
             `Which location has the most
@@ -64,7 +68,7 @@ function attentionStimulusHTML(color, red, blue) {
         ],
         stage: `
             <div class="task-row" style="pointer-events:none;">
-                ${roomCountersStaticHTML(red, blue)}
+                ${roomCountersStaticHTML(cnts)}
             </div>`
     });
 }
@@ -72,13 +76,13 @@ function attentionStimulusHTML(color, red, blue) {
 function make_attention_trial() {
     // generate here (in the factory) so the values exist when the stimulus is
     // evaluated -- jsPsych processes parameters before on_start runs.
-    const color = Math.random() < 0.5 ? "red" : "blue";
+    const color = BUTTONS[Math.floor(Math.random() * BUTTONS.length)];
     const c = makeAttentionCounts(color);
-    const red = c.red, blue = c.blue, correct = c.correct;
+    const cnts = c.counts, correct = c.correct;
     return {
         type: jsPsychHtmlKeyboardResponse,
         choices: ["ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft"],
-        stimulus: attentionStimulusHTML(color, red, blue),
+        stimulus: attentionStimulusHTML(color, cnts),
         data: { task: "attention_check" },
         on_finish: function (data) {
             const chosen = ARROW_TO_OUTCOME[String(data.response).toLowerCase()] || null;
@@ -87,7 +91,7 @@ function make_attention_trial() {
             if (is_correct) attention_correct += 1;
 
             data.attention_color = color;
-            data.attention_counts = { red: red, blue: blue };
+            data.attention_counts = cnts;
             data.attention_correct_outcome = correct;
             data.attention_chosen_outcome = chosen;
             data.attention_is_correct = is_correct;
@@ -143,15 +147,15 @@ const ATTENTION_PRACTICE_ITEMS = 3;
 
 // one practice item = the question (no scoring) + a feedback screen.
 function make_attention_practice_item() {
-    const color = Math.random() < 0.5 ? "red" : "blue";
+    const color = BUTTONS[Math.floor(Math.random() * BUTTONS.length)];
     const c = makeAttentionCounts(color);
-    const red = c.red, blue = c.blue, correct = c.correct;
+    const cnts = c.counts, correct = c.correct;
     let chosen = null, is_correct = false;
 
     const question = {
         type: jsPsychHtmlKeyboardResponse,
         choices: ["ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft"],
-        stimulus: attentionStimulusHTML(color, red, blue),
+        stimulus: attentionStimulusHTML(color, cnts),
         data: { task: "attention_practice" },
         on_finish: function (data) {
             chosen = ARROW_TO_OUTCOME[String(data.response).toLowerCase()] || null;
@@ -177,7 +181,7 @@ function make_attention_practice_item() {
                 ],
                 stage: `
                     <div class="task-row" style="pointer-events:none;">
-                        ${roomCountersStaticHTML(red, blue)}
+                        ${roomCountersStaticHTML(cnts)}
                     </div>`
             });
         },
@@ -201,7 +205,7 @@ function make_attention_intro_and_practice() {
                 title: `Attention checks`,
                 lines: [
                     `Every so often during the task, we'll check that you're still paying attention.`,
-                    `You'll see a room with red and blue tokens, and we'll ask: <strong>which location has the most tokens of a particular colour?</strong>`,
+                    `You'll see a room with tokens of ${BUTTONS.length} different colours, and we'll ask: <strong>which location has the most tokens of a particular colour?</strong>`,
                     `Answer by pressing the <strong>arrow key</strong> (&uarr; &rarr; &darr; &larr;) pointing to that location.`,
                     `Let's <strong>practise</strong> a couple, with feedback.`
                 ]
