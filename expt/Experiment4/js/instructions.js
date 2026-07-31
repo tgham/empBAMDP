@@ -582,7 +582,7 @@ function make_instructions_timeline() {
             screenHTML({
                 title: `Interpreting the tokens`,
                 lines: [
-                    `If, however, testing a button adds more tokens to locations that have been reached, this indicates the button is <strong>less likely</strong> to lead to the other locations that have not been reached.`,
+                    `After testing a button a few times, however, some locations may have more tokens than others. This indicates the button is <strong>less likely</strong> to lead to those other locations that <strong>have not yet been reached</strong>.`,
                     `For example, in the room below the tokens suggest the <strong>blue</strong> button is likely to lead <strong>up</strong>. This indicates it is <strong>less likely</strong> to lead to any of the other locations.`
                 ],
                 stage: taskDisplayStaticHTML({ up: 0, right: 0, down: 0, left: 0 }, { up: 5, right: 0, down: 0, left: 0 })
