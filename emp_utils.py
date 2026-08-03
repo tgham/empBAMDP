@@ -18,7 +18,8 @@ from tqdm.auto import tqdm
 import copy
 import ast
 from itertools import permutations
-from scipy.optimize import brentq, bisect
+from scipy.optimize import brentq, bisect, minimize
+from joblib import Parallel, delayed
 
 
 ## create empowerment env
@@ -40,8 +41,10 @@ def make_emp_env(n_arms=3, n_outcomes=5, n_trials=20, alpha=1.0, ell=1.0,
     """
     import importlib.util as _ilu
 
-    _spec = _ilu.spec_from_file_location(
-        "bandit", "gym_bandits/bandit.py")
+    ## load the EmpBanditWrapper class from the sibling repo
+    _spec = _ilu.spec_from_file_location("bandit", "../context_exploration/gym_bandits/bandit.py")
+    # _spec = _ilu.spec_from_file_location(
+    #     "bandit", "gym_bandits/bandit.py")
     _mod = _ilu.module_from_spec(_spec)
     _spec.loader.exec_module(_mod)
 
@@ -412,6 +415,33 @@ def array_to_hist(canon_C, n_arms, n_outcomes):
     history_str = '-'.join(f'a{a}o{o}:{c}' for ((a, o), c) in canon_counts) or 'init'
     return canon_counts, history_str
 
+## make the history_str concrete
+def canon_to_concrete(row):
+
+    ### map colours onto actions
+
+    ## see if sums of rows have been flipped
+    sum_pre = np.sum(row['counts_array'], axis=1)
+    sum_post = np.sum(row['canonical_counts_array'], axis=1)
+    
+    ## flipped, i.e. a0=red, a1=blue
+    if np.any(sum_pre != sum_post):
+        row['a0'] = 'red'
+        row['a1'] = 'blue'
+        row['chose_a0'] = row['action'] == 'red'
+        row['chose_a1'] = row['action'] == 'blue'
+    ## not flipped, i.e. a0=blue, a1=red
+    else:
+        row['a0'] = 'blue'
+        row['a1'] = 'red'
+        row['chose_a0'] = row['action'] == 'blue'
+        row['chose_a1'] = row['action'] == 'red'
+    
+    return row
+
+    
+    ### map locations onto outcomes (todo...)
+
 
 
 ## define unordered 'history_counts', i.e. sufficient statistic for belief state
@@ -578,6 +608,4 @@ def ell_tip(agent, env, a1, a2):
         ell_switch = None
 
     return ell_switch
-
-
 
