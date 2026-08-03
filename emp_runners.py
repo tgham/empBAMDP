@@ -6,6 +6,9 @@ from scipy.optimize import bisect, brentq, minimize
 from scipy.special import softmax as _softmax
 from joblib import Parallel, delayed
 import warnings
+from tqdm_joblib import tqdm_joblib
+
+from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canon_to_concrete
 warnings.filterwarnings('ignore')
 
 ## EmpBandit lives in a sibling repo and is loaded dynamically. Done once at
@@ -15,7 +18,6 @@ _mod = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 EmpBandit = _mod.EmpBandit
 
-
 def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t = 0, temp = 1, fitting=False, verbose=False):
     """Run an empowerment-bandit agent yoked to participants' actual trial
     sequences. Returns a tidy DataFrame, one row per (subject_id, room, trial),
@@ -23,18 +25,15 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
     """
 
     ## extract info from df_ppt ## hack for now
-    n_trials = 8
-    n_outcomes = 4 
-    n_arms = 2
+    n_trials = df_ppt['trial'].max() + 1
+    n_outcomes = df_ppt['outcome'].max() + 1
+    n_arms = df_ppt['action'].max() + 1
     n_rooms = df_ppt['room'].max()  
     n_actions = n_arms + int(termination_arm)
     terminate_idx = n_arms if termination_arm else None
     alpha = 0.4
     contexts = [(float(alpha), 1.0)]
-
     cost = 0.0
-    button_map = {'blue': 0, 'red': 1}
-    outcome_map = {'up': 0, 'left': 1, 'down': 2, 'right': 3}
 
     if not fitting:
         records = []
@@ -75,15 +74,15 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
         df_p = df_ppt.loc[df_ppt['subject_id'] == pid]
 
         for r in range(n_rooms):
-            df_pr = df_p.loc[df_p['room'] == r+1]
+            df_pr = df_p.loc[df_p['room'] == r]
             canon_C = np.zeros((n_arms, n_outcomes), dtype=int)
 
             ## fill in canon_C with the actual counts from the participant's history up to init_t
             for t in range(init_t):
-                row_df = df_pr.loc[df_pr['trial'] == t+1]
-                if not row_df['ended_early'].values[0]:
-                    actual_action = button_map[row_df['chosen_button'].values[0]]
-                    actual_outcome = outcome_map[row_df['outcome'].values[0]]
+                row_df = df_pr.loc[df_pr['trial'] == t]
+                if not row_df['terminated'].values[0]:
+                    actual_action = row_df['action'].values[0]
+                    actual_outcome =row_df['outcome'].values[0]
                     canon_C[actual_action, actual_outcome] += 1
                 
                     ## since we're not simulating the agent for these trials, fill with nans
@@ -98,7 +97,7 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                         chose_a1 = np.nan
                         current_emp = np.nan
                         row = {
-                            'subject_id': pid, 'room': r+1, 'trial': t+1, 'ell': ell,
+                            'subject_id': pid, 'room': r, 'trial': t, 'ell': ell,
                             'chose_a0': chose_a0, 'chose_a1': chose_a1,
                             'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
                             'current_emp': current_emp,
@@ -112,7 +111,7 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                     break
 
             for t in range(init_t, n_trials):
-                row_df = df_pr.loc[df_pr['trial'] == t+1]
+                row_df = df_pr.loc[df_pr['trial'] == t]
                 if not row_df.empty:
                     h = (n_trials - t) if horizon is None else min(horizon, n_trials - t)
 
@@ -128,7 +127,7 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                     ## calculate current emp
                     current_emp = _leaf_emp(contexts, ell, canon_C)
 
-                    if row_df['ended_early'].values[0]:
+                    if row_df['terminated'].values[0]:
                         terminated = True
                         actual_action = n_arms+1
                         actual_outcome = np.nan
@@ -140,14 +139,14 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                         chose_a1 = np.nan
                     else:
                         terminated=False
-                        actual_action = button_map[row_df['chosen_button'].values[0]]
-                        actual_outcome = outcome_map[row_df['outcome'].values[0]]
+                        actual_action = row_df['action'].values[0]
+                        actual_outcome = row_df['outcome'].values[0]
 
                         ## update canon_C for next trial
                         canon_C[actual_action, actual_outcome] += 1
 
                         ## map onto a0 and a1 etc.
-                        if df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r+1) & (df_ppt['trial'] == t+1), 'a0'].values[0] == 'blue':
+                        if df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a0'].values[0] == 'blue':
                             Q_a0 = Q[0]
                             Q_a1 = Q[1]
                             p_a0 = probs[0]
@@ -156,7 +155,7 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                             chose_a0 = action == 0
                             chose_a1 = action == 1
                             ppt_chose_a0 = actual_action == 0
-                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r+1) & (df_ppt['trial'] == t+1), 'a0'].values[0] == 'red':
+                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a0'].values[0] == 'red':
                             Q_a0 = Q[1]
                             Q_a1 = Q[0]
                             p_a0 = probs[1]
@@ -169,7 +168,7 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                         ## record the row if simulating agents
                         if not fitting:
                             row = {
-                                'subject_id': pid, 'room': r+1, 'trial': t+1, 'ell': ell,
+                                'subject_id': pid, 'room': r, 'trial': t, 'ell': ell,
                                 'chose_a0': chose_a0, 'chose_a1': chose_a1,
                                 'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
                                 'current_emp': current_emp,
@@ -216,6 +215,83 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
     else: 
         NLL = np.sum([-(np.log(p) if c else np.log(1-p)) for p, c in zip(p_a0s, chose_a0s)])
         return NLL
+    
+
+## generate a single synthetic dataset, i.e. an ell agent acting in its own emp bandit env
+def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_arm=True, temp=1.0, greedy =False, seed=None):
+    """Generate synthetic data from an empowerment agent in its own emp bandit env."""
+    agent = EmpowermentAgent(n_arms=n_arms, n_outcomes=n_outcomes,
+                             contexts=[(float(alpha), 1.0)], ell=ell,
+                             termination_arm=termination_arm)
+    
+    ## init data
+    sim_out = defaultdict(list)
+    
+    
+    ## loop through bandit envs
+    for r in range(n_rooms):
+
+        ## fresh initialisation of env
+        env = make_emp_env(n_arms=n_arms, n_outcomes=n_outcomes, n_trials=n_trials,
+                        alpha=alpha, ell=ell, termination_arm=termination_arm,
+                        seed=seed)
+        counts = np.zeros((n_arms, n_outcomes), dtype=int)
+        env.reset()
+
+        ## loop through trials
+        for t in range(n_trials):
+
+            ## compute Q 
+            h = (n_trials - t) if h is None else min(h, n_trials - t)
+            Q = agent.bellman_Q(counts, h)
+            probs = _softmax(Q/temp)
+
+            ## select action
+            if greedy:
+                max_Q = np.nanmax(Q)
+                best_arms = np.where(Q == max_Q)[0]
+                if len(best_arms) > 1:
+                    action = int(np.random.choice(best_arms))
+                else:
+                    action = int(best_arms[0])
+            else: #prob matching
+                action = int(np.random.choice(len(probs), p=probs))
+            (_, outcome), reward, terminated, truncated, _ = env.step(action)
+
+
+            ## save
+            sim_out['room'].append(r)
+            sim_out['trial'].append(t)
+            sim_out['action'].append(action)
+            sim_out['outcome'].append(outcome)
+            sim_out['terminated'].append(action == n_arms if termination_arm else False)
+            sim_out['counts_array'].append(counts.copy())
+            for a in range(n_arms):
+                sim_out[f'Q_{a}'].append(Q[a])
+                sim_out[f'p_{a}'].append(probs[a])
+            if termination_arm:
+                sim_out['Q_terminate'].append(Q[-1])
+                sim_out['p_terminate'].append(probs[-1])
+
+            ## terminate if the agent chose the termination arm
+            if terminated or truncated:
+                break
+            
+            ## update counts
+            else:
+                counts[action, outcome] += 1
+    
+    ## df
+    df_sim = pd.DataFrame.from_dict(sim_out)
+    df_sim['gen_ell'] = ell
+    df_sim['gen_horizon'] = h
+    df_sim['gen_temp'] = temp
+
+    ## canonicalise histories
+    df_sim['canonical_counts_array'] = df_sim['counts_array'].apply(lambda x: canonical_count_matrix(x)[0])
+    df_sim['history_str'] = df_sim['canonical_counts_array'].apply(lambda x: array_to_hist(x, n_arms, n_outcomes)[1])
+    df_sim = df_sim.apply(lambda x: canon_to_concrete(x), axis=1)
+    return df_sim
 
 
 def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size, horizon,
@@ -780,21 +856,23 @@ def fit_emp(df_ppt,
             ell_bounds, temp_bounds = param_bounds
         elif agent_type == 'info':
             ell_bounds, temp_bounds = (None, None), param_bounds[1]
-        results = Parallel(n_jobs=n_jobs)(
-            delayed(_fit_ppt)(
-                pid=pid,
-                df_ppt=df_ppt.loc[df_ppt['subject_id'] == pid],
-                ell_bounds=ell_bounds,
-                temp_bounds=temp_bounds,
-                horizon=horizon,
-                k=k,
-                termination_arm=termination_arm,
-                init_t=init_t,
-                maxiter=maxiter,
-                tol=tol,
-                verbose=verbose
-            ) for pid in (pids if not verbose else tqdm(pids, desc="Fitting"))
-        )
+        with tqdm_joblib(tqdm(total=len(pids), desc="Fitting", disable=not verbose)):
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(_fit_ppt)(
+                    pid=pid,
+                    df_ppt=df_ppt.loc[df_ppt['subject_id'] == pid],
+                    ell_bounds=ell_bounds,
+                    temp_bounds=temp_bounds,
+                    horizon=horizon,
+                    k=k,
+                    termination_arm=termination_arm,
+                    init_t=init_t,
+                    maxiter=maxiter,
+                    tol=tol,
+                    verbose=False  # avoid duplicate/interleaved worker prints
+                )
+                for pid in pids
+            )
         if df_fits.empty:
             df_fits = pd.DataFrame(results)
         else:
@@ -840,25 +918,25 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon, k,
         bounds = [temp_bounds]
         x0 = [1.0]
 
-    try:
-        res = minimize(
-            fun=compute_nll,
-            x0=x0,
-            method='Nelder-Mead',
-            bounds=bounds,
-            options={'maxiter': maxiter, 'tol': tol, 'disp': False}
-        )
-        if len(res.x) == 1:
-            ell_hat = None
-            temp_hat = res.x[0]
-        else:
-            ell_hat, temp_hat = res.x
-        nll = res.fun
-        success = res.success
-    except Exception as e:
-        if verbose:
-            print(f"Optimization failed for subject {pid}: {e}")
-        ell_hat, temp_hat, nll, success = np.nan, np.nan, np.inf, False
+    # try:
+    res = minimize(
+        fun=compute_nll,
+        x0=x0,
+        method='Nelder-Mead',
+        bounds=bounds,
+        options={'maxiter': maxiter, 'tol': tol, 'disp': False}
+    )
+    if len(res.x) == 1:
+        ell_hat = None
+        temp_hat = res.x[0]
+    else:
+        ell_hat, temp_hat = res.x
+    nll = res.fun
+    success = res.success
+    # except Exception as e:
+    #     if verbose:
+    #         print(f"Optimization failed for subject {pid}: {e}")
+    #     ell_hat, temp_hat, nll, success = np.nan, np.nan, np.inf, False
 
     return {
         'subject_id': pid,
