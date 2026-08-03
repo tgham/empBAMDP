@@ -157,7 +157,7 @@ function make_room_sampling(room_num, opts) {
     // Manually-pushed rows don't get the session-level fields that jsPsych
     // auto-applies to rows it writes itself, so stamp them on here to match.
     function stampSession(row) {
-        row.subject_id = subject_id;
+        row.subject_id = id;  // use the internal id from the backend rather than the Prolific PID
         row.study_id = study_id;
         row.session_id = session_id;
         row.belief_display = BELIEF_DISPLAY;
@@ -383,7 +383,7 @@ function make_gold_trial(room_num, opts) {
                 // independent of whether the choice was the optimal one.
                 const sampled_outcome = sampleOutcome(TRUE_T[button]);
                 const collected = sampled_outcome === goldOutcome;
-                if (collected) collected_gold += 1;
+                if (collected && !practice) collected_gold += 1;
 
                 const trial_data = {
                     chosen_button: button,

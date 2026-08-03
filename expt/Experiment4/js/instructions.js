@@ -351,7 +351,7 @@ function make_testing_cost_demo_trial() {
                     ${buttonStackHTML()}
                     ${beliefPanelHTML()}
                 </div>`,
-            below: `<p>Click any of the buttons a few times to see how this affects the room's gold coin's size.</p>`
+            below: `<p>Click the buttons a few times to see how this affects the room's gold coin's size.</p>`
         }) + navHTML("Continue"),
         data: { task: "instructions_testing_cost_demo" },
         on_start: function () {
@@ -629,7 +629,7 @@ function make_instructions_timeline() {
                 `Each room has <strong>${N_BUTTONS} buttons</strong> to press, shown below in <strong>${BUTTONS[0]}</strong>, <strong>${BUTTONS[1]}</strong> and <strong>${BUTTONS[2]}</strong>.`,
                 `Pressing a button takes you to one of these ${K_OUTCOMES} locations <strong>with some probability</strong>.`,
                 ],
-                stage: taskDisplayStaticHTML(null, { label_on: false })
+                stage: taskDisplayStaticHTML(null, { label_on: true })
             }),
             screenHTML({
                 title: `Gold coins`,
@@ -724,7 +724,7 @@ function make_instructions_timeline() {
             screenHTML({
                 title: `Interpreting the tokens`,
                 lines: [
-                    `If, however, testing a button adds more tokens to locations that have been reached, this indicates the button is <strong>less likely</strong> to lead to the other locations that have not been reached.`,
+                    `After testing a button a few times, however, some locations may have more tokens than others. This indicates the button is <strong>less likely</strong> to lead to those other locations that <strong>have not yet been reached</strong>.`,
                     `For example, in the room below the tokens suggest the <strong>blue</strong> button is likely to lead <strong>up</strong>. This indicates it is <strong>less likely</strong> to lead to any of the other locations.`
                 ],
                 stage: taskDisplayStaticHTML({
@@ -805,8 +805,8 @@ function make_instructions_timeline() {
             lines: [
                 `Remember: if you manage to reach the gold coin, its value is determined by its size.`,
                 `Therefore, you are faced with a trade-off:`,
-                `<strong>• Testing the buttons in order to learn enough about how they work...</strong>`,
-                `<strong>• ...while also balancing this against the cost of testing.</strong>`
+                `<strong>- Testing the buttons in order to learn enough about how they work...</strong>`,
+                `<strong>- ...while also balancing this against the cost of testing.</strong>`
             ],
             stage: goldCoinStaticHTML(1-4/(N_TRIALS + 1))
         })
@@ -845,8 +845,7 @@ function make_instructions_timeline() {
             lines: [
                 `The aim of the task is to maximise the <strong>combined value of the gold coins</strong> that you collect.`,
                 `The more gold coins you collect, and the more valuable they are, the <strong>bigger the bonus</strong> you will receive on Prolific.`,
-                `Remember: the bigger the gold coin, the more valuable it is.`,
-                `Remember also: the more times you test the buttons in a room, the smaller the gold coin that will appear in that room.`,
+                `<strong>Remember:</strong> the more times you test the buttons in a room, the smaller and less valuable the gold coin that will appear in that room.`,
                 `So in each room, test out the buttons until you feel you've learned enough to continue to the gold collection phase.`,
             ]
         })

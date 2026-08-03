@@ -50,22 +50,56 @@
                 // download the full trial-by-trial data as CSV
                 // jsPsych.data.get().localSave("csv", "exp4_" + subject_id + ".csv");
 
+                // var ppt_data = jsPsych.data.get().json();
+                // send_complete(id, ppt_data);
+                
+                // // redirect to Prolific (links are set in config.js; blank = no redirect).
+                // // Passing the comprehension check AND the attention checks -> complete.
+                // // DEBUGGING stays put, so a dev run never hits a Prolific completion URL.
+                // if (link && !DEBUGGING) {
+                    //     setTimeout(function () { window.location.replace(link); }, 2000);
+                    // }
+                    
                 var ppt_data = jsPsych.data.get().json();
-                send_complete(id, ppt_data);
-
-                // redirect to Prolific (links are set in config.js; blank = no redirect).
-                // Passing the comprehension check AND the attention checks -> complete.
-                // DEBUGGING stays put, so a dev run never hits a Prolific completion URL.
                 var link = (quiz_passed && !attention_failed) ? REDIRECT_COMPLETE : REDIRECT_FAIL;
-                if (link && !DEBUGGING) {
-                    setTimeout(function () { window.location.replace(link); }, 500);
-                }
+                send_complete(id, ppt_data)
+                    .then(() => {
+                        console.log('Data successfully sent to completion endpoint');
+                            window.location.replace(link);
+                    })
+                    .catch(error => {
+                        console.error('Failed to send completion data:', error);
+                        document.body.innerHTML += `
+                            <div style="max-width: 800px; margin: auto; padding: 20px; font-family: Arial, sans-serif; line-height: 1.6; text-align: left;">
+                                <h2>Note: There might have been an issue saving your data, but you will still be redirected shortly.</h2>
+                            </div>
+                        `;
+                        setTimeout(() => {
+                            window.location.replace(link);
+                        }, 5000);
+                    });
             }
         });
 
+        // get prolific id
+        var pid = get_prolific_id();
+        let id = null;
+        create_participant(pid).then((value) => {
+        // If the id is null, then the backend is complaining that the ppt has
+        // done the experiment before
+        // You should probably bail out in that case
+        if (value['id'] == null) {
+            console.log(`${pid} is not unique`);
+        }
+        // Otherwise, give the ppt an internal id
+        id = value['id'];
+        console.log(`id => ${id}`);
+        })
+
         // attach session-level fields to every trial's data row
         jsPsych.data.addProperties({
-            subject_id: subject_id,
+            // subject_id: subject_id,
+            subject_id: id,  // use the internal id from the backend rather than the Prolific PID
             study_id: study_id,
             session_id: session_id,
             belief_display: BELIEF_DISPLAY,
@@ -88,21 +122,6 @@
         };
         timeline.push(preload);
 
-        
-        // get prolific id
-        var pid = get_prolific_id();
-        let id = null;
-        create_participant(pid).then((value) => {
-        // If the id is null, then the backend is complaining that the ppt has
-        // done the experiment before
-        // You should probably bail out in that case
-        if (value['id'] == null) {
-            console.log(`${pid} is not unique`);
-        }
-        // Otherwise, give the ppt an internal id
-        id = value['id'];
-        console.log(`id => ${id}`);
-        })
 
         const informedConsentForm = `
             <div style="max-width: 800px; margin: auto; padding: 20px; font-family: Arial, sans-serif; line-height: 1.6; text-align: left;">

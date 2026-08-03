@@ -55,10 +55,25 @@ function send_incomplete(id, data) {
  * @param data The data to be saved
  */
 function send_complete(id, data) {
-  var xhr = new XMLHttpRequest();
-  xhr.open('POST', `${BACKEND_URL}/${COMPLETE_SAVE_PATH}/${id}`);
-  xhr.setRequestHeader('Content-Type', 'application/json');
-  xhr.send(JSON.stringify(data));
+  return new Promise((resolve, reject) => {
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BACKEND_URL}/${COMPLETE_SAVE_PATH}/${id}`);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    
+    xhr.onload = function() {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.response);
+      } else {
+        reject(new Error(`HTTP error ${xhr.status}: ${xhr.statusText}`));
+      }
+    };
+    
+    xhr.onerror = function() {
+      reject(new Error('Network error occurred'));
+    };
+    
+    xhr.send(JSON.stringify(data));
+  });
 }
 
 /**
