@@ -2,9 +2,11 @@ import importlib.util as _ilu
 import numpy as np
 import pandas as pd
 from emp_utils import *
-from scipy.optimize import bisect, brentq
+from scipy.optimize import bisect, brentq, minimize
 from scipy.special import softmax as _softmax
 from joblib import Parallel, delayed
+import warnings
+warnings.filterwarnings('ignore')
 
 ## EmpBandit lives in a sibling repo and is loaded dynamically. Done once at
 ## import time so worker processes don't re-import per task.
@@ -14,7 +16,7 @@ _spec.loader.exec_module(_mod)
 EmpBandit = _mod.EmpBandit
 
 
-def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t = 0, temp = 1):
+def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t = 0, temp = 1, fitting=False, verbose=False):
     """Run an empowerment-bandit agent yoked to participants' actual trial
     sequences. Returns a tidy DataFrame, one row per (subject_id, room, trial),
     tagged with `ell`, so results from several ell-agents can be pd.concat'd.
@@ -34,27 +36,46 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
     button_map = {'blue': 0, 'red': 1}
     outcome_map = {'up': 0, 'left': 1, 'down': 2, 'right': 3}
 
-    records = []
+    if not fitting:
+        records = []
+    elif fitting:
+        p_a0s = []
+        chose_a0s = []
 
-    ## current empowerment (cost-free leaf) for one belief context at one ell
-    def _leaf_emp(ctx, e, canon_C):
-        agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e,
-                                 termination_arm=termination_arm,
-                                 )
-        ## canon_C is the RAW count matrix; the agent adds the prior alpha
-        ## internally (predictive: alpha + counts), so do NOT pre-offset here.
-        return agent.leaf_value(canon_C)
+    ## determine whether fitting emp or info-seeking agent
+    if ell is not None:
+        agent_type = 'emp'
+        Q_func = _emp_bellman_Q
+
+        ## current empowerment (cost-free leaf) for one belief context at one ell
+        def _leaf_emp(ctx, e, canon_C):
+            agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e,
+                                        termination_arm=termination_arm,
+                                        )
+            ## canon_C is the RAW count matrix; the agent adds the prior alpha
+            ## internally (predictive: alpha + counts), so do NOT pre-offset here.
+            return agent.leaf_value(canon_C)
+        
+    else:
+        agent_type = 'info'
+        Q_func = _info_bellman_Q
+        def _leaf_emp(ctx, e, canon_C):
+            agent = InfoSeekingAgent(n_arms, n_outcomes, ctx,
+                                        termination_arm=termination_arm,
+                                        )
+            return agent.leaf_value(canon_C)
 
     # for pid in df_ppt['subject_id'].unique():
-    for p in tqdm(range(len(df_ppt['subject_id'].unique()))):
+    if verbose:
+        print(f'Running run_emp for ell={ell}, horizon={horizon}, k={k}, termination_arm={termination_arm}, init_t={init_t}, temp={temp}')
+        pbar = tqdm(range(len(df_ppt['subject_id'].unique())), desc='Subjects')
+    # for p in tqdm(range(len(df_ppt['subject_id'].unique()))):
+    for p in range(len(df_ppt['subject_id'].unique())):
         pid = df_ppt['subject_id'].unique()[p]
         df_p = df_ppt.loc[df_ppt['subject_id'] == pid]
 
         for r in range(n_rooms):
             df_pr = df_p.loc[df_p['room'] == r+1]
-
-            prev_action = None
-
             canon_C = np.zeros((n_arms, n_outcomes), dtype=int)
 
             ## fill in canon_C with the actual counts from the participant's history up to init_t
@@ -65,31 +86,29 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                     actual_outcome = outcome_map[row_df['outcome'].values[0]]
                     canon_C[actual_action, actual_outcome] += 1
                 
-                    ## since we're not simulating the agent, fill with nans
-                    actual_action = n_arms + 1
-                    actual_outcome = np.nan
-                    Q_a0 = np.nan
-                    Q_a1 = np.nan
-                    p_a0 = np.nan
-                    p_a1 = np.nan
-                    chose_a0 = np.nan
-                    chose_a1 = np.nan
-                    current_emp = np.nan
-                    row = {
-                        'subject_id': pid, 'room': r+1, 'trial': t+1, 'ell': ell,
-                        'chose_a0': chose_a0, 'chose_a1': chose_a1,
-                        'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
-                        'current_emp': current_emp,
-                        'Q_a0': Q_a0, 'Q_a1': Q_a1,
-                        'Q_terminate': np.nan if not termination_arm else np.nan,
-                        'p_terminate': np.nan if not termination_arm else np.nan,
-                        # 'p_repeat_choice': np.nan if prev_action is None else probs[prev_action],
-                    }
-                    records.append(row)
+                    ## since we're not simulating the agent for these trials, fill with nans
+                    if not fitting:
+                        actual_action = n_arms + 1
+                        actual_outcome = np.nan
+                        Q_a0 = np.nan
+                        Q_a1 = np.nan
+                        p_a0 = np.nan
+                        p_a1 = np.nan
+                        chose_a0 = np.nan
+                        chose_a1 = np.nan
+                        current_emp = np.nan
+                        row = {
+                            'subject_id': pid, 'room': r+1, 'trial': t+1, 'ell': ell,
+                            'chose_a0': chose_a0, 'chose_a1': chose_a1,
+                            'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
+                            'current_emp': current_emp,
+                            'Q_a0': Q_a0, 'Q_a1': Q_a1,
+                            'Q_terminate': np.nan if not termination_arm else np.nan,
+                            'p_terminate': np.nan if not termination_arm else np.nan,
+                            # 'p_repeat_choice': np.nan if prev_action is None else probs[prev_action],
+                        }
+                        records.append(row)
                 else:
-                    # for tt in range(t, init_t):
-                    #     row['trial'] = tt + 1
-                    #     records.append(row)
                     break
 
             for t in range(init_t, n_trials):
@@ -97,7 +116,7 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                 if not row_df.empty:
                     h = (n_trials - t) if horizon is None else min(horizon, n_trials - t)
 
-                    Q = _emp_bellman_Q(n_arms, n_outcomes, contexts, ell,
+                    Q = Q_func(n_arms, n_outcomes, contexts, ell,
                                         termination_arm, canon_C, h, cost = cost,
                                         )
 
@@ -136,6 +155,7 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                             agent_action = 0 if action == 0 else 1
                             chose_a0 = action == 0
                             chose_a1 = action == 1
+                            ppt_chose_a0 = actual_action == 0
                         elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r+1) & (df_ppt['trial'] == t+1), 'a0'].values[0] == 'red':
                             Q_a0 = Q[1]
                             Q_a1 = Q[0]
@@ -144,57 +164,59 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                             agent_action = 0 if action == 1 else 1
                             chose_a0 = action == 1
                             chose_a1 = action == 0
-                        row = {
-                            'subject_id': pid, 'room': r+1, 'trial': t+1, 'ell': ell,
-                            'chose_a0': chose_a0, 'chose_a1': chose_a1,
-                            'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
-                            'current_emp': current_emp,
-                            'Q_a0': Q_a0, 'Q_a1': Q_a1,
-                            # 'p_repeat_choice': np.nan if prev_action is None else probs[prev_action],
-                        }
+                            ppt_chose_a0 = actual_action == 1
+                    
+                        ## record the row if simulating agents
+                        if not fitting:
+                            row = {
+                                'subject_id': pid, 'room': r+1, 'trial': t+1, 'ell': ell,
+                                'chose_a0': chose_a0, 'chose_a1': chose_a1,
+                                'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
+                                'current_emp': current_emp,
+                                'Q_a0': Q_a0, 'Q_a1': Q_a1,
+                                # 'p_repeat_choice': np.nan if prev_action is None else probs[prev_action],
+                            }
+                            if termination_arm:
+                                row['Q_terminate'] = Q[-1]
+                                row['p_terminate'] = probs[-1]
+                            records.append(row)
 
-                    # row = {
-                    #     'subject_id': pid, 'room': r, 'trial': t, 'ell': ell,
-                    #     'agent_action': action, 'actual_action': actual_action,
-                    #     'actual_outcome': actual_outcome,
-                    #     'current_emp': current_emp,
-                    #     'agent_matches_ppt': action == actual_action,
-                    #     'p_repeat_choice': np.nan if prev_action is None else probs[prev_action],
-                    # }
-
-                    if termination_arm:
-                        row['Q_terminate'] = Q[-1]
-                        row['p_terminate'] = probs[-1]
-                    records.append(row)
-
-                    prev_action = actual_action
+                        ## record choice probs if fitting
+                        elif fitting:
+                            p_a0s.append(p_a0)
+                            chose_a0s.append(chose_a0)
 
                     if terminated:
                         break
                 else:
                     break
-
-    df_ell = pd.DataFrame.from_records(records)
-
-    # ### concat
-
-    # ## ensure all columns are present
-    # for col in df_ell.columns:
-    #     if col not in df_ppt.columns:
-    #         df_ppt[col] = np.nan
-    # df_ppt['ell'] = 'human'
-    # df_full = pd.concat([df_ppt, df_ell], ignore_index=True, sort=False)
+        pbar.update(1) if verbose else None
 
 
-    ### or, merge
-    df_ell = df_ell.rename(columns={'chose_a0': 'ell'+str(ell)+'_chose_a0', 'chose_a1': 'ell'+str(ell)+'_chose_a1', 
-                                    'p_choice_a0': 'ell'+str(ell)+'_p_choice_a0', 'p_choice_a1': 'ell'+str(ell)+'_p_choice_a1',
-                                    'Q_a0': 'ell'+str(ell)+'_Q_a0', 'Q_a1': 'ell'+str(ell)+'_Q_a1', 
-                                    'current_emp': 'ell'+str(ell)+'_current_emp',
-                                    'Q_terminate': 'ell'+str(ell)+'_Q_terminate', 'p_terminate': 'ell'+str(ell)+'_p_terminate'})
-    df_full = df_ppt.merge(df_ell, on=['subject_id', 'room', 'trial'], how='left')
 
-    return df_full
+    ## merge (if not fitting)
+    if not fitting:
+
+            # ### concat
+
+        # ## ensure all columns are present
+        # for col in df_ell.columns:
+        #     if col not in df_ppt.columns:
+        #         df_ppt[col] = np.nan
+        # df_ppt['ell'] = 'human'
+        # df_full = pd.concat([df_ppt, df_ell], ignore_index=True, sort=False)
+        df_ell = pd.DataFrame.from_records(records)
+        df_ell = df_ell.rename(columns={'chose_a0': 'ell'+str(ell)+'_chose_a0', 'chose_a1': 'ell'+str(ell)+'_chose_a1', 
+                                        'p_choice_a0': 'ell'+str(ell)+'_p_choice_a0', 'p_choice_a1': 'ell'+str(ell)+'_p_choice_a1',
+                                        'Q_a0': 'ell'+str(ell)+'_Q_a0', 'Q_a1': 'ell'+str(ell)+'_Q_a1', 
+                                        'current_emp': 'ell'+str(ell)+'_current_emp',
+                                        'Q_terminate': 'ell'+str(ell)+'_Q_terminate', 'p_terminate': 'ell'+str(ell)+'_p_terminate'})
+        df_full = df_ppt.merge(df_ell, on=['subject_id', 'room', 'trial'], how='left')
+        return df_full
+    else: 
+        NLL = np.sum([-(np.log(p) if c else np.log(1-p)) for p, c in zip(p_a0s, chose_a0s)])
+        return NLL
+
 
 def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size, horizon,
                           n_arms, n_outcomes, n_trials, alpha, termination_arm, ells, temp):
@@ -487,6 +509,14 @@ def _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cos
                              independent_contexts=independent_contexts)
     return agent.bellman_Q(counts, h)
 
+def _info_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cost =None):
+    """Module-level (picklable) helper: build an InfoSeekingAgent and return its
+    horizon-h Q over the given counts. Used by the joblib path.
+    (takes ell and cost to ensure compatibility with the _emp_bellman_Q signature, but ignores it)
+    """
+    agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm=termination_arm)
+    return - agent.bellman_Q(counts, h) ## negate because minimising posterior variance
+
 
 def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      contexts=None, context_prior=None,
@@ -637,10 +667,6 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     rows = []
     for alpha_label, context_set, ctx in agent_specs:
         for horizon in horizons:
-            
-            ## also define the info-seeking agent (ell-free) over this context set
-            info_agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm,
-                                          independent_contexts=independent_contexts)
             for i in tqdm(range(len(sweep_tasks)), desc=f"Enumerating curves (alpha={alpha_label})"):
                 t, history_str, e_lo, e_hi = sweep_tasks[i]
                 canon_C = states_by_t_and_h[(t, history_str)]
@@ -648,8 +674,8 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                 sample_ells = np.logspace(np.log10(e_lo), np.log10(e_hi), n_ell_samples)
 
                 ## info-seeking agent (not parameterised by ell)
-                info_Q = info_agent.bellman_Q(canon_C, h_remaining)
-                info_best_a = int(np.argmin(info_Q)) # NB seeks to minimise posterior var
+                info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, _, termination_arm, canon_C, h_remaining)
+                info_best_a = int(np.argmax(info_Q))
                 info_probs = _softmax(-info_Q / temp)
 
                 ## emp of current belief state for each ell agent
@@ -711,3 +737,135 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                         rows.append(row)
 
     return pd.DataFrame(rows)
+
+
+
+
+
+### fitting functions
+
+## parallelised fitting 
+def fit_emp(df_ppt, 
+            # ell_bounds=(0.1, 5.0), temp_bounds=(0.1, 10.0),
+            param_bounds, agent_types=['emp', 'info'],
+                           horizon=None, k=0.0, termination_arm=True, init_t=0,
+                           maxiter=200, tol=1e-6, n_jobs=-1, verbose=True):
+    """
+    Parallelized version of fit_emp_model using joblib.
+
+    Parameters:
+    -----------
+    df_ppt : pd.DataFrame
+        Participant data
+    ell_bounds, temp_bounds : tuples
+        Parameter bounds
+    horizon : int or None
+    k : float
+    termination_arm : bool
+    init_t : int
+    maxiter : int
+    tol : float
+    n_jobs : int
+        Number of parallel jobs (-1 = all cores)
+    verbose : bool
+
+    Returns:
+    --------
+    pd.DataFrame with fitted parameters per subject
+    """
+    pids = df_ppt['subject_id'].unique()
+    df_fits = pd.DataFrame()
+    for agent_type in agent_types:
+        if agent_type == 'emp':
+            ell_bounds, temp_bounds = param_bounds
+        elif agent_type == 'info':
+            ell_bounds, temp_bounds = (None, None), param_bounds[1]
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(_fit_ppt)(
+                pid=pid,
+                df_ppt=df_ppt.loc[df_ppt['subject_id'] == pid],
+                ell_bounds=ell_bounds,
+                temp_bounds=temp_bounds,
+                horizon=horizon,
+                k=k,
+                termination_arm=termination_arm,
+                init_t=init_t,
+                maxiter=maxiter,
+                tol=tol,
+                verbose=verbose
+            ) for pid in (pids if not verbose else tqdm(pids, desc="Fitting"))
+        )
+        if df_fits.empty:
+            df_fits = pd.DataFrame(results)
+        else:
+            df_fits = pd.concat([df_fits, pd.DataFrame(results)], ignore_index=True)
+    return df_fits
+
+
+def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon, k,
+                        termination_arm, init_t, maxiter, tol, verbose):
+    """
+    Fit model for a single subject.
+    """
+    # Define objective function
+    def compute_nll(params):
+        if len(params) == 1: ## info-seeking agent
+            ell = None
+            temp = params[0]
+        else: ## empowerment agent
+            ell, temp = params
+
+
+        # Run simulation
+        NLL = run_emp(
+            df_ppt=df_ppt,
+            ell=ell,
+            horizon=horizon,
+            k=k,
+            termination_arm=termination_arm,
+            init_t=init_t,
+            temp=temp,
+            fitting=True,
+            verbose=False
+        )
+        return NLL
+
+    ## emp vs info agent
+    if ell_bounds[0] is not None:
+        agent_type = 'emp'
+        bounds = [ell_bounds, temp_bounds]
+        x0 = [1.0, 1.0]
+    elif ell_bounds[0] is None:   
+        agent_type = 'info'
+        bounds = [temp_bounds]
+        x0 = [1.0]
+
+    try:
+        res = minimize(
+            fun=compute_nll,
+            x0=x0,
+            method='Nelder-Mead',
+            bounds=bounds,
+            options={'maxiter': maxiter, 'tol': tol, 'disp': False}
+        )
+        if len(res.x) == 1:
+            ell_hat = None
+            temp_hat = res.x[0]
+        else:
+            ell_hat, temp_hat = res.x
+        nll = res.fun
+        success = res.success
+    except Exception as e:
+        if verbose:
+            print(f"Optimization failed for subject {pid}: {e}")
+        ell_hat, temp_hat, nll, success = np.nan, np.nan, np.inf, False
+
+    return {
+        'subject_id': pid,
+        'ell': ell_hat,
+        'temp': temp_hat,
+        'nll': nll,
+        'success': success,
+        'n_trials': len(df_ppt),
+        'agent_type': agent_type
+    }
