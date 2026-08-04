@@ -15,7 +15,7 @@ const DEBUGGING = false;
 const N_BUTTONS = 3;
 const K_OUTCOMES = 4;
 const N_TRIALS = 8;   // sampling trials per room
-const N_ROOMS = 25;    // number of rooms (fresh transition functions each)
+const N_ROOMS = 30;    // number of rooms (fresh transition functions each)
 
 // CONTEXTUAL controls which prior each button's hidden transition function is
 // drawn from at the start of a room:

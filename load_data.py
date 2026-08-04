@@ -185,6 +185,11 @@ def _sample_df(trials, session):
             np.where(df.chosen_button == df.button_upper, "upper", "lower"),
         )
 
+    ## determine whether 2 actions (blue and red) or 3 actions (blue, red, and green) were available
+    if 'counts_green_up' in df.columns:
+        n_arms = 3
+    else:
+        n_arms = 2
 
     ### more formatting
 
@@ -199,6 +204,8 @@ def _sample_df(trials, session):
 
     ## ensure columns are ints
     int_cols = ['room_num', 'trial_num', 'counts_red_up', 'counts_red_down', 'counts_red_left', 'counts_red_right', 'counts_blue_up', 'counts_blue_down', 'counts_blue_left', 'counts_blue_right']
+    if n_arms ==3:
+        int_cols += ['counts_green_up', 'counts_green_down', 'counts_green_left', 'counts_green_right']
     for col in int_cols:
         df[col] = df[col].astype('Int64')
         
@@ -206,34 +213,51 @@ def _sample_df(trials, session):
     ## add info on button press counts
     df['counts_red'] = df['counts_red_up'] + df['counts_red_down'] + df['counts_red_left'] + df['counts_red_right']
     df['counts_blue'] = df['counts_blue_up'] + df['counts_blue_down'] + df['counts_blue_left'] + df['counts_blue_right']
-    df['counts_diff'] = np.abs(df['counts_red'] - df['counts_blue'])
+    df['counts_green'] = df['counts_green_up'] + df['counts_green_down'] + df['counts_green_left'] + df['counts_green_right']
+
+    ## counts diff if 2 arms, else counts diff is NaN
     df['counts_post_red'] = df['counts_post_red_up'] + df['counts_post_red_down'] + df['counts_post_red_left'] + df['counts_post_red_right']
     df['counts_post_blue'] = df['counts_post_blue_up'] + df['counts_post_blue_down'] + df['counts_post_blue_left'] + df['counts_post_blue_right']
-    df['counts_post_diff'] = np.abs(df['counts_post_red'] - df['counts_post_blue'])
+    df['counts_post_green'] = df['counts_post_green_up'] + df['counts_post_green_down'] + df['counts_post_green_left'] + df['counts_post_green_right']
+    # df['counts_diff'] = np.abs(df['counts_red'] - df['counts_blue'])
+    # df['counts_post_diff'] = np.abs(df['counts_post_red'] - df['counts_post_blue'])
 
     df['chosen_counts'] = np.nan
     df['unchosen_counts'] = np.nan
     df.loc[df['chosen_button'] == 'red', 'chosen_counts'] = df['counts_red']
     df.loc[df['chosen_button'] == 'blue', 'chosen_counts'] = df['counts_blue']
-    df.loc[df['chosen_button'] == 'red', 'unchosen_counts'] = df['counts_blue']
-    df.loc[df['chosen_button'] == 'blue', 'unchosen_counts'] = df['counts_red']
-    df['chosen_counts_diff'] = df['chosen_counts'] - df['unchosen_counts']
+    df.loc[df['chosen_button'] == 'green', 'chosen_counts'] = df['counts_green']
+    # df.loc[df['chosen_button'] == 'red', 'unchosen_counts'] = df['counts_blue']
+    # df.loc[df['chosen_button'] == 'blue', 'unchosen_counts'] = df['counts_red']
+    # df['chosen_counts_diff'] = df['chosen_counts'] - df['unchosen_counts']
+    df['chosen_counts_fraction'] = df['chosen_counts'] / (df['counts_red'] + df['counts_blue'] + df['counts_green'])
+    df['max_counts'] = df[['counts_red', 'counts_blue', 'counts_green']].max(axis=1)
+    df['max_counts_fraction'] = df[['counts_red', 'counts_blue', 'counts_green']].max(axis=1) / (df['counts_red'] + df['counts_blue'] + df['counts_green'])
     
+    
+    ## chose least sampled
     df['least_sampled'] = np.nan
-    df.loc[df['counts_red'] < df['counts_blue'], 'least_sampled'] = 'red'
-    df.loc[df['counts_blue'] < df['counts_red'], 'least_sampled'] = 'blue'
-    df.loc[df['counts_red'] == df['counts_blue'], 'least_sampled'] = 'equal'
-    df['most_sampled'] = np.nan
-    df.loc[df['counts_red'] > df['counts_blue'], 'most_sampled'] = 'red'
-    df.loc[df['counts_blue'] > df['counts_red'], 'most_sampled'] = 'blue'
-    df.loc[df['counts_red'] == df['counts_blue'], 'most_sampled'] = 'equal'
+    if n_arms == 2:
+        df.loc[df['counts_red'] < df['counts_blue'], 'least_sampled'] = 'red'
+        df.loc[df['counts_blue'] < df['counts_red'], 'least_sampled'] = 'blue'
+        df.loc[df['counts_red'] == df['counts_blue'], 'least_sampled'] = 'equal'
+        df.loc[df['counts_red'] > df['counts_blue'], 'most_sampled'] = 'red'
+        df.loc[df['counts_blue'] > df['counts_red'], 'most_sampled'] = 'blue'
+        df.loc[df['counts_red'] == df['counts_blue'], 'most_sampled'] = 'equal'
+        df['chose_least_sampled'] = np.nan
+        df.loc[df['chosen_button'] == df['least_sampled'], 'chose_least_sampled'] = True
+        df.loc[(df['chosen_button'] != df['least_sampled']) & (df['least_sampled']!='equal'), 'chose_least_sampled'] = False
+        df['chose_most_sampled'] = np.nan
+        df.loc[df['chosen_button'] == df['most_sampled'], 'chose_most_sampled'] = True
+        df.loc[(df['chosen_button'] != df['most_sampled']) & (df['most_sampled']!='equal'), 'chose_most_sampled'] = False
+    else:
+        ## define counts for least and most sampled buttons, allowing for ties between 2, but not 3
+        df['least_sampled_counts'] = df[['counts_red', 'counts_blue', 'counts_green']].min(axis=1)
+        df['chose_least_sampled'] = df.apply(lambda x: True if x['chosen_counts'] == x['least_sampled_counts'] else False, axis=1)
+        df.loc[df[['counts_red', 'counts_blue', 'counts_green']].nunique(axis=1) == 1, 'chose_least_sampled'] = np.nan
+        df['most_sampled_counts'] = df[['counts_red', 'counts_blue', 'counts_green']].max(axis=1)
+        df['chose_most_sampled'] = df.apply(lambda x: True if x['chosen_counts'] == x['most_sampled_counts'] else False, axis=1)
 
-    df['chose_least_sampled'] = np.nan
-    df.loc[df['chosen_button'] == df['least_sampled'], 'chose_least_sampled'] = True
-    df.loc[(df['chosen_button'] != df['least_sampled']) & (df['least_sampled']!='equal'), 'chose_least_sampled'] = False
-    df['chose_most_sampled'] = np.nan
-    df.loc[df['chosen_button'] == df['most_sampled'], 'chose_most_sampled'] = True
-    df.loc[(df['chosen_button'] != df['most_sampled']) & (df['most_sampled']!='equal'), 'chose_most_sampled'] = False
 
     ## choice repeats
     df['repeat_choice'] = np.nan
@@ -244,46 +268,48 @@ def _sample_df(trials, session):
     alpha = df['alpha'].values[0]
     df['entropy_red'] = df.apply(lambda x: dirichlet_entropy(np.array([x['counts_red_up']+alpha, x['counts_red_left'] +alpha, x['counts_red_down'] +alpha, x['counts_red_right']+alpha])), axis=1)
     df['entropy_blue'] = df.apply(lambda x: dirichlet_entropy(np.array([x['counts_blue_up']+alpha, x['counts_blue_left'] +alpha, x['counts_blue_down'] +alpha, x['counts_blue_right']+alpha])), axis=1)
-    df['total_entropy'] = df['entropy_red'] + df['entropy_blue']
+    df['entropy_green'] = df.apply(lambda x: dirichlet_entropy(np.array([x['counts_green_up']+alpha, x['counts_green_left'] +alpha, x['counts_green_down'] +alpha, x['counts_green_right']+alpha])), axis=1)
+    df['total_entropy'] = df['entropy_red'] + df['entropy_blue'] + df['entropy_green']
     df['entropy_chosen'] = np.nan
     df.loc[df['chosen_button'] == 'red', 'entropy_chosen'] = df['entropy_red']
     df.loc[df['chosen_button'] == 'blue', 'entropy_chosen'] = df['entropy_blue']
-    df['entropy_unchosen'] = np.nan
-    df.loc[df['chosen_button'] == 'red', 'entropy_unchosen'] = df['entropy_blue']
-    df.loc[df['chosen_button'] == 'blue', 'entropy_unchosen'] = df['entropy_red']
-
+    df.loc[df['chosen_button'] == 'green', 'entropy_chosen'] = df['entropy_green']
+    # df['entropy_unchosen'] = np.nan
+    # df.loc[df['chosen_button'] == 'red', 'entropy_unchosen'] = df['entropy_blue']
+    # df.loc[df['chosen_button'] == 'blue', 'entropy_unchosen'] = df['entropy_red']
+    # df.loc[df['chosen_button'] == 'green', 'entropy_unchosen'] = df['entropy_blue']
 
     ## info on number of different outcomes observed for each button
     df['n_diff_outcomes_red'] = df[['counts_red_up', 'counts_red_down', 'counts_red_left', 'counts_red_right']].gt(0).sum(axis=1)
     df['n_diff_outcomes_blue'] = df[['counts_blue_up', 'counts_blue_down', 'counts_blue_left', 'counts_blue_right']].gt(0).sum(axis=1)
+    df['n_diff_outcomes_green'] = df[['counts_green_up', 'counts_green_down', 'counts_green_left', 'counts_green_right']].gt(0).sum(axis=1)
     df['n_diff_outcomes_chosen'] = np.nan
-    df['n_diff_outcomes_unchosen'] = np.nan
+    # df['n_diff_outcomes_unchosen'] = np.nan
     df.loc[df['chosen_button'] == 'red', 'n_diff_outcomes_chosen'] = df['n_diff_outcomes_red']
     df.loc[df['chosen_button'] == 'blue', 'n_diff_outcomes_chosen'] = df['n_diff_outcomes_blue']
-    df.loc[df['chosen_button'] == 'red', 'n_diff_outcomes_unchosen'] = df['n_diff_outcomes_blue']
-    df.loc[df['chosen_button'] == 'blue', 'n_diff_outcomes_unchosen'] = df['n_diff_outcomes_red']
+    # df.loc[df['chosen_button'] == 'red', 'n_diff_outcomes_unchosen'] = df['n_diff_outcomes_blue']
+    # df.loc[df['chosen_button'] == 'blue', 'n_diff_outcomes_unchosen'] = df['n_diff_outcomes_red']
 
 
     ### get canonical history
 
     ## convert counts to n_arms x n_outcomes arrays
-    n_arms = 2
     n_outcomes = 4
     df['counts_array'] = df.apply(lambda x: np.array([
         [x['counts_blue_up'], x['counts_blue_down'], x['counts_blue_left'], x['counts_blue_right']],
         [x['counts_red_up'], x['counts_red_down'], x['counts_red_left'], x['counts_red_right']],
+        [x['counts_green_up'], x['counts_green_down'], x['counts_green_left'], x['counts_green_right']]
                                                         ]), axis=1)
     df['canonical_counts_array'] = df['counts_array'].apply(lambda x: canonical_count_matrix(x)[0])
     df['history_str'] = df['canonical_counts_array'].apply(lambda x: array_to_hist(x, n_arms, n_outcomes)[1])
 
-    ## map history str back onto colours and outcomes
-    df = df.apply(lambda x: canon_to_concrete(x), axis=1)
-
     ## map strings onto numbers
-    button_map = {'blue': 0, 'red': 1}
+    button_map = {'blue': 0, 'red': 1, 'green': 2}
     outcome_map = {'up': 0, 'left': 1, 'down': 2, 'right': 3}
     df['chosen_button'] = df['chosen_button'].map(button_map)
     df['outcome'] = df['outcome'].map(outcome_map)
+    df['chosen_button'] = df['chosen_button'].astype('Int64')
+    df['outcome'] = df['outcome'].astype('Int64')
 
     ##0-based indexing for room and trial
     df['room_num'] = df['room_num'] - 1
@@ -295,6 +321,9 @@ def _sample_df(trials, session):
                        'chosen_button': 'action',
                        'ended_early': 'terminated',
         }, inplace=True)
+    
+    ## map history str back onto colours and outcomes
+    df = df.apply(lambda x: canon_to_concrete(x), axis=1)
 
     return df
 
@@ -490,6 +519,12 @@ def load_participant(path):
     for q in QUESTIONNAIRES:
         dfs[q] = _questionnaire_df(trials, session, q)
     dfs["feedback"] = _feedback_df(trials, session)
+
+    ## add subject_id if it is missing from data['sample']
+    if dfs['sample']['subject_id'].isnull().all():
+        id = dfs['meta']['source_file'].str.replace('.json', '').values[0]
+        dfs['sample']['subject_id'] = id
+        print(f"subject_id missing from {path}, using source_file instead: {dfs['sample']['subject_id'].values[0]}")
     return dfs
 
 
@@ -511,7 +546,13 @@ def load_directory(data_dir, pattern="*.json"):
     ## remove pid_map.json from paths
     paths = [p for p in paths if p.name != 'pid_map.json']
 
-    loaded = [load_participant(p) for p in paths]
+    loaded = []
+    for p in paths:
+        try:
+            loaded.append(load_participant(p))
+        except Exception as e:
+            print(f"Error loading {p}: {e}")
+            continue
     out = {}
     for phase in PHASES:
         parts = [d[phase] for d in loaded if not d[phase].empty]
@@ -521,7 +562,7 @@ def load_directory(data_dir, pattern="*.json"):
 
 ## get bonus info
 def load_reversed_pid_map(df):
-    json_path = 'expt/Experiment4/data/pilot/pid_map.json'
+    json_path = 'expt/Experiment4/data/3a4k/pid_map.json'
     with open(json_path, 'r') as f:
         pid_map = json.load(f)  # prolific_id -> subject_id
     
@@ -532,7 +573,9 @@ def load_reversed_pid_map(df):
 
 ## print bonuses
 def print_bonuses(df):
+    reversed_map = load_reversed_pid_map(df)
     for subject_id in df['subject_id'].unique():
         bonus = df.loc[df['subject_id'] == subject_id, 'bonus_gbp'].values[0]
+        pid = reversed_map.get(subject_id, None)
         if bonus is not None:
-            print(subject_id+','+str(bonus))
+            print(f"{pid},{bonus}")
