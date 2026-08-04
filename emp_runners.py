@@ -281,17 +281,12 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_ar
             else:
                 counts[action, outcome] += 1
     
-    ## df
-    df_sim = pd.DataFrame.from_dict(sim_out)
-    df_sim['gen_ell'] = ell
-    df_sim['gen_horizon'] = h
-    df_sim['gen_temp'] = temp
+    ## add info to dict about params
+    sim_out['gen_ell'] = [ell] * len(sim_out['room'])
+    sim_out['gen_horizon'] = [h] * len(sim_out['room'])
+    sim_out['gen_temp'] = [temp] * len(sim_out['room'])
 
-    ## canonicalise histories
-    df_sim['canonical_counts_array'] = df_sim['counts_array'].apply(lambda x: canonical_count_matrix(x)[0])
-    df_sim['history_str'] = df_sim['canonical_counts_array'].apply(lambda x: array_to_hist(x, n_arms, n_outcomes)[1])
-    df_sim = df_sim.apply(lambda x: canon_to_concrete(x), axis=1)
-    return df_sim
+    return sim_out
 
 
 def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size, horizon,
@@ -750,7 +745,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                 sample_ells = np.logspace(np.log10(e_lo), np.log10(e_hi), n_ell_samples)
 
                 ## info-seeking agent (not parameterised by ell)
-                info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, _, termination_arm, canon_C, h_remaining)
+                info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining)
                 info_best_a = int(np.argmax(info_Q))
                 info_probs = _softmax(-info_Q / temp)
 
