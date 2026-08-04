@@ -383,7 +383,7 @@ function make_gold_trial(room_num, opts) {
                 // independent of whether the choice was the optimal one.
                 const sampled_outcome = sampleOutcome(TRUE_T[button]);
                 const collected = sampled_outcome === goldOutcome;
-                if (collected && !practice) collected_gold += 1;
+                if (collected && !practice) collected_gold += GOLD_FRACTION;
 
                 const trial_data = {
                     chosen_button: button,
