@@ -416,27 +416,85 @@ def array_to_hist(canon_C, n_arms, n_outcomes):
     return canon_counts, history_str
 
 ## make the history_str concrete
+
+def _row_map_via_permutation_search(a1, a2):
+    """Exhaustive fallback: finds a row mapping consistent with a single
+    global column permutation. Used only when sort-based matching is ambiguous."""
+    n_rows, n_cols = a1.shape
+
+    for col_perm in itertools.permutations(range(n_cols)):
+        permuted = a1[:, col_perm]
+        used = set()
+        mapping = [None] * n_rows
+        ok = True
+
+        for i in range(n_rows):
+            match = None
+            for j in range(n_rows):
+                if j in used:
+                    continue
+                if np.array_equal(permuted[i], a2[j]):
+                    match = j
+                    break
+            if match is None:
+                ok = False
+                break
+            mapping[i] = match
+            used.add(match)
+
+        if ok:
+            return mapping
+
+    raise ValueError("No consistent row/column permutation found.")
+
+
+## make the history_str concrete
 def canon_to_concrete(row):
 
     ### map colours onto actions
 
-    ## see if sums of rows have been flipped
-    sum_pre = np.sum(row['counts_array'], axis=1)
-    sum_post = np.sum(row['canonical_counts_array'], axis=1)
-    
-    ## flipped, i.e. a0=red, a1=blue
-    if np.any(sum_pre != sum_post):
-        row['a0'] = 'red'
-        row['a1'] = 'blue'
-        row['chose_a0'] = row['action'] == 'red'
-        row['chose_a1'] = row['action'] == 'blue'
-    ## not flipped, i.e. a0=blue, a1=red
+    n, m = row['counts_array'].shape
+
+    # Create canonical form of each row by sorting
+    canonical_a1 = np.sort(row['counts_array'], axis=1)
+    canonical_a2 = np.sort(row['canonical_counts_array'], axis=1)
+
+    # Check for ties: duplicate sorted-row signatures mean the fast
+    # sort-based matching below could silently pick the wrong row.
+    a1_keys = [tuple(r) for r in canonical_a1]
+    a2_keys = [tuple(r) for r in canonical_a2]
+    has_ties = len(set(a1_keys)) < n or len(set(a2_keys)) < n
+
+    if has_ties:
+        # Fall back to exhaustive column-permutation search, which enforces
+        # a single consistent column permutation across all rows and so
+        # can't be fooled by rows that are permutations of each other.
+        mapping = _row_map_via_permutation_search(
+            row['counts_array'], row['canonical_counts_array']
+        )
     else:
-        row['a0'] = 'blue'
-        row['a1'] = 'red'
-        row['chose_a0'] = row['action'] == 'blue'
-        row['chose_a1'] = row['action'] == 'red'
-    
+        # Fast path: build a mapping from canonical row to list of indices in a2
+        canonical_to_indices = defaultdict(list)
+        for j in range(n):
+            key = tuple(canonical_a2[j])
+            canonical_to_indices[key].append(j)
+
+        # Map each row in a1 to a row in a2
+        mapping = []
+        for i in range(n):
+            key = tuple(canonical_a1[i])
+            if not canonical_to_indices[key]:
+                raise ValueError(f"No matching row found for a1 row {i}")
+            j = canonical_to_indices[key].pop()
+            mapping.append(j)
+
+    ## map back onto colours (blue, red, green)
+    colors = ['blue', 'red', 'green']
+    for i in range(n):
+        row[f'a{i}'] = colors[mapping[i]]
+        # row[f'chose_a{i}'] = row['action'] == colors[mapping[i]]
+        row[f'chose_a{i}'] = row['action'] == mapping[i]
+
     return row
 
     
