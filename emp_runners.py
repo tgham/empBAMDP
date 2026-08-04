@@ -25,10 +25,10 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
     """
 
     ## extract info from df_ppt ## hack for now
-    n_trials = df_ppt['trial'].max() + 1
-    n_outcomes = df_ppt['outcome'].max() + 1
-    n_arms = df_ppt['action'].max() + 1
-    n_rooms = df_ppt['room'].max()  
+    n_trials = int(df_ppt['trial'].max() + 1)
+    n_outcomes = int(df_ppt['outcome'].max() + 1)
+    n_arms = int(df_ppt['action'].max() + 1)
+    n_rooms = int(df_ppt['room'].max()+1)  
     n_actions = n_arms + int(termination_arm)
     terminate_idx = n_arms if termination_arm else None
     alpha = 0.4
@@ -38,8 +38,18 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
     if not fitting:
         records = []
     elif fitting:
-        p_a0s = []
-        chose_a0s = []
+        ppt_choices = []
+        p_ppt_choices = []
+        # p_a0s = []
+        # p_a1s = []
+        # p_a2s = []
+        # p_terminates = []
+        # chose_a0s = []
+        # chose_a1s = []
+        # chose_a2s = []
+        # chose_terminates = []
+        # ppt_choices = []
+
 
     ## determine whether fitting emp or info-seeking agent
     if ell is not None:
@@ -90,11 +100,15 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                         actual_action = n_arms + 1
                         actual_outcome = np.nan
                         Q_a0 = np.nan
-                        Q_a1 = np.nan
                         p_a0 = np.nan
-                        p_a1 = np.nan
                         chose_a0 = np.nan
+                        Q_a1 = np.nan
+                        p_a1 = np.nan
                         chose_a1 = np.nan
+                        if n_arms > 2:
+                            Q_a2 = np.nan
+                            p_a2 = np.nan
+                            chose_a2 = np.nan
                         current_emp = np.nan
                         row = {
                             'subject_id': pid, 'room': r, 'trial': t, 'ell': ell,
@@ -102,6 +116,9 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                             'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
                             'current_emp': current_emp,
                             'Q_a0': Q_a0, 'Q_a1': Q_a1,
+                            'Q_a2': Q_a2 if n_arms > 2 else np.nan,
+                            'p_a2': p_a2 if n_arms > 2 else np.nan,
+                            'chose_a2': chose_a2 if n_arms > 2 else np.nan,
                             'Q_terminate': np.nan if not termination_arm else np.nan,
                             'p_terminate': np.nan if not termination_arm else np.nan,
                             # 'p_repeat_choice': np.nan if prev_action is None else probs[prev_action],
@@ -132,11 +149,15 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                         actual_action = n_arms+1
                         actual_outcome = np.nan
                         Q_a0 = np.nan
-                        Q_a1 = np.nan
                         p_a0 = np.nan
-                        p_a1 = np.nan
                         chose_a0 = np.nan
+                        Q_a1 = np.nan
+                        p_a1 = np.nan
                         chose_a1 = np.nan
+                        if n_arms > 2:
+                            Q_a2 = np.nan
+                            p_a2 = np.nan
+                            chose_a2 = np.nan
                     else:
                         terminated=False
                         actual_action = row_df['action'].values[0]
@@ -145,25 +166,51 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                         ## update canon_C for next trial
                         canon_C[actual_action, actual_outcome] += 1
 
-                        ## map onto a0 and a1 etc.
+                        ### map onto each of a0, a1 etc.
+
+                        ## a0
                         if df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a0'].values[0] == 'blue':
                             Q_a0 = Q[0]
-                            Q_a1 = Q[1]
                             p_a0 = probs[0]
-                            p_a1 = probs[1]
-                            agent_action = 0 if action == 0 else 1
                             chose_a0 = action == 0
-                            chose_a1 = action == 1
-                            ppt_chose_a0 = actual_action == 0
                         elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a0'].values[0] == 'red':
                             Q_a0 = Q[1]
-                            Q_a1 = Q[0]
                             p_a0 = probs[1]
-                            p_a1 = probs[0]
-                            agent_action = 0 if action == 1 else 1
                             chose_a0 = action == 1
+                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a0'].values[0] == 'green':
+                            Q_a0 = Q[2]
+                            p_a0 = probs[2]
+                            chose_a0 = action == 2
+
+                        ## a1
+                        if df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a1'].values[0] == 'blue':
+                            Q_a1 = Q[0]
+                            p_a1 = probs[0]
                             chose_a1 = action == 0
-                            ppt_chose_a0 = actual_action == 1
+                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a1'].values[0] == 'red':
+                            Q_a1 = Q[1]
+                            p_a1 = probs[1]
+                            chose_a1 = action == 1
+                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a1'].values[0] == 'green':
+                            Q_a1 = Q[2]
+                            p_a1 = probs[2]
+                            chose_a1 = action == 2
+
+                        ## a2
+                        if df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'blue':
+                            Q_a2 = Q[0]
+                            p_a2 = probs[0]
+                            chose_a2 = action == 0
+                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'red':
+                            Q_a2 = Q[1]
+                            p_a2 = probs[1]
+                            chose_a2 = action == 1
+                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'green':
+                            Q_a2 = Q[2]
+                            p_a2 = probs[2]
+                            chose_a2 = action == 2
+
+                        
                     
                         ## record the row if simulating agents
                         if not fitting:
@@ -173,7 +220,9 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                                 'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
                                 'current_emp': current_emp,
                                 'Q_a0': Q_a0, 'Q_a1': Q_a1,
-                                # 'p_repeat_choice': np.nan if prev_action is None else probs[prev_action],
+                                'chose_a2': chose_a2 if n_arms > 2 else np.nan,
+                                'p_choice_a2': p_a2 if n_arms > 2 else np.nan,
+                                'Q_a2': Q_a2 if n_arms > 2 else np.nan,
                             }
                             if termination_arm:
                                 row['Q_terminate'] = Q[-1]
@@ -182,8 +231,8 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
 
                         ## record choice probs if fitting
                         elif fitting:
-                            p_a0s.append(p_a0)
-                            chose_a0s.append(chose_a0)
+                            ppt_choices.append(actual_action)
+                            p_ppt_choices.append(probs[actual_action])
 
                     if terminated:
                         break
@@ -206,14 +255,18 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
         # df_full = pd.concat([df_ppt, df_ell], ignore_index=True, sort=False)
         df_ell = pd.DataFrame.from_records(records)
         df_ell = df_ell.rename(columns={'chose_a0': 'ell'+str(ell)+'_chose_a0', 'chose_a1': 'ell'+str(ell)+'_chose_a1', 
+                                        'chose_a2': 'ell'+str(ell)+'_chose_a2' if n_arms > 2 else np.nan,
                                         'p_choice_a0': 'ell'+str(ell)+'_p_choice_a0', 'p_choice_a1': 'ell'+str(ell)+'_p_choice_a1',
+                                        'p_choice_a2': 'ell'+str(ell)+'_p_choice_a2' if n_arms > 2 else np.nan,
                                         'Q_a0': 'ell'+str(ell)+'_Q_a0', 'Q_a1': 'ell'+str(ell)+'_Q_a1', 
+                                        'Q_a2': 'ell'+str(ell)+'_Q_a2' if n_arms > 2 else np.nan,
                                         'current_emp': 'ell'+str(ell)+'_current_emp',
                                         'Q_terminate': 'ell'+str(ell)+'_Q_terminate', 'p_terminate': 'ell'+str(ell)+'_p_terminate'})
         df_full = df_ppt.merge(df_ell, on=['subject_id', 'room', 'trial'], how='left')
         return df_full
     else: 
-        NLL = np.sum([-(np.log(p) if c else np.log(1-p)) for p, c in zip(p_a0s, chose_a0s)])
+        # NLL = np.sum([-(np.log(p) if c else np.log(1-p)) for p, c in zip(p_a0s, chose_a0s)])
+        NLL = np.sum([-(np.log(p)) for p in p_ppt_choices])
         return NLL
     
 
