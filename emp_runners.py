@@ -40,16 +40,6 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
     elif fitting:
         ppt_choices = []
         p_ppt_choices = []
-        # p_a0s = []
-        # p_a1s = []
-        # p_a2s = []
-        # p_terminates = []
-        # chose_a0s = []
-        # chose_a1s = []
-        # chose_a2s = []
-        # chose_terminates = []
-        # ppt_choices = []
-
 
     ## determine whether fitting emp or info-seeking agent
     if ell is not None:
@@ -799,7 +789,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
 
                 ## info-seeking agent (not parameterised by ell)
                 info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining)
-                info_best_a = int(np.argmax(info_Q))
+                info_best_a = int(np.argmin(info_Q))
                 info_probs = _softmax(-info_Q / temp)
 
                 ## emp of current belief state for each ell agent
