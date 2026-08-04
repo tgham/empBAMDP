@@ -94,8 +94,6 @@
         // Otherwise, give the ppt an internal id
         id = value['id'];
         console.log(`id => ${id}`);
-        })
-
         // attach session-level fields to every trial's data row
         jsPsych.data.addProperties({
             // subject_id: subject_id,
@@ -110,6 +108,8 @@
             button_upper: BUTTON_ORDER[0],
             button_lower: BUTTON_ORDER[1]
         });
+        })
+
 
         var timeline = [];
 
