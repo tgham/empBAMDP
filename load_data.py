@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 from scipy.special import gamma, digamma
 
-from emp_utils import canonical_states, canonical_count_matrix, array_to_hist
+from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canon_to_concrete
 
 
 # jsPsych.data.addProperties() stamps these onto every trial retroactively, so
@@ -257,8 +257,11 @@ def _sample_df(trials, session):
     df['n_diff_outcomes_red'] = df[['counts_red_up', 'counts_red_down', 'counts_red_left', 'counts_red_right']].gt(0).sum(axis=1)
     df['n_diff_outcomes_blue'] = df[['counts_blue_up', 'counts_blue_down', 'counts_blue_left', 'counts_blue_right']].gt(0).sum(axis=1)
     df['n_diff_outcomes_chosen'] = np.nan
+    df['n_diff_outcomes_unchosen'] = np.nan
     df.loc[df['chosen_button'] == 'red', 'n_diff_outcomes_chosen'] = df['n_diff_outcomes_red']
     df.loc[df['chosen_button'] == 'blue', 'n_diff_outcomes_chosen'] = df['n_diff_outcomes_blue']
+    df.loc[df['chosen_button'] == 'red', 'n_diff_outcomes_unchosen'] = df['n_diff_outcomes_blue']
+    df.loc[df['chosen_button'] == 'blue', 'n_diff_outcomes_unchosen'] = df['n_diff_outcomes_red']
 
 
     ### get canonical history
@@ -276,37 +279,24 @@ def _sample_df(trials, session):
     ## map history str back onto colours and outcomes
     df = df.apply(lambda x: canon_to_concrete(x), axis=1)
 
+    ## map strings onto numbers
+    button_map = {'blue': 0, 'red': 1}
+    outcome_map = {'up': 0, 'left': 1, 'down': 2, 'right': 3}
+    df['chosen_button'] = df['chosen_button'].map(button_map)
+    df['outcome'] = df['outcome'].map(outcome_map)
 
-    ## some renaming
+    ##0-based indexing for room and trial
+    df['room_num'] = df['room_num'] - 1
+    df['trial_num'] = df['trial_num'] - 1
+
+    ## some renaming of cols
     df.rename(columns={'trial_num': 'trial',
                        'room_num': 'room',
+                       'chosen_button': 'action',
+                       'ended_early': 'terminated',
         }, inplace=True)
 
     return df
-
-## make the history_str concrete
-def canon_to_concrete(row):
-
-    ### map colours onto actions
-
-    ## see if sums of rows have been flipped
-    sum_pre = np.sum(row['counts_array'], axis=1)
-    sum_post = np.sum(row['canonical_counts_array'], axis=1)
-    
-    ## flipped, i.e. a0=red, a1=blue
-    if np.any(sum_pre != sum_post):
-        row['chose_a0'] = row['chosen_button'] == 'red'
-        row['chose_a1'] = row['chosen_button'] == 'blue'
-    ## not flipped, i.e. a0=blue, a1=red
-    else:
-        row['chose_a0'] = row['chosen_button'] == 'blue'
-        row['chose_a1'] = row['chosen_button'] == 'red'
-    
-    return row
-
-    
-    ### map locations onto outcomes (todo...)
-
 
 
 def dirichlet_entropy(alphas):
