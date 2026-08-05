@@ -20,16 +20,23 @@ def main():
     parser.add_argument('--init_t', type=int, default=1)
     parser.add_argument('--n_sims', type=int, default=100)
     parser.add_argument('--n_jobs', type=int, default=-1)
-    parser.add_argument('--agent_types', nargs='+', default=[
-        'emp',
-        'info'
-                                                              ])
     parser.add_argument('--gen_data', action='store_true')
     parser.add_argument('--termination_arm', action='store_true')
 
     args = parser.parse_args()
 
-    print(f'Generating {args.n_sims} datasets...')
+    print('EMP SCORING')
+    print(f'Generating {args.n_sims} datasets with following settings:')
+    print(f'  - Number of arms: {args.n_arms}')
+    print(f'  - Number of outcomes: {args.n_outcomes}')
+    print(f'  - Number of trials: {args.n_trials}')
+    print(f'  - Number of rooms: {args.n_rooms}')
+    print(f'  - Alpha: {args.alpha}')
+    print(f'  - Horizon: {args.h}')
+    print(f'  - Initial trial: {args.init_t}')
+    print(f'  - Number of simulations: {args.n_sims}')
+    print(f'  - Termination arm: {args.termination_arm}')
+
 
     # Define the worker function
     def _gen_single_sim(sim_id, ell, temp, args):
@@ -52,8 +59,12 @@ def main():
         return sim_tmp
     
     ## define ells - let's do n_sims of ell=0.1, 1, 3, and None
-    ell_values = [0.1, 1, 3, None]
-    ell_values = np.random.choice(ell_values, size=args.n_sims, replace=True)
+    ell_values = [
+                0.1, 1, 3, 
+                  None]
+    n_per_ell = args.n_sims // len(ell_values)
+    ell_values = ell_values * n_per_ell
+    # ell_values = np.random.choice(ell_values, size=args.n_sims, replace=True)
     temp = 0.1
 
     ## parallellise
@@ -68,14 +79,16 @@ def main():
     print(f"Generated {len(df_sim)} rows of data.")
 
     # Reorder columns so that 'subject_id' is first
+    print('Reordering columns...')
     cols = df_sim.columns.tolist()
     cols = ['subject_id'] + [c for c in cols if c != 'subject_id']
     df_sim = df_sim[cols]
 
     ## canonicalise histories
-    df_sim['canonical_counts_array'] = df_sim['counts_array'].apply(lambda x: canonical_count_matrix(x)[0])
-    df_sim['history_str'] = df_sim['canonical_counts_array'].apply(lambda x: array_to_hist(x, args.n_arms, args.n_outcomes)[1])
-    df_sim = df_sim.apply(lambda x: canon_to_concrete(x), axis=1)
+    # print('Canonicalising histories...')
+    # df_sim['canonical_counts_array'] = df_sim['counts_array'].apply(lambda x: canonical_count_matrix(x)[0])
+    # df_sim['history_str'] = df_sim['canonical_counts_array'].apply(lambda x: array_to_hist(x, args.n_arms, args.n_outcomes)[1])
+    # df_sim = df_sim.apply(lambda x: canon_to_concrete(x), axis=1)
 
     ## Save
     print('saving...')
@@ -84,3 +97,7 @@ def main():
     df_sim.to_csv(path, index=False)
 
     print(f"Saved {len(df_sim)} rows to {path}")
+
+
+if __name__ == '__main__':
+    main()

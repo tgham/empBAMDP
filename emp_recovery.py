@@ -32,6 +32,7 @@ def main():
     args = parser.parse_args()
 
     if args.gen_data:
+        print('EMP RECOVERY')
         print(f'Generating {args.n_sims} datasets with following settings:')
         print(f'  - Number of arms: {args.n_arms}')
         print(f'  - Number of outcomes: {args.n_outcomes}')
