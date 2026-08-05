@@ -20,8 +20,8 @@ def main():
     parser.add_argument('--context_prior', type=float, nargs='+', default=None)
     parser.add_argument('--init_t', type=int, default=0)
     parser.add_argument('--independent_contexts', action='store_true')
-    parser.add_argument('--ks', type=float, nargs='+',
-                        default=[round(x, 2) for x in np.arange(0.01, 0.101, 0.01)])
+    parser.add_argument('--costs', type=float, nargs='+',
+                        default=[0])
 
     args = parser.parse_args()
 
@@ -31,17 +31,6 @@ def main():
 
     if args.contexts is not None:
         stem += f'_unknown_contexts'
-
-    ks = sorted(args.ks)
-
-    ## df_max (per-(alpha, ell) max empowerment) drives the sampling cost. If a
-    ## k==0 run is in the sweep, enumerate_curves derives df_max internally from
-    ## that cost-free pass; otherwise load the precomputed table from disk.
-    if 0 in ks or 0.0 in ks:
-        df_max = None
-    else:
-        print(f'Loading df_max from {max_emps_path}')
-        df_max = pd.read_csv(max_emps_path)
 
     ## run expt
     print('Running experiment with parameters:')
@@ -57,7 +46,7 @@ def main():
     print(f'  contexts: {args.contexts}')
     print(f'  context_prior: {args.context_prior}')
     print(f'  independent_contexts: {args.independent_contexts}')
-    print(f'  ks: {ks}')
+    print(f'  costs: {args.costs}')
     print(f'  init_t: {args.init_t}')
     print(f'  n_jobs: {args.n_jobs}')
 
@@ -68,26 +57,17 @@ def main():
                                 context_prior=args.context_prior, contexts=args.contexts,
                                  termination_arm=args.termination_arm,
                                  n_jobs=args.n_jobs, n_ell_samples=args.n_ell_samples,
-                                 df_max=df_max, ks=ks,
+                                 costs=args.costs,
                                     init_t=args.init_t
                                  )
 
     ## save
     print(f'Saving df_curves to {stem}_ksweep.csv')
-    if len(ks) > 1:
+    if len(args.costs) > 1:
         df_curves.to_csv(f'{stem}_ksweep.csv', index=False)
     else:
-        df_curves.to_csv(f'{stem}_{ks[0]}k.csv', index=False)
+        df_curves.to_csv(f'{stem}_{args.costs[0]}k.csv', index=False)
 
-    ## persist the max-empowerment table from the cost-free pass for later reuse
-    if (df_curves['k'] == 0).any():
-        max_emps = (df_curves[df_curves['k'] == 0]
-                    .groupby(['alpha', 'ell'])
-                    .apply(lambda x: x.loc[x['current_emp'].idxmax()])
-                    [['ell', 'alpha', 'current_emp', 'history_str']]
-                    .reset_index(drop=True))
-        max_emps.to_csv(max_emps_path, index=False)
-        print(f'Saved df_max to {max_emps_path}')
 
 if __name__ == '__main__':
     main()

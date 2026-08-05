@@ -96,9 +96,8 @@ class EmpAgent:
         ## or different priors). If False (default), a single GLOBAL posterior p(z|h)
         ## is shared across all arms. No effect when single-context.
         self.independent = bool(independent_contexts)
+        
         ## per-pull sampling cost, paid on every arm pull throughout the horizon.
-        ## Only meaningful for the maximising EmpowermentAgent; the minimising
-        ## InfoSeekingAgent must leave this at 0 (a negative term would corrupt it).
         self.cost = float(cost)
 
         alphas = np.array([float(a) for a, _ in contexts], dtype=float) ## i.e. the alpha for each context
@@ -182,10 +181,10 @@ class EmpAgent:
         if depth == 0:
             return self.leaf_value(counts)
         p = self.predictive(counts)
-        ## value of terminating now (current belief), no more pulls -- no cost
+        ## value of terminating now (current belief), no more pulls 
         best = self.leaf_value(counts) if self.termination_arm else self._worst
         for a in range(self.n_arms):
-            ev = -self.cost                          # pulling arm a pays the sampling cost
+            ev = 0.0
             for o in range(self.n_outcomes):
                 p_o = p[a, o]
                 counts[a, o] += 1
@@ -210,9 +209,8 @@ class EmpAgent:
                 work[a, o] += 1
                 Q[a] += p_o * self.bellman_V(work, h - 1)
                 work[a, o] -= 1
-            Q[a] -= self.cost                        # pulling arm a pays the sampling cost
         if self.termination_arm:
-            Q[-1] = self.leaf_value(work)            # terminate: no cost
+            Q[-1] = self.leaf_value(work)
         return Q
 
 
@@ -232,8 +230,10 @@ class EmpowermentAgent(EmpAgent):
 
     def leaf_value(self, counts):
         p = self.predictive(counts)
-        return float(np.sum(np.max(p, axis=0) ** self.ell))
 
+        ## cost is determined by number of pulls taken already - i.e. reachable reward enters into expectation calculation
+        n_pulls = counts.sum()
+        return float(np.sum((np.max(p, axis=0) ** self.ell) * (1 - n_pulls * self.cost)))
 
 class InfoSeekingAgent(EmpAgent):
     """Minimises end-state posterior variance (mixture: law of total variance).
