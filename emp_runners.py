@@ -27,7 +27,7 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
     ## extract info from df_ppt ## hack for now
     n_trials = int(df_ppt['trial'].max() + 1)
     n_outcomes = int(df_ppt['outcome'].max() + 1)
-    n_arms = int(df_ppt['action'].max() + 1)
+    n_arms = int(df_ppt['action'].max() + 1) - int(termination_arm)
     n_rooms = int(df_ppt['room'].max()+1)  
     n_actions = n_arms + int(termination_arm)
     terminate_idx = n_arms if termination_arm else None
