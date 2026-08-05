@@ -22,7 +22,10 @@ def main():
     parser.add_argument('--init_t', type=int, default=1)
     parser.add_argument('--n_sims', type=int, default=100)
     parser.add_argument('--n_jobs', type=int, default=-1)
-    parser.add_argument('--agent_types', nargs='+', default=['emp', 'info'])
+    parser.add_argument('--agent_types', nargs='+', default=[
+        'emp',
+        # 'info'
+                                                              ])
     parser.add_argument('--gen_data', action='store_true')
     parser.add_argument('--termination_arm', action='store_true')
 
@@ -114,7 +117,8 @@ def main():
         df_fits.loc[df_fits['subject_id']==sim, 'gen_temp'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_temp'].iloc[0]
 
     ## save fits
-    path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.h}h_{args.alpha}alpha_{["noTermination" if not args.termination_arm else "Termination"]}_fits.csv'
+    term = ["noTermination", "Termination"][args.termination_arm]
+    path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.h}h_{args.alpha}alpha_{term}_fits.csv'
     df_fits.to_csv(path, index=False)
 
 if __name__ == '__main__':
