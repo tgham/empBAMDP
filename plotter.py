@@ -528,7 +528,17 @@ def plot_curves(
                 decades = np.log10(ell_hi) - np.log10(ell_lo)
                 log_ticks = np.logspace(np.ceil(np.log10(ell_lo)), np.floor(np.log10(ell_hi)), num=int(decades) + 1)
                 ax.set_xticks(log_ticks)
-            ax.set_title(history_str, fontsize=8)
+            ## for the unknown-context agent, also show p(ctx 0 | history)
+            ## (constant across ell for a given history/t)
+            if len(sub) and str(sub['alpha'].iloc[0]) == 'unknown':
+                if 'p_ctx_0_0' in sub.columns:
+                    ax.set_title(f'{history_str}\np_ctx_0_0 = {sub["p_ctx_0_0"].iloc[0]:.3f}, p_ctx_1_0 = {sub["p_ctx_1_0"].iloc[0]:.3f}',
+                                fontsize=8)
+                else:
+                    ax.set_title(f'{history_str}\np_ctx_0 = {sub["p_ctx_0"].iloc[0]:.3f}',
+                                fontsize=8)
+            else:
+                ax.set_title(history_str, fontsize=8)
             ax.grid(alpha=0.25, which='both')
             if i % ncols == 0:
                 ax.set_ylabel(y)
