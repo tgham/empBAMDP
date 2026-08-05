@@ -187,18 +187,19 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
                             chose_a1 = action == 2
 
                         ## a2
-                        if df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'blue':
-                            Q_a2 = Q[0]
-                            p_a2 = probs[0]
-                            chose_a2 = action == 0
-                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'red':
-                            Q_a2 = Q[1]
-                            p_a2 = probs[1]
-                            chose_a2 = action == 1
-                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'green':
-                            Q_a2 = Q[2]
-                            p_a2 = probs[2]
-                            chose_a2 = action == 2
+                        if n_arms ==3:
+                            if df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'blue':
+                                Q_a2 = Q[0]
+                                p_a2 = probs[0]
+                                chose_a2 = action == 0
+                            elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'red':
+                                Q_a2 = Q[1]
+                                p_a2 = probs[1]
+                                chose_a2 = action == 1
+                            elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'green':
+                                Q_a2 = Q[2]
+                                p_a2 = probs[2]
+                                chose_a2 = action == 2
 
                         
                     
