@@ -19,4 +19,4 @@
 # srun python -u emp_recovery.py --n_trials 8 --n_outcomes 4 --n_arms 3 --n_rooms 30 --alpha 0.4 --init_t 1 --n_sims 5000 --termination_arm --gen_data
 
 micromamba activate chickpeas
-srun python -u emp_scoring.py --n_trials 8 --n_outcomes 4 --n_arms 3 --n_rooms 30 --alpha 0.4 --init_t 1 --n_sims 5000
+srun python -u emp_scoring.py --n_trials 8 --n_outcomes 4 --n_arms 3 --n_rooms 30 --alpha 0.4 --init_t 1 --n_sims 5000 --greedy
