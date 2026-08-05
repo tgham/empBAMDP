@@ -363,7 +363,7 @@ def _coin_df(trials, session):
             chosen_button=t.get("chosen_button"),
             gold_outcome=t.get("gold_outcome"),
             rt=t.get("rt"),
-            success=t.get("success"),
+            correct=t.get("correct"),
             collected_gold=t.get("collected_gold"),
             outcome_shown=t.get("outcome_shown"),
             chosen_gold_prob=t.get("chosen_gold_prob"),
@@ -374,9 +374,9 @@ def _coin_df(trials, session):
         )
         row.update(_flatten(t.get("counts"), "counts"))         # belief the choice used
         row.update(_flatten(t.get("posterior_means"), "post"))
-        for button, ctx in (t.get("button_ctx") or {}).items():
-            row[f"ctx_{button}"] = ctx
-        row["chosen_button_gen_alpha"] = _gen_alpha(session, t.get("chosen_button_ctx"))
+        # for button, ctx in (t.get("button_ctx") or {}).items():
+        #     row[f"ctx_{button}"] = ctx
+        # row["chosen_button_gen_alpha"] = _gen_alpha(session, t.get("chosen_button_ctx"))
         rows.append(row)
 
     df = pd.DataFrame(rows)
@@ -384,6 +384,36 @@ def _coin_df(trials, session):
         df["chosen_button_pos"] = np.where(df.chosen_button == df.button_upper, "upper", "lower")
         df["optimal"] = np.isclose(df.chosen_gold_prob, df.best_gold_prob)
         df["regret"] = df.best_gold_prob - df.chosen_gold_prob
+
+    ## map strings onto numbers
+    button_map = {'blue': 0, 'red': 1, 'green': 2}
+    df['chosen_button'] = df['chosen_button'].map(button_map)
+    df['chosen_button'] = df['chosen_button'].astype('Int64')
+
+    ## determine whether they chose reasonably, given their posterior belief - i.e. the button with max posterior over the gold's location
+    df['gold_location_max_post'] = df.apply(lambda x: np.max([x['post_blue_'+str(x['gold_outcome'])], x['post_red_'+str(x['gold_outcome'])], x['post_green_'+str(x['gold_outcome'])]]) if 'post_green_'+str(x['gold_outcome']) in x else np.max([x['post_blue_'+str(x['gold_outcome'])], x['post_red_'+str(x['gold_outcome'])]]), axis=1)
+    df['chosen_gold_post'] = df.apply(lambda x: x['post_blue_'+str(x['gold_outcome'])] if x['chosen_button'] == 0 else (x['post_red_'+str(x['gold_outcome'])] if x['chosen_button'] == 1 else x['post_green_'+str(x['gold_outcome']) if x['chosen_button'] == 2 and 'post_green_'+str(x['gold_outcome']) in x else np.nan]), axis=1)
+    df['chose_optimal'] = df.apply(lambda x: x['chosen_gold_post'] == x['gold_location_max_post'], axis=1)
+
+    ## map strings onto numbers again
+    outcome_map = {'up': 0, 'left': 1, 'down': 2, 'right': 3}
+    df['gold_outcome'] = df['gold_outcome'].map(outcome_map)
+    df['gold_outcome'] = df['gold_outcome'].astype('Int64')
+
+    ## cols to remove
+    rm_cols = ['study_id', 'session_id', 'belief_display', 
+            #    'alpha', 
+               'contextual','alpha_ctx1','alpha_ctx2','source_file','button_upper', 'button_lower', 'n_rooms', 'coins_collected', 
+               'outcome_shown', 'chosen_button_ctx', 'trial_index', 'time_elapsed','ctx_blue', 'ctx_red', 'ctx_green','chosen_button_pos'
+            #    'bonus_gbp',
+            #    'chosen_button_pos'
+               ]
+    df.drop(columns=rm_cols, inplace=True, errors='ignore')
+
+    ## rename cols
+    df.rename(columns={'room_num': 'room',
+                       'chosen_button': 'action',
+                       'gold_outcome': 'gold_location',}, inplace=True)
 
     return df
 
@@ -499,7 +529,11 @@ def _feedback_df(trials, session):
         row.update(t.get("responses") or {})
         row["rt"] = t.get("rt")
         rows.append(row)
-    return pd.DataFrame(rows)
+    ## rm every column except
+    keep_cols = ['subject_id','task-instructions','performance','strategy','feedback']
+    df = pd.DataFrame(rows)
+    df = df[keep_cols]
+    return df
 
 
 #----------------------------------------------------------------------------#
@@ -534,7 +568,8 @@ def load_participant(path):
     ## add subject_id if it is missing from data['sample']
     if dfs['sample']['subject_id'].isnull().all():
         id = dfs['meta']['source_file'].str.replace('.json', '').values[0]
-        dfs['sample']['subject_id'] = id
+        for key in ['sample', 'coin', 'attention'] + list(QUESTIONNAIRES):
+            dfs[key]['subject_id'] = id
         print(f"subject_id missing from {path}, using source_file instead: {dfs['sample']['subject_id'].values[0]}")
     return dfs
 
@@ -569,6 +604,11 @@ def load_directory(data_dir, pattern="*.json"):
     for phase in PHASES:
         parts = [d[phase] for d in loaded if not d[phase].empty]
         out[phase] = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+    ## save feedback to same directory as feedback.csv
+    feedback_path = Path(data_dir) / 'feedback.csv'
+    out['feedback'].to_csv(feedback_path, index=False)
+    out.pop('feedback', None)
     return out
 
 
