@@ -204,8 +204,10 @@ def _sample_df(trials, session):
 
     ## ensure columns are ints
     int_cols = ['room_num', 'trial_num', 'counts_red_up', 'counts_red_down', 'counts_red_left', 'counts_red_right', 'counts_blue_up', 'counts_blue_down', 'counts_blue_left', 'counts_blue_right']
-    if n_arms ==3:
-        int_cols += ['counts_green_up', 'counts_green_down', 'counts_green_left', 'counts_green_right']
+    int_cols += ['counts_green_up', 'counts_green_down', 'counts_green_left', 'counts_green_right', 'counts_post_green_up', 'counts_post_green_down', 'counts_post_green_left', 'counts_post_green_right']
+    if n_arms <3:
+        df[['counts_green_up', 'counts_green_down', 'counts_green_left', 'counts_green_right', 'counts_post_green_up', 'counts_post_green_down', 'counts_post_green_left', 'counts_post_green_right']] = np.nan
+
     for col in int_cols:
         df[col] = df[col].astype('Int64')
         
@@ -268,7 +270,10 @@ def _sample_df(trials, session):
     alpha = df['alpha'].values[0]
     df['entropy_red'] = df.apply(lambda x: dirichlet_entropy(np.array([x['counts_red_up']+alpha, x['counts_red_left'] +alpha, x['counts_red_down'] +alpha, x['counts_red_right']+alpha])), axis=1)
     df['entropy_blue'] = df.apply(lambda x: dirichlet_entropy(np.array([x['counts_blue_up']+alpha, x['counts_blue_left'] +alpha, x['counts_blue_down'] +alpha, x['counts_blue_right']+alpha])), axis=1)
-    df['entropy_green'] = df.apply(lambda x: dirichlet_entropy(np.array([x['counts_green_up']+alpha, x['counts_green_left'] +alpha, x['counts_green_down'] +alpha, x['counts_green_right']+alpha])), axis=1)
+    if n_arms == 3:
+        df['entropy_green'] = df.apply(lambda x: dirichlet_entropy(np.array([x['counts_green_up']+alpha, x['counts_green_left'] +alpha, x['counts_green_down'] +alpha, x['counts_green_right']+alpha])), axis=1)
+    else:
+        df['entropy_green'] = np.nan
     df['total_entropy'] = df['entropy_red'] + df['entropy_blue'] + df['entropy_green']
     df['entropy_chosen'] = np.nan
     df.loc[df['chosen_button'] == 'red', 'entropy_chosen'] = df['entropy_red']
@@ -295,11 +300,17 @@ def _sample_df(trials, session):
 
     ## convert counts to n_arms x n_outcomes arrays
     n_outcomes = 4
-    df['counts_array'] = df.apply(lambda x: np.array([
-        [x['counts_blue_up'], x['counts_blue_down'], x['counts_blue_left'], x['counts_blue_right']],
-        [x['counts_red_up'], x['counts_red_down'], x['counts_red_left'], x['counts_red_right']],
-        [x['counts_green_up'], x['counts_green_down'], x['counts_green_left'], x['counts_green_right']]
-                                                        ]), axis=1)
+    if n_arms == 2:
+        df['counts_array'] = df.apply(lambda x: np.array([
+            [x['counts_blue_up'], x['counts_blue_down'], x['counts_blue_left'], x['counts_blue_right']],
+            [x['counts_red_up'], x['counts_red_down'], x['counts_red_left'], x['counts_red_right']]
+                                                            ]), axis=1)
+    elif n_arms == 3:
+        df['counts_array'] = df.apply(lambda x: np.array([
+            [x['counts_blue_up'], x['counts_blue_down'], x['counts_blue_left'], x['counts_blue_right']],
+            [x['counts_red_up'], x['counts_red_down'], x['counts_red_left'], x['counts_red_right']],
+            [x['counts_green_up'], x['counts_green_down'], x['counts_green_left'], x['counts_green_right']]
+                                                            ]), axis=1)
     df['canonical_counts_array'] = df['counts_array'].apply(lambda x: canonical_count_matrix(x)[0])
     df['history_str'] = df['canonical_counts_array'].apply(lambda x: array_to_hist(x, n_arms, n_outcomes)[1])
 
@@ -548,6 +559,7 @@ def load_directory(data_dir, pattern="*.json"):
 
     loaded = []
     for p in paths:
+        # loaded.append(load_participant(p))
         try:
             loaded.append(load_participant(p))
         except Exception as e:
