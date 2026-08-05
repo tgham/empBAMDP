@@ -32,7 +32,17 @@ def main():
     args = parser.parse_args()
 
     if args.gen_data:
-        print(f'Generating {args.n_sims} datasets...')
+        print(f'Generating {args.n_sims} datasets with following settings:')
+        print(f'  - Number of arms: {args.n_arms}')
+        print(f'  - Number of outcomes: {args.n_outcomes}')
+        print(f'  - Number of trials: {args.n_trials}')
+        print(f'  - Number of rooms: {args.n_rooms}')
+        print(f'  - Alpha: {args.alpha}')
+        print(f'  - Horizon: {args.h}')
+        print(f'  - Initial trial: {args.init_t}')
+        print(f'  - Number of simulations: {args.n_sims}')
+        print(f'  - Termination arm: {args.termination_arm}')
+        print(f'  - Agent types: {args.agent_types}')
 
         # Define the worker function
         def _gen_single_sim(sim_id, args):
