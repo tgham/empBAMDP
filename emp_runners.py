@@ -27,7 +27,7 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
     ## extract info from df_ppt ## hack for now
     n_trials = int(df_ppt['trial'].max() + 1)
     n_outcomes = int(df_ppt['outcome'].max() + 1)
-    n_arms = int(df_ppt['action'].max() + 1) - int(termination_arm)
+    n_arms = int(df_ppt['action'].max() + 1)
     n_rooms = int(df_ppt['room'].max()+1)  
     n_actions = n_arms + int(termination_arm)
     terminate_idx = n_arms if termination_arm else None
@@ -263,10 +263,20 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
 
 ## generate a single synthetic dataset, i.e. an ell agent acting in its own emp bandit env
 def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_arm=True, temp=1.0, greedy =False, seed=None):
-    """Generate synthetic data from an empowerment agent in its own emp bandit env."""
-    agent = EmpowermentAgent(n_arms=n_arms, n_outcomes=n_outcomes,
-                             contexts=[(float(alpha), 1.0)], ell=ell,
-                             termination_arm=termination_arm)
+    """Generate synthetic data from an agent in its own emp bandit env."""
+    if ell is not None:
+        agent = EmpowermentAgent(n_arms=n_arms, n_outcomes=n_outcomes,
+                                contexts=[(float(alpha), 1.0)], ell=ell,
+                                termination_arm=termination_arm)
+    else:
+        agent = InfoSeekingAgent(n_arms=n_arms, n_outcomes=n_outcomes,
+                                contexts=[(float(alpha), 1.0)],
+                                termination_arm=termination_arm)
+        
+    ## define ell_1 agent for scoring expected p(reward)
+    ell_1_agent = EmpowermentAgent(n_arms=n_arms, n_outcomes=n_outcomes,
+                                contexts=[(float(alpha), 1.0)], ell=1,
+                                termination_arm=termination_arm)
     
     ## init data
     sim_out = defaultdict(list)
@@ -303,6 +313,21 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_ar
             (_, outcome), reward, terminated, truncated, _ = env.step(action)
 
 
+            ## convert termination idx
+            if termination_arm and action == n_arms:
+                action = -1
+            else:
+                ## update counts
+                counts[action, outcome] += 1
+
+            
+            ## score on current probability of reward - i.e. emp_1
+            ell_1 = ell_1_agent.leaf_value(counts)
+
+            ## calculate max counts fraction - i.e. the action that has been sampled the most, divided by total samples
+            max_counts_fraction = np.max(counts.sum(axis=1)) / np.sum(counts) if np.sum(counts) > 0 else 0.0
+
+
             ## save
             sim_out['room'].append(r)
             sim_out['trial'].append(t)
@@ -310,6 +335,8 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_ar
             sim_out['outcome'].append(outcome)
             sim_out['terminated'].append(action == n_arms if termination_arm else False)
             sim_out['counts_array'].append(counts.copy())
+            sim_out['max_counts_fraction'].append(max_counts_fraction)
+            sim_out['ell_1'].append(ell_1)
             for a in range(n_arms):
                 sim_out[f'Q_{a}'].append(Q[a])
                 sim_out[f'p_{a}'].append(probs[a])
@@ -320,10 +347,6 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_ar
             ## terminate if the agent chose the termination arm
             if terminated or truncated:
                 break
-            
-            ## update counts
-            else:
-                counts[action, outcome] += 1
     
     ## add info to dict about params
     sim_out['gen_ell'] = [ell] * len(sim_out['room'])
