@@ -2,7 +2,7 @@ import importlib.util as _ilu
 import numpy as np
 import pandas as pd
 from emp_utils import *
-from scipy.optimize import bisect, brentq, minimize
+from scipy.optimize import bisect, brentq, minimize, differential_evolution
 from scipy.special import softmax as _softmax
 from joblib import Parallel, delayed
 import warnings
@@ -50,8 +50,6 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
             agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e,
                                         termination_arm=termination_arm, cost=cost
                                         )
-            ## canon_C is the RAW count matrix; the agent adds the prior alpha
-            ## internally (predictive: alpha + counts), so do NOT pre-offset here.
             return agent.leaf_value(canon_C)
         
     else:
@@ -903,14 +901,12 @@ def fit_emp(df_ppt,
         else:
             df_fits = pd.concat([df_fits, pd.DataFrame(results)], ignore_index=True)
     return df_fits
-
-
 def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon, k,
-                        termination_arm, init_t, maxiter, tol, verbose):
+             termination_arm, init_t, maxiter, tol, verbose,
+             popsize=15, mutation=(0.5, 1), recombination=0.7, seed=None):
     """
-    Fit model for a single subject.
+    Fit model for a single subject using differential evolution.
     """
-    # Define objective function
     def compute_nll(params):
         if len(params) == 1: ## info-seeking agent
             ell = None
@@ -918,8 +914,6 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon, k,
         else: ## empowerment agent
             ell, temp = params
 
-
-        # Run simulation
         NLL = run_emp(
             df_ppt=df_ppt,
             ell=ell,
@@ -937,19 +931,22 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon, k,
     if ell_bounds[0] is not None:
         agent_type = 'emp'
         bounds = [ell_bounds, temp_bounds]
-        x0 = [1.0, 1.0]
-    elif ell_bounds[0] is None:   
+    elif ell_bounds[0] is None:
         agent_type = 'info'
         bounds = [temp_bounds]
-        x0 = [1.0]
-
-    # try:
-    res = minimize(
-        fun=compute_nll,
-        x0=x0,
-        method='Nelder-Mead',
+    res = differential_evolution(
+        func=compute_nll,
         bounds=bounds,
-        options={'maxiter': maxiter, 'tol': tol, 'disp': False}
+        maxiter=maxiter,
+        tol=tol,
+        popsize=popsize,
+        mutation=mutation,
+        recombination=recombination,
+        seed=seed,
+        polish=True,    
+        workers=1,      
+        updating='deferred',
+        disp=False
     )
     if len(res.x) == 1:
         ell_hat = None
@@ -958,10 +955,6 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon, k,
         ell_hat, temp_hat = res.x
     nll = res.fun
     success = res.success
-    # except Exception as e:
-    #     if verbose:
-    #         print(f"Optimization failed for subject {pid}: {e}")
-    #     ell_hat, temp_hat, nll, success = np.nan, np.nan, np.inf, False
 
     return {
         'subject_id': pid,
