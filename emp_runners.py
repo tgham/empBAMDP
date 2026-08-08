@@ -778,8 +778,8 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
 
                 ## info-seeking agent (not parameterised by ell)
                 info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining)
-                info_best_a = int(np.argmin(info_Q))
-                info_probs = _softmax(-info_Q / temp)
+                info_best_a = int(np.argmax(info_Q))
+                info_probs = _softmax(info_Q / temp)
 
                 ## emp of current belief state for each ell agent
                 current_emps = [_leaf_emp(ctx, e, canon_C) for e in sample_ells]
