@@ -267,10 +267,12 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_ar
         agent = EmpowermentAgent(n_arms=n_arms, n_outcomes=n_outcomes,
                                 contexts=[(float(alpha), 1.0)], ell=ell,
                                 termination_arm=termination_arm)
+        info_agent = False
     else:
         agent = InfoSeekingAgent(n_arms=n_arms, n_outcomes=n_outcomes,
                                 contexts=[(float(alpha), 1.0)],
                                 termination_arm=termination_arm)
+        info_agent=True
         
     ## define ell_1 agent for scoring expected p(reward)
     ell_1_agent = EmpowermentAgent(n_arms=n_arms, n_outcomes=n_outcomes,
@@ -297,6 +299,8 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_ar
             ## compute Q 
             h = (n_trials - t) if h is None else min(h, n_trials - t)
             Q = agent.bellman_Q(counts, h)
+            if info_agent:
+                Q = -Q  # negate: info-seeking agent minimises expected posterior variance
             probs = _softmax(Q/temp)
 
             ## select action

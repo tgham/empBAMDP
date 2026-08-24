@@ -19,6 +19,7 @@ def main():
     parser.add_argument('--h', type=int, default=1)
     parser.add_argument('--init_t', type=int, default=1)
     parser.add_argument('--n_sims', type=int, default=100)
+    parser.add_argument('--greedy', action='store_true')
     parser.add_argument('--n_jobs', type=int, default=-1)
     parser.add_argument('--gen_data', action='store_true')
     parser.add_argument('--termination_arm', action='store_true')
@@ -33,6 +34,7 @@ def main():
     print(f'  - Number of rooms: {args.n_rooms}')
     print(f'  - Alpha: {args.alpha}')
     print(f'  - Horizon: {args.h}')
+    print(f'  - Greedy: {args.greedy}')
     print(f'  - Initial trial: {args.init_t}')
     print(f'  - Number of simulations: {args.n_sims}')
     print(f'  - Termination arm: {args.termination_arm}')
@@ -52,6 +54,7 @@ def main():
             ell=ell,
             h=args.h,
             temp=temp,
+            greedy=args.greedy,
             termination_arm=args.termination_arm
         )
         sim_tmp['subject_id'] = [sim_id] * len(sim_tmp['room'])
@@ -64,7 +67,9 @@ def main():
                   None]
     n_per_ell = args.n_sims // len(ell_values)
     ell_values = ell_values * n_per_ell
-    # ell_values = np.random.choice(ell_values, size=args.n_sims, replace=True)
+    if len(ell_values) < args.n_sims:
+        missing = args.n_sims - len(ell_values)
+        ell_values += np.random.choice(ell_values, size=missing, replace=True).tolist()
     temp = 0.1
 
     ## parallellise
@@ -85,10 +90,12 @@ def main():
     df_sim = df_sim[cols]
 
     ## canonicalise histories
-    # print('Canonicalising histories...')
-    # df_sim['canonical_counts_array'] = df_sim['counts_array'].apply(lambda x: canonical_count_matrix(x)[0])
-    # df_sim['history_str'] = df_sim['canonical_counts_array'].apply(lambda x: array_to_hist(x, args.n_arms, args.n_outcomes)[1])
-    # df_sim = df_sim.apply(lambda x: canon_to_concrete(x), axis=1)
+    print('Canonicalising histories...')
+    ## check that counts_array is an array
+    assert isinstance(df_sim['counts_array'].iloc[0], np.ndarray), "counts_array is not an array"
+    df_sim['canonical_counts_array'] = df_sim['counts_array'].apply(lambda x: canonical_count_matrix(x)[0])
+    df_sim['history_str'] = df_sim['canonical_counts_array'].apply(lambda x: array_to_hist(x, args.n_arms, args.n_outcomes)[1])
+    df_sim = df_sim.apply(lambda x: canon_to_concrete(x), axis=1)
 
     ## Save
     print('saving...')
