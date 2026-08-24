@@ -16,7 +16,7 @@ def main():
     parser.add_argument('--n_trials', type=int, default=8)
     parser.add_argument('--n_rooms', type=int, default=25)
     parser.add_argument('--alpha', type=float, default=0.4)
-    parser.add_argument('--ell_bounds', type=float, default=(0.01, 3), nargs=2)
+    parser.add_argument('--ell_bounds', type=float, default=(0.01, 5), nargs=2)
     parser.add_argument('--temp_bounds', type=float, default=(0.01, 0.4), nargs=2)
     parser.add_argument('--h', type=int, default=1)
     parser.add_argument('--init_t', type=int, default=1)
@@ -24,7 +24,7 @@ def main():
     parser.add_argument('--n_jobs', type=int, default=-1)
     parser.add_argument('--agent_types', nargs='+', default=[
         'emp',
-        # 'info'
+        'info'
                                                               ])
     parser.add_argument('--gen_data', action='store_true')
     parser.add_argument('--termination_arm', action='store_true')
@@ -46,10 +46,13 @@ def main():
         print(f'  - Agent types: {args.agent_types}')
 
         # Define the worker function
-        def _gen_single_sim(sim_id, args):
+        def _gen_single_sim(sim_id, args, agent_type):
             
             ## Sample parameters 
-            ell = np.random.uniform(*args.ell_bounds)
+            if agent_type == 'emp':
+                ell = np.random.uniform(*args.ell_bounds)
+            elif agent_type == 'info':
+                ell = None
             temp = np.random.uniform(*args.temp_bounds)
 
             # Generate data
@@ -69,10 +72,13 @@ def main():
             return sim_tmp
 
         ## parallellise
+        agent_type_ids = []
+        for agent_type in args.agent_types:
+            agent_type_ids += [agent_type] * (args.n_sims // len(args.agent_types))
         with tqdm_joblib(tqdm(desc="Generating datasets", total=args.n_sims, ncols=100, unit='sim', mininterval=1)):
             results = Parallel(n_jobs=args.n_jobs)(
-                delayed(_gen_single_sim)(sim_id, args)
-                for sim_id in range(args.n_sims)
+                delayed(_gen_single_sim)(sim_id, args, agent_type)
+                for sim_id, agent_type in enumerate(agent_type_ids)
             )
 
         ## each results is a dictionary. we now need to convert each to a DataFrame and concatenate them into a single DataFrame.
@@ -115,7 +121,6 @@ def main():
         df_ppt=df_sim,
         agent_types=args.agent_types,
         param_bounds=param_bounds,
-
         horizon=args.h,
         init_t=args.init_t,
         n_jobs=args.n_jobs,
