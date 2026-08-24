@@ -7,6 +7,7 @@ from scipy.special import softmax as _softmax
 from joblib import Parallel, delayed
 import warnings
 from tqdm_joblib import tqdm_joblib
+from scipy.stats import truncnorm
 
 from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canon_to_concrete
 warnings.filterwarnings('ignore')
@@ -446,147 +447,6 @@ def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size, hor
     return rows
 
 
-def _tipping_rows_for_history(t, canon_C, history_str,
-                              n_arms, n_outcomes, n_trials, alpha, termination_arm,
-                              horizon=None,
-                              ell_lo=0.001, ell_hi=100, n_ell_samples=200, n_check_samples = 50, eps_tie=1e-8,
-                              n_jobs=1):
-    """Per-(canonical history, arm, interval) preferred ell-range rows.
-
-    `n_jobs` parallelises the inner n_ell_samples-wide bellman_emp_Q sweep (the
-    dominant cost when n_trials is large), not the outer history loop.
-    """
-    init_alphas = np.full((n_arms, n_outcomes), float(alpha))
-    alphas = init_alphas + canon_C
-    if horizon is None:
-        horizon = n_trials
-    h_remaining = np.min([horizon, n_trials - t])
-
-    ## info-seeking agent: ell-free verdict for this history, stamped on every tip row
-    info_Q = bellman_info_Q(alphas.copy(), n_arms, n_outcomes, h_remaining, termination_arm)
-    info_best_a = int(np.argmin(info_Q))
-
-    ### 1. detect argmax transitions by coarse sampling + bisect within each bracket
-    sample_ells = np.logspace(np.log10(ell_lo), np.log10(ell_hi), n_ell_samples)
-    if n_jobs == 1:
-        sample_Qs = [bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
-                                   h_remaining, termination_arm, e, verbose=False)
-                     for e in sample_ells]
-    else:
-        sample_Qs = Parallel(n_jobs=n_jobs)(
-            delayed(bellman_emp_Q)(alphas.copy(), n_arms, n_outcomes,
-                                   h_remaining, termination_arm, e, verbose=False)
-            for e in sample_ells
-        )
-    ## per-sample co-argmax SET: every arm within eps_tie of the row max. Using
-    ## the set (rather than the integer argmax) catches transitions where a
-    ## tied arm joins/leaves the co-best set without flipping the argmax index.
-    sample_coargmax = [frozenset(int(a) for a in
-                                 np.flatnonzero(np.abs(Q - Q.max()) < eps_tie))
-                       for Q in sample_Qs]
-
-    transitions = set()
-    for i in range(len(sample_ells) - 1):
-        s_lo = sample_coargmax[i]
-        s_hi = sample_coargmax[i + 1]
-        if s_lo == s_hi:
-            continue
-        union = s_lo | s_hi
-        sym_diff = s_lo ^ s_hi
-        for a in sorted(union):
-            for b in sorted(union):
-                if a >= b:
-                    continue
-                if a not in sym_diff and b not in sym_diff:
-                    ## both arms stay co-best across the bracket; any internal
-                    ## crossing wouldn't change the set on either side.
-                    continue
-                def pref_diff(ell_, _a1=a, _a2=b):
-                    Q = bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
-                                      h_remaining, termination_arm, ell_, verbose=False)
-                    return Q[_a1] - Q[_a2]
-                try:
-                    trans = bisect(pref_diff, sample_ells[i], sample_ells[i + 1])
-
-                    ## validity check: only keep if (a, b) actually swap co-best
-                    ## status across trans (rejects roots between two suboptimal arms)
-                    Q_lo = bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
-                                         h_remaining, termination_arm, trans - 1e-5, verbose=False)
-                    Q_hi = bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
-                                         h_remaining, termination_arm, trans + 1e-5, verbose=False)
-                    pref_lo = np.flatnonzero(np.abs(Q_lo - Q_lo.max()) < eps_tie)
-                    pref_hi = np.flatnonzero(np.abs(Q_hi - Q_hi.max()) < eps_tie)
-                    if not (a in pref_lo and b in pref_hi) and not (b in pref_lo and a in pref_hi):
-                        continue
-                    transitions.add(trans)
-                except ValueError:
-                    continue
-
-    ### 2. partition [ell_lo, ell_hi] into segments and label each by its co-argmax set
-    breakpoints = sorted({ell_lo, ell_hi, *transitions})
-    segments = []
-    for lo, hi in zip(breakpoints[:-1], breakpoints[1:]):
-        mid = np.sqrt(lo * hi)
-        Q_mid = bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
-                              h_remaining, termination_arm, mid, verbose=False)
-        co_best = frozenset(int(a) for a in
-                            np.flatnonzero(np.abs(Q_mid - Q_mid.max()) < eps_tie))
-        segments.append((lo, hi, co_best))
-
-    ### 3. merge adjacent segments with the same co-argmax set
-    merged = []
-    for lo, hi, arms in segments:
-        if merged and merged[-1][2] == arms:
-            merged[-1] = (merged[-1][0], hi, arms)
-        else:
-            merged.append((lo, hi, arms))
-
-    ### 4. per arm, collect every merged segment in which it is co-argmax (with tie flag)
-    per_arm = {}
-    for lo, hi, arms in merged:
-        is_tied = len(arms) > 1
-        for arm in arms:
-            per_arm.setdefault(arm, []).append((lo, hi, is_tied))
-
-    ### 5. per arm, fuse contiguous segments into a single preferred interval;
-    ###    has_ties is True if ANY sub-segment of the fused interval had a tie.
-    ###    Truly disjoint intervals (gap between them) remain separate rows.
-    tip_rows = []
-    for arm, intervals in per_arm.items():
-        fused = []
-        for lo, hi, is_tied in intervals:
-            if fused and fused[-1][1] == lo:
-                prev_lo, _, prev_tied = fused[-1]
-                fused[-1] = (prev_lo, hi, prev_tied or is_tied)
-            else:
-                fused.append((lo, hi, is_tied))
-
-        for idx, (lo, hi, has_ties) in enumerate(fused):
-            tip_row = {
-                'history_str': history_str,
-                't': t,
-                'arm': arm,
-                'ell_lo': lo,
-                'ell_hi': hi,
-                'interval_idx': idx,
-                'has_ties': has_ties,
-                'info_best_a': info_best_a,
-            }
-            for a in range(n_arms):
-                tip_row[f'info_Q_{a}'] = info_Q[a]
-            if termination_arm:
-                tip_row['info_Q_terminate'] = info_Q[-1]
-            tip_rows.append(tip_row)
-
-            ## debug: scan ells inside the saved interval and flag any where this arm
-            ## is no longer in the co-argmax set (signals a missed transition).
-            for ell_ in np.geomspace(lo, hi, n_check_samples):
-                Q_ = bellman_emp_Q(alphas.copy(), n_arms, n_outcomes,
-                                   h_remaining, termination_arm, ell_, verbose=False)
-                if np.abs(Q_[arm] - Q_.max()) >= eps_tie:
-                    print(f"*** TIE VIOLATION: history={history_str}, lo={lo}, hi={hi}, ell={ell_}, arm={arm}, Q={Q_}")
-    return tip_rows
-
 
 def enumerate_emp_rows(n_arms=2, n_outcomes=2, n_trials=3, alpha=1.0, termination_arm=True,
                        ells=(0.33, 1.0, 3.0), temp=1.0, n_jobs=1):
@@ -615,26 +475,6 @@ def enumerate_emp_rows(n_arms=2, n_outcomes=2, n_trials=3, alpha=1.0, terminatio
     df['history_counts_str'] = df['history_str']
     return df
 
-
-def enumerate_tipping_intervals(n_arms=2, n_outcomes=2, n_trials=3, alpha=1.0, termination_arm=True,
-                                ell_lo=0.001, ell_hi=100, n_ell_samples=200, n_check_samples=50, eps_tie=1e-8, n_jobs=1):
-    """Enumerate per-(canonical history, arm) preferred ell intervals.
-
-    One row per (canonical history, arm, contiguous preferred interval), with
-    `has_ties=True` if any sub-segment of the fused interval has multiple
-    co-argmax arms.
-
-    `n_jobs` parallelises the inner n_samples-wide bellman_emp_Q sweep within
-    each history, not the outer history loop. This targets the t=0 / small-t
-    bottleneck where one history's deep-horizon sweep dominates wall time.
-    """
-    tasks = canonical_states(n_arms, n_outcomes, n_trials)
-    batches = [_tipping_rows_for_history(t, C, hs,
-                                         n_arms, n_outcomes, n_trials, alpha,
-                                         termination_arm, ell_lo, ell_hi, n_ell_samples, n_check_samples, eps_tie,
-                                         n_jobs=n_jobs)
-               for (t, C, _, hs, _) in tasks]
-    return pd.DataFrame([r for batch in batches for r in batch])
 
 
 def _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cost=0.0,
@@ -836,6 +676,233 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                         rows.append(row)
 
     return pd.DataFrame(rows)
+
+
+## Diagnosticity of an observation history: I(A; ell | h) - How much does observing the chosen action tell us about the agent's ell?
+
+##   I(A;ell|h) = H(A|h) - E_ell[ H(A|h,ell) ]
+##   H(A|h)     = -sum_a p(a|h) log p(a|h),   p(a|h) = int p(a|h,ell) p(ell) dell
+##   H(A|h,ell) = -sum_a p(a|h,ell) log p(a|h,ell)
+
+def ell_prior_samples(n_samples=200, loc=0.0, scale=5.0, sampling='quantile', seed=None):
+    """Equal-weight sample of ell from the truncated normal N_trunc(0,inf)(loc, scale).
+
+    `sampling='quantile'` (default) returns the stratified midpoint quantiles
+    ppf((m + 0.5)/M): deterministic, reproducible, and far lower variance than
+    i.i.d. draws at the same M because p(a|h,ell) is smooth in ell -- a couple of
+    hundred quantiles buy what many thousands of random draws would.
+    `sampling='random'` draws i.i.d. (use `seed`), kept for MC-error checks.
+
+    Both are EQUAL WEIGHT, so every downstream estimator is a plain mean.
+    """
+    n_samples = int(n_samples)
+    a = (0.0 - loc) / scale          # lower truncation at ell = 0, in std units
+    b = np.inf
+    if sampling == 'quantile':
+        q = (np.arange(n_samples) + 0.5) / n_samples
+        return truncnorm.ppf(q, a, b, loc=loc, scale=scale)
+    elif sampling == 'random':
+        return truncnorm.rvs(a, b, loc=loc, scale=scale, size=n_samples,
+                             random_state=seed)
+
+
+def _neg_p_log_p(p):
+    """-sum p log p along the last axis, treating 0 log 0 as 0 (nats)."""
+    p = np.asarray(p, dtype=float)
+    return -np.sum(np.where(p > 0, p * np.log(np.where(p > 0, p, 1.0)), 0.0), axis=-1)
+
+
+def _mi_from_policies(P):
+    """(H_marg, H_cond, mi) from an (M, A) array of equal-weight policies.
+
+    Row m is p(.|h, ell_m). `mi` is clipped at 0: it is non-negative in exact
+    arithmetic, so any negative value is float noise.
+    """
+    P = np.asarray(P, dtype=float)
+    p_marg = P.mean(axis=0)                       # p(a|h), the ell-marginal
+    H_marg = float(_neg_p_log_p(p_marg))          # H(A|h)
+    H_cond = float(np.mean(_neg_p_log_p(P)))      # E_ell[H(A|h,ell)]
+    return H_marg, H_cond, max(H_marg - H_cond, 0.0)
+
+
+def _diag_row_for_history(t, canon_C, canon_counts, history_str, orbit_size,
+                          ell_samples, n_arms, n_outcomes, n_trials, ctx,
+                          alpha_label, context_set, independent_contexts,
+                          termination_arm, horizon, cost, temp):
+    """Per-canonical-history diagnosticity row. Module-level so joblib can pickle it."""
+    h_remaining = int(np.min([horizon, n_trials - t]))
+    n_actions = n_arms + int(termination_arm)
+
+    ## p(a|h,ell) for each sampled ell
+    P = np.empty((len(ell_samples), n_actions))
+    best_a = np.empty(len(ell_samples), dtype=int)
+    for m, ell in enumerate(ell_samples):
+        Q = _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm,
+                           canon_C, h_remaining, cost=cost,
+                           independent_contexts=independent_contexts)
+        P[m] = _softmax(Q / temp)
+        best_a[m] = int(np.argmax(Q))
+
+    H_marg, H_cond, mi = _mi_from_policies(P)
+    p_marg = P.mean(axis=0)
+
+    ## fraction of sampled ells for which each action is the greedy choice --
+    ## shows WHICH action the diagnosticity comes from.
+    frac = np.bincount(best_a, minlength=n_actions) / len(ell_samples)
+
+    row = {
+        'alpha': alpha_label, 'context_set': context_set,
+        'horizon': horizon, 'cost': cost, 'temp': temp,
+        't': t, 'history_str': history_str, 'history': canon_counts,
+        'orbit_size': orbit_size,
+        'H_A_h': H_marg,
+        'E_H_A_h_ell': H_cond,
+        'mi': mi,
+        'mi_bits': mi / np.log(2.0),
+        'mi_norm': mi / np.log(n_actions),
+        'n_ell_samples': len(ell_samples),
+    }
+    for a in range(n_arms):
+        row[f'p_marg_{a}'] = p_marg[a]
+        row[f'best_a_frac_{a}'] = frac[a]
+    if termination_arm:
+        row['p_marg_terminate'] = p_marg[-1]
+        row['best_a_frac_terminate'] = frac[-1]
+    return row
+
+
+def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
+                            contexts=None, context_prior=None,
+                            independent_contexts=False,
+                            termination_arm=True, temp=1.0,
+                            horizons=None, costs=(0.0,),
+                            n_samples=200, prior_loc=0.0, prior_scale=5.0,
+                            sampling='quantile', seed=None,
+                            init_t=0, n_jobs=1):
+    """Diagnosticity I(A;ell|h) for every canonical history.
+
+    Mirrors `enumerate_curves`: the same canonical-history enumeration, the same
+    agent specs (one KNOWN-context agent per value in `alphas`, plus one
+    UNKNOWN-context agent labelled `alpha='unknown'` if `contexts` is given), and
+    the same horizon / cost sweeps. Where `enumerate_curves` reports the Q/p curve
+    at each ell, this reports the single scalar that summarises how much the
+    action reveals about ell.
+
+    The ell sample is drawn ONCE and reused across every history, alpha, horizon
+    and cost -- common random numbers, so the resulting mi values are directly
+    comparable between histories, which is the point of the score.
+
+    Returns a long DataFrame, one row per (alpha, context_set, horizon, cost, t,
+    history_str). Column names match `enumerate_curves` so the two merge on
+    ['alpha', 'context_set', 'horizon', 'cost', 't', 'history_str'].
+
+    COST: n_samples Bayes-adaptive Bellman solves per (history, alpha, horizon,
+    cost) -- the same shape of cost as `enumerate_curves` with
+    n_ell_samples = n_samples. `n_jobs` parallelises over histories.
+    """
+    ## shared ell sample from the truncated-normal prior
+    ell_samples = ell_prior_samples(n_samples, loc=prior_loc, scale=prior_scale,
+                                    sampling=sampling, seed=seed)
+
+    ## canonical histories, optionally skipping the first init_t trials
+    states = canonical_states(n_arms, n_outcomes, n_trials)
+    states = [s for s in states if int(s[0]) >= init_t]
+
+    if horizons is None:
+        horizons = [n_trials]
+
+    ## agents to sweep: one per known alpha, plus the unknown-context agent
+    agent_specs = [(alpha_val, str(alpha_val), [(float(alpha_val), 1.0)])
+                   for alpha_val in alphas]
+    if contexts is not None:
+        if context_prior is None:
+            context_prior = [1.0 / len(contexts)] * len(contexts)   ## flat prior
+        ctx_unknown = [(float(a), float(p)) for a, p in zip(contexts, context_prior)]
+        context_set_str = 'ctx' + str(tuple(float(a) for a in contexts))
+        agent_specs.append(('unknown', context_set_str, ctx_unknown))
+
+    costs = [costs] if np.isscalar(costs) else list(costs)
+
+    rows = []
+    for alpha_label, context_set, ctx in agent_specs:
+        for horizon in horizons:
+            for cost in costs:
+                desc = f"Diagnosticity (alpha={alpha_label}, h={horizon}, cost={cost})"
+                args = (ell_samples, n_arms, n_outcomes, n_trials, ctx,
+                        alpha_label, context_set, independent_contexts,
+                        termination_arm, horizon, cost, temp)
+                if n_jobs == 1:
+                    rows.extend(
+                        _diag_row_for_history(t, C, cc, hs, os, *args)
+                        for (t, C, cc, hs, os) in tqdm(states, desc=desc)
+                    )
+                else:
+                    with tqdm_joblib(tqdm(total=len(states), desc=desc)):
+                        rows.extend(Parallel(n_jobs=n_jobs)(
+                            delayed(_diag_row_for_history)(t, C, cc, hs, os, *args)
+                            for (t, C, cc, hs, os) in states
+                        ))
+
+    df = pd.DataFrame(rows)
+    df['prior_loc'] = prior_loc
+    df['prior_scale'] = prior_scale
+    return df
+
+
+def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
+                             alpha=0.1, contexts=None, context_prior=None,
+                             independent_contexts=False,
+                             termination_arm=True, temp=1.0, horizon=None, cost=0.0,
+                             n_samples=200, prior_loc=0.0, prior_scale=5.0,
+                             sampling='quantile', seed=None):
+    """Diagnosticity for ONE arbitrary (non-canonical) count matrix.
+
+    For scoring a real participant's history (`run_emp`) or a simulated one
+    (`gen_emp`'s `counts_array`). `C` is canonicalised first: diagnosticity is
+    constant on arm/outcome-relabelling orbits, so the canonical value is the
+    right one, and the returned `history_str` is the canonical label that joins
+    against `enumerate_diagnosticity` / `enumerate_curves` output.
+
+    `n_trials` and `horizon` both default to "t pulls already taken, t more to
+    come"; pass them explicitly to match a particular task design.
+
+    Returns the row dict.
+    """
+    C = np.asarray(C, dtype=int)
+    if n_arms is None or n_outcomes is None:
+        n_arms, n_outcomes = C.shape
+    canon_C, _ = canonical_count_matrix(C)
+    canon_counts, history_str = array_to_hist(canon_C, n_arms, n_outcomes)
+    t = int(canon_C.sum())
+    if n_trials is None:
+        n_trials = t + (t if horizon is None else horizon)
+    if horizon is None:
+        horizon = n_trials
+
+    if contexts is None:
+        ctx = [(float(alpha), 1.0)]
+        alpha_label, context_set = alpha, str(alpha)
+    else:
+        if context_prior is None:
+            context_prior = [1.0 / len(contexts)] * len(contexts)
+        ctx = [(float(a), float(p)) for a, p in zip(contexts, context_prior)]
+        alpha_label = 'unknown'
+        context_set = 'ctx' + str(tuple(float(a) for a in contexts))
+
+    ell_samples = ell_prior_samples(n_samples, loc=prior_loc, scale=prior_scale,
+                                    sampling=sampling, seed=seed)
+    row = _diag_row_for_history(t, canon_C, canon_counts, history_str,
+                                orbit_sequence_count(canon_C), ell_samples,
+                                n_arms, n_outcomes, n_trials, ctx,
+                                alpha_label, context_set, independent_contexts,
+                                termination_arm, horizon, cost, temp)
+    row['prior_loc'] = prior_loc
+    row['prior_scale'] = prior_scale
+    return row
+
+    
+
+
 
 
 
