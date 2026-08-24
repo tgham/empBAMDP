@@ -90,12 +90,13 @@ def main():
     df_sim = df_sim[cols]
 
     ## canonicalise histories
-    print('Canonicalising histories...')
-    ## check that counts_array is an array
-    assert isinstance(df_sim['counts_array'].iloc[0], np.ndarray), "counts_array is not an array"
-    df_sim['canonical_counts_array'] = df_sim['counts_array'].apply(lambda x: canonical_count_matrix(x)[0])
-    df_sim['history_str'] = df_sim['canonical_counts_array'].apply(lambda x: array_to_hist(x, args.n_arms, args.n_outcomes)[1])
-    df_sim = df_sim.apply(lambda x: canon_to_concrete(x), axis=1)
+    # assert isinstance(df_sim['counts_array'].iloc[0], np.ndarray), "counts_array is not an array"
+    # print('Getting canonical count matrix...')
+    # df_sim['canonical_counts_array'] = df_sim['counts_array'].apply(lambda x: canonical_count_matrix(x)[0])
+    # print('Getting history strings...')
+    # df_sim['history_str'] = df_sim['canonical_counts_array'].apply(lambda x: array_to_hist(x, args.n_arms, args.n_outcomes)[1])
+    # print('Getting concrete histories...')
+    # df_sim = df_sim.apply(lambda x: canon_to_concrete(x), axis=1)
 
     ## Save
     print('saving...')
