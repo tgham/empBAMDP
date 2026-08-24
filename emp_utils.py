@@ -107,14 +107,16 @@ class EmpAgent:
         with np.errstate(divide='ignore'):           # a zero prior -> -inf is intended
             self.log_prior = np.log(priors)          # (Z,)
         self.single = len(contexts) == 1
+        
         ## constant Dirichlet log-normaliser per context, per arm:
-        ## log B(a_z * 1_K) = K*gammaln(a_z) - gammaln(K*a_z). Only needed for
-        ## context inference; skipped when single (a_z may be 0 there).
-        if self.single:
-            self._logB0_z = None
-        else:
-            K = n_outcomes
-            self._logB0_z = K * gammaln(alphas) - gammaln(K * alphas)
+        ## log B(a_z * 1_K) = K*gammaln(a_z) - gammaln(K*a_z) - i.e. the denominator in the multinomial beta function
+        # if self.single:
+        #     self._logB0_z = None
+        # else:
+        #     K = n_outcomes
+        #     self._logB0_z = K * gammaln(alphas) - gammaln(K * alphas)
+        K = n_outcomes
+        self._logB0_z = K * gammaln(alphas) - gammaln(K * alphas)
 
     def _opt(self, a, b):
         raise NotImplementedError
@@ -132,14 +134,15 @@ class EmpAgent:
         p(n_a|z) = B(a_z + n_a)/B(a_z) using ONLY that arm's counts.
         """
         row_sums = counts.sum(axis=1)                          # (A,)
-        if self.independent:
+        if self.independent and not self.single:
             ## per arm a, per context z:
             ##   sum_o gammaln(a_z + n_{a,o}) - gammaln(K*a_z + n_a.sum()) - logB0_z
             loglik = np.empty((self.n_arms, len(self.alphas_z)))
             for z, a_z in enumerate(self.alphas_z):
                 num = gammaln(a_z + counts).sum(axis=1)        # (A,)
                 den = gammaln(self.n_outcomes * a_z + row_sums)  # (A,)
-                loglik[:, z] = (num - den) - self._logB0_z[z]
+                logB_pseudo = (num - den) ## log B(a_z + n_a) - log B(a_z)
+                loglik[:, z] = logB_pseudo - self._logB0_z[z] ## i.e. minus the log B(a_z) term
             return self.log_prior[None, :] + loglik            # (A, Z)
         loglik = np.empty(len(self.alphas_z))
         for z, a_z in enumerate(self.alphas_z):
@@ -147,8 +150,14 @@ class EmpAgent:
             ##   sum_o gammaln(a_z + n_{a,o}) - gammaln(K*a_z + n_a.sum())
             num = gammaln(a_z + counts).sum()
             den = gammaln(self.n_outcomes * a_z + row_sums).sum()
-            loglik[z] = (num - den) - self.n_arms * self._logB0_z[z]
+            logB_pseudo = (num - den) ## log B(a_z + n_a) - log B(a_z)
+            loglik[z] = logB_pseudo - self.n_arms * self._logB0_z[z] ## i.e. minus the log B(a_z) term
         return self.log_prior + loglik
+    
+    ## for ease: marginal likelihood under context 0 (only meaningful when single-context).
+    def marginal_likelihood(self, counts):
+        return self.context_log_posterior(counts)[0]
+
 
     def context_posterior(self, counts):
         """Normalised context weights: (Z,) global, (A, Z) independent."""

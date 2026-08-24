@@ -496,6 +496,14 @@ def _info_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, co
     return - agent.bellman_Q(counts, h) ## negate because minimising posterior variance
 
 
+def _get_LML(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cost=0.0,
+                   independent_contexts=False):
+    agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=ell,
+                             termination_arm=termination_arm, cost=cost,
+                             independent_contexts=independent_contexts)
+    return agent.marginal_likelihood(counts)
+
+
 def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      contexts=None, context_prior=None,
                      independent_contexts=False,
@@ -614,6 +622,9 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                 h_remaining = int(np.min([horizon, n_trials - t]))
                 sample_ells = np.logspace(np.log10(e_lo), np.log10(e_hi), n_ell_samples)
 
+                ## get LML of history
+                LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining, cost=0.0, independent_contexts=independent_contexts)
+
                 ## info-seeking agent (not parameterised by ell)
                 info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining)
                 info_best_a = int(np.argmax(info_Q))
@@ -654,6 +665,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                         row = {'alpha': alpha_label, 'context_set': context_set,
                             'horizon': horizon, 'history_str': history_str, 't': t, 'ell': e, 'current_emp': current_emps[ei],
                             'cost': cost,
+                            'LML': LML,
                             'info_best_a': info_best_a}
                         for a in range(n_arms):
                             row[f'Q_{a}'] = Q[a]
@@ -751,6 +763,10 @@ def _diag_row_for_history(t, canon_C, canon_counts, history_str, orbit_size,
     ## shows WHICH action the diagnosticity comes from.
     frac = np.bincount(best_a, minlength=n_actions) / len(ell_samples)
 
+    ## get LML
+    LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining, cost=cost,
+                   independent_contexts=independent_contexts)
+
     row = {
         'alpha': alpha_label, 'context_set': context_set,
         'horizon': horizon, 'cost': cost, 'temp': temp,
@@ -762,6 +778,7 @@ def _diag_row_for_history(t, canon_C, canon_counts, history_str, orbit_size,
         'mi_bits': mi / np.log(2.0),
         'mi_norm': mi / np.log(n_actions),
         'n_ell_samples': len(ell_samples),
+        'LML': LML,
     }
     for a in range(n_arms):
         row[f'p_marg_{a}'] = p_marg[a]
