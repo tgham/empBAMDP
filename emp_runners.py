@@ -7,7 +7,7 @@ from scipy.special import softmax as _softmax
 from joblib import Parallel, delayed
 import warnings
 from tqdm_joblib import tqdm_joblib
-from scipy.stats import truncnorm
+from scipy.stats import lognorm
 
 from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canon_to_concrete
 warnings.filterwarnings('ignore')
@@ -686,8 +686,11 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
 ##   H(A|h)     = -sum_a p(a|h) log p(a|h),   p(a|h) = int p(a|h,ell) p(ell) dell
 ##   H(A|h,ell) = -sum_a p(a|h,ell) log p(a|h,ell)
 
-def ell_prior_samples(n_samples=200, loc=0.0, scale=5.0, sampling='quantile', seed=None):
-    """Equal-weight sample of ell from the truncated normal N_trunc(0,inf)(loc, scale).
+def ell_prior_samples(n_samples=200, mu=0.0, sigma=1.0, sampling='quantile', seed=None):
+    """Equal-weight sample of ell from the lognormal LN(mu, sigma).
+
+    Support is (0, inf) already, so no truncation is needed. LN(0,1) has median
+    1, mean exp(0.5) = 1.649, and a heavy right tail (99.5th pct ~ 13).
 
     `sampling='quantile'` (default) returns the stratified midpoint quantiles
     ppf((m + 0.5)/M): deterministic, reproducible, and far lower variance than
@@ -698,14 +701,12 @@ def ell_prior_samples(n_samples=200, loc=0.0, scale=5.0, sampling='quantile', se
     Both are EQUAL WEIGHT, so every downstream estimator is a plain mean.
     """
     n_samples = int(n_samples)
-    a = (0.0 - loc) / scale          # lower truncation at ell = 0, in std units
-    b = np.inf
     if sampling == 'quantile':
         q = (np.arange(n_samples) + 0.5) / n_samples
-        return truncnorm.ppf(q, a, b, loc=loc, scale=scale)
+        return lognorm.ppf(q, sigma, scale=np.exp(mu))
     elif sampling == 'random':
-        return truncnorm.rvs(a, b, loc=loc, scale=scale, size=n_samples,
-                             random_state=seed)
+        return lognorm.rvs(sigma, scale=np.exp(mu), size=n_samples,
+                           random_state=seed)
 
 
 def _neg_p_log_p(p):
@@ -778,7 +779,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             independent_contexts=False,
                             termination_arm=True, temp=1.0,
                             horizons=None, costs=(0.0,),
-                            n_samples=200, prior_loc=0.0, prior_scale=5.0,
+                            n_samples=200, prior_mu=0.0, prior_sigma=1.0,
                             sampling='quantile', seed=None,
                             init_t=0, n_jobs=1):
     """Diagnosticity I(A;ell|h) for every canonical history.
@@ -803,7 +804,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     n_ell_samples = n_samples. `n_jobs` parallelises over histories.
     """
     ## shared ell sample from the truncated-normal prior
-    ell_samples = ell_prior_samples(n_samples, loc=prior_loc, scale=prior_scale,
+    ell_samples = ell_prior_samples(n_samples, mu=prior_mu, sigma=prior_sigma,
                                     sampling=sampling, seed=seed)
 
     ## canonical histories, optionally skipping the first init_t trials
@@ -846,8 +847,8 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                         ))
 
     df = pd.DataFrame(rows)
-    df['prior_loc'] = prior_loc
-    df['prior_scale'] = prior_scale
+    df['prior_mu'] = prior_mu
+    df['prior_sigma'] = prior_sigma
     return df
 
 
@@ -855,7 +856,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
                              alpha=0.1, contexts=None, context_prior=None,
                              independent_contexts=False,
                              termination_arm=True, temp=1.0, horizon=None, cost=0.0,
-                             n_samples=200, prior_loc=0.0, prior_scale=5.0,
+                             n_samples=200, prior_mu=0.0, prior_sigma=1.0,
                              sampling='quantile', seed=None):
     """Diagnosticity for ONE arbitrary (non-canonical) count matrix.
 
@@ -891,15 +892,15 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
         alpha_label = 'unknown'
         context_set = 'ctx' + str(tuple(float(a) for a in contexts))
 
-    ell_samples = ell_prior_samples(n_samples, loc=prior_loc, scale=prior_scale,
+    ell_samples = ell_prior_samples(n_samples, mu=prior_mu, sigma=prior_sigma,
                                     sampling=sampling, seed=seed)
     row = _diag_row_for_history(t, canon_C, canon_counts, history_str,
                                 orbit_sequence_count(canon_C), ell_samples,
                                 n_arms, n_outcomes, n_trials, ctx,
                                 alpha_label, context_set, independent_contexts,
                                 termination_arm, horizon, cost, temp)
-    row['prior_loc'] = prior_loc
-    row['prior_scale'] = prior_scale
+    row['prior_mu'] = prior_mu
+    row['prior_sigma'] = prior_sigma
     return row
 
     

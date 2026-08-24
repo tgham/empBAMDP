@@ -24,8 +24,8 @@ def main():
     ## diagnosticity-specific: the ell prior and the choice policy
     parser.add_argument('--n_samples', type=int, default=200)
     parser.add_argument('--temp', type=float, default=1.0)
-    parser.add_argument('--prior_loc', type=float, default=0.0)
-    parser.add_argument('--prior_scale', type=float, default=5.0)
+    parser.add_argument('--prior_mu', type=float, default=0.0)
+    parser.add_argument('--prior_sigma', type=float, default=1.0)
     parser.add_argument('--sampling', type=str, default='quantile',
                         choices=['quantile', 'random'])
     parser.add_argument('--seed', type=int, default=None)
@@ -50,8 +50,8 @@ def main():
         independent_contexts=args.independent_contexts,
         termination_arm=args.termination_arm, temp=args.temp,
         horizons=args.horizons, costs=args.costs,
-        n_samples=args.n_samples, prior_loc=args.prior_loc,
-        prior_scale=args.prior_scale, sampling=args.sampling, seed=args.seed,
+        n_samples=args.n_samples, prior_mu=args.prior_mu,
+        prior_sigma=args.prior_sigma, sampling=args.sampling, seed=args.seed,
         init_t=args.init_t, n_jobs=args.n_jobs,
     )
 
