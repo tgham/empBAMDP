@@ -19,7 +19,7 @@ def main():
     parser.add_argument('--ell_bounds', type=float, default=(0.01, 5), nargs=2)
     parser.add_argument('--temp_bounds', type=float, default=(0.01, 0.4), nargs=2)
     parser.add_argument('--cost', type=float, default=0.0)
-    parser.add_argument('--h', type=int, default=1)
+    parser.add_argument('--horizon', type=int, default=1)
     parser.add_argument('--init_t', type=int, default=1)
     parser.add_argument('--n_sims', type=int, default=100)
     parser.add_argument('--n_jobs', type=int, default=-1)
@@ -40,7 +40,7 @@ def main():
         print(f'  - Number of trials: {args.n_trials}')
         print(f'  - Number of rooms: {args.n_rooms}')
         print(f'  - Alpha: {args.alpha}')
-        print(f'  - Horizon: {args.h}')
+        print(f'  - Horizon: {args.horizon}')
         print(f'  - Cost: {args.cost}')
         print(f'  - Initial trial: {args.init_t}')
         print(f'  - Termination arm: {args.termination_arm}')
@@ -64,11 +64,13 @@ def main():
                 n_rooms=args.n_rooms,
                 alpha=args.alpha,
                 ell=ell,
-                h=args.h,
+                horizon=args.horizon,
+                cost = args.cost,
                 temp=temp,
                 termination_arm=args.termination_arm
             )
             sim_tmp['subject_id'] = [sim_id] * len(sim_tmp['room'])
+            sim_tmp['agent_type'] = [agent_type] * len(sim_tmp['room'])
 
             return sim_tmp
 
