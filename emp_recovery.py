@@ -112,7 +112,7 @@ def main():
         ## Save
         print('saving...')
         term = ["noTermination", "Termination"][args.termination_arm]
-        path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.h}h_{args.alpha}alpha_{term}.csv'
+        path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_{args.alpha}alpha_{term}.csv'
         df_sim.to_csv(path, index=False)
 
         print(f"Saved {len(df_sim)} rows to {path}")
@@ -121,7 +121,7 @@ def main():
     ## or preload existing data
     else:
         term = ["noTermination", "Termination"][args.termination_arm]
-        path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.h}h_{args.alpha}alpha_{term}.csv'
+        path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_{args.alpha}alpha_{term}.csv'
         df_sim = pd.read_csv(path)
 
 
@@ -135,7 +135,7 @@ def main():
         df_ppt=df_sim,
         agent_types=args.agent_types,
         param_bounds=param_bounds,
-        horizon=args.h,
+        horizon=args.horizon,
         init_t=args.init_t,
         n_jobs=args.n_jobs,
         verbose=True
@@ -149,8 +149,9 @@ def main():
 
     ## save fits
     term = ["noTermination", "Termination"][args.termination_arm]
-    path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.h}h_{args.alpha}alpha_{term}_fits.csv'
+    path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_{args.alpha}alpha_{term}_fits.csv'
     df_fits.to_csv(path, index=False)
+    print(f"Saved fits to {path}")
 
 if __name__ == '__main__':
     main()
