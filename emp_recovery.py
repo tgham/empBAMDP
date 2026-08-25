@@ -43,7 +43,6 @@ def main():
         print(f'  - Horizon: {args.h}')
         print(f'  - Cost: {args.cost}')
         print(f'  - Initial trial: {args.init_t}')
-        print(f'  - Number of simulations: {args.n_sims}')
         print(f'  - Termination arm: {args.termination_arm}')
         print(f'  - Agent types: {args.agent_types}')
 
@@ -76,8 +75,9 @@ def main():
         ## parallellise
         agent_type_ids = []
         for agent_type in args.agent_types:
-            agent_type_ids += [agent_type] * (args.n_sims // len(args.agent_types))
-        with tqdm_joblib(tqdm(desc="Generating datasets", total=args.n_sims, ncols=100, unit='sim', mininterval=1)):
+            agent_type_ids += [agent_type] * args.n_sims
+        n_sims_total = len(agent_type_ids)
+        with tqdm_joblib(tqdm(desc="Generating datasets", total=n_sims_total, ncols=100, unit='sim', mininterval=1)):
             results = Parallel(n_jobs=args.n_jobs)(
                 delayed(_gen_single_sim)(sim_id, args, agent_type)
                 for sim_id, agent_type in enumerate(agent_type_ids)
@@ -139,7 +139,8 @@ def main():
     )
 
     ## add the generative params back in 
-    for sim in range(args.n_sims):
+    for sim in range(len(df_sim['subject_id'].unique())):
+        df_fits.loc[df_fits['subject_id']==sim, 'gen_agent_type'] = df_sim.loc[df_sim['subject_id']==sim, 'agent_type'].iloc[0]
         df_fits.loc[df_fits['subject_id']==sim, 'gen_ell'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_ell'].iloc[0]
         df_fits.loc[df_fits['subject_id']==sim, 'gen_temp'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_temp'].iloc[0]
 
