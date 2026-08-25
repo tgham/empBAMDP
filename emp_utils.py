@@ -458,15 +458,18 @@ def _row_map_via_permutation_search(a1, a2):
 
 
 ## make the history_str concrete
-def canon_to_concrete(row):
+def count_matrix_row_map(C, canon_C):
+    """Row mapping from `C` onto its canonical form: arm `i` of `C` is arm
+    `mapping[i]` of `canon_C`.
 
-    ### map colours onto actions
-
-    n, m = row['counts_array'].shape
+    Depends only on the pair of matrices, so it is safe to memoise on `C` --
+    see `canonicalise_histories`.
+    """
+    n = C.shape[0]
 
     # Create canonical form of each row by sorting
-    canonical_a1 = np.sort(row['counts_array'], axis=1)
-    canonical_a2 = np.sort(row['canonical_counts_array'], axis=1)
+    canonical_a1 = np.sort(C, axis=1)
+    canonical_a2 = np.sort(canon_C, axis=1)
 
     # Check for ties: duplicate sorted-row signatures mean the fast
     # sort-based matching below could silently pick the wrong row.
@@ -478,24 +481,29 @@ def canon_to_concrete(row):
         # Fall back to exhaustive column-permutation search, which enforces
         # a single consistent column permutation across all rows and so
         # can't be fooled by rows that are permutations of each other.
-        mapping = _row_map_via_permutation_search(
-            row['counts_array'], row['canonical_counts_array']
-        )
-    else:
-        # Fast path: build a mapping from canonical row to list of indices in a2
-        canonical_to_indices = defaultdict(list)
-        for j in range(n):
-            key = tuple(canonical_a2[j])
-            canonical_to_indices[key].append(j)
+        return _row_map_via_permutation_search(C, canon_C)
 
-        # Map each row in a1 to a row in a2
-        mapping = []
-        for i in range(n):
-            key = tuple(canonical_a1[i])
-            if not canonical_to_indices[key]:
-                raise ValueError(f"No matching row found for a1 row {i}")
-            j = canonical_to_indices[key].pop()
-            mapping.append(j)
+    # Fast path: build a mapping from canonical row to list of indices in a2
+    canonical_to_indices = defaultdict(list)
+    for j in range(n):
+        canonical_to_indices[a2_keys[j]].append(j)
+
+    # Map each row in a1 to a row in a2
+    mapping = []
+    for i in range(n):
+        key = a1_keys[i]
+        if not canonical_to_indices[key]:
+            raise ValueError(f"No matching row found for a1 row {i}")
+        mapping.append(canonical_to_indices[key].pop())
+    return mapping
+
+
+def canon_to_concrete(row):
+
+    ### map colours onto actions
+
+    n, m = row['counts_array'].shape
+    mapping = count_matrix_row_map(row['counts_array'], row['canonical_counts_array'])
 
     ## map back onto colours (blue, red, green)
     colors = ['blue', 'red', 'green']
@@ -505,6 +513,48 @@ def canon_to_concrete(row):
         row[f'chose_a{i}'] = row['action'] == mapping[i]
 
     return row
+
+
+def canonicalise_histories(df, n_arms=None, n_outcomes=None):
+    """Add the canonical-history columns to `df`, memoised on the count matrix.
+
+    Adds `canonical_counts_array`, `history_str` and the concrete colour mapping
+    (`a{i}` / `chose_a{i}`) -- the same columns as canonicalising row by row and
+    then applying `canon_to_concrete`, but the per-matrix work is done once per
+    DISTINCT `counts_array` instead of once per row. The reachable belief states
+    are bounded by the design (a few thousand for a typical run) while rows run
+    to millions, so the cache is what makes this step scale.
+
+    `chose_a{i}` depends on each row's own `action`, so only the row mapping is
+    cached; the comparison itself is vectorised.
+    """
+    df = df.copy()
+    counts = df['counts_array'].to_numpy()
+    if n_arms is None or n_outcomes is None:
+        n_arms, n_outcomes = counts[0].shape
+
+    ## one canonicalisation + row map per distinct count matrix
+    cache = {}
+    keys = [C.tobytes() for C in counts]
+    for key, C in zip(keys, counts):
+        if key in cache:
+            continue
+        canon_C, _ = canonical_count_matrix(C)
+        cache[key] = (canon_C,
+                      array_to_hist(canon_C, n_arms, n_outcomes)[1],
+                      count_matrix_row_map(C, canon_C))
+
+    df['canonical_counts_array'] = [cache[k][0] for k in keys]
+    df['history_str'] = [cache[k][1] for k in keys]
+
+    colors = ['blue', 'red', 'green']
+    action = df['action'].to_numpy()
+    for i in range(n_arms):
+        mapped = np.array([cache[k][2][i] for k in keys])
+        df[f'a{i}'] = [colors[m] for m in mapped]
+        df[f'chose_a{i}'] = action == mapped
+
+    return df
 
     
     ### map locations onto outcomes (todo...)

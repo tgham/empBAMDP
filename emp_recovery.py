@@ -1,5 +1,5 @@
 from emp_runners import gen_emp, fit_emp
-from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canon_to_concrete
+from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canonicalise_histories
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
@@ -104,15 +104,13 @@ def main():
         cols = ['subject_id'] + [c for c in cols if c != 'subject_id']
         df_sim = df_sim[cols]
 
-        ## canonicalise histories
-        df_sim['canonical_counts_array'] = df_sim['counts_array'].apply(lambda x: canonical_count_matrix(x)[0])
-        df_sim['history_str'] = df_sim['canonical_counts_array'].apply(lambda x: array_to_hist(x, args.n_arms, args.n_outcomes)[1])
-        df_sim = df_sim.apply(lambda x: canon_to_concrete(x), axis=1)
+        ## canonicalise histories (memoised on the count matrix -- see emp_utils)
+        df_sim = canonicalise_histories(df_sim, args.n_arms, args.n_outcomes)
 
         ## Save
         print('saving...')
         term = ["noTermination", "Termination"][args.termination_arm]
-        path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.h}h_{args.alpha}alpha_{term}.csv'
+        path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_{args.alpha}alpha_{term}.csv'
         df_sim.to_csv(path, index=False)
 
         print(f"Saved {len(df_sim)} rows to {path}")
@@ -121,7 +119,7 @@ def main():
     ## or preload existing data
     else:
         term = ["noTermination", "Termination"][args.termination_arm]
-        path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.h}h_{args.alpha}alpha_{term}.csv'
+        path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_{args.alpha}alpha_{term}.csv'
         df_sim = pd.read_csv(path)
 
 
@@ -135,7 +133,7 @@ def main():
         df_ppt=df_sim,
         agent_types=args.agent_types,
         param_bounds=param_bounds,
-        horizon=args.h,
+        horizon=args.horizon,
         init_t=args.init_t,
         n_jobs=args.n_jobs,
         verbose=True
@@ -149,7 +147,7 @@ def main():
 
     ## save fits
     term = ["noTermination", "Termination"][args.termination_arm]
-    path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.h}h_{args.alpha}alpha_{term}_fits.csv'
+    path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_{args.alpha}alpha_{term}_fits.csv'
     df_fits.to_csv(path, index=False)
 
 if __name__ == '__main__':
