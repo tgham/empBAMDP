@@ -32,7 +32,7 @@
 
 
 micromamba activate chickpeas
-srun python -u diag_sweep.py --n_samples 2000 --alphas 0.25 --horizons 1 --n_trials 8 --n_arms 2 --n_outcomes 4 --temp 0.1 --init_t 1
-srun python -u diag_sweep.py --n_samples 2000 --alphas 0.25 --horizons 1 --n_trials 8 --n_arms 3 --n_outcomes 4 --temp 0.1 --init_t 1
-srun python -u diag_sweep.py --n_samples 2000 --alphas 0.25 --horizons 1 --n_trials 8 --n_arms 2 --termination_arm --n_outcomes 4 --temp 0.1 --init_t 1
-srun python -u diag_sweep.py --n_samples 2000 --alphas 0.25 --horizons 1 --n_trials 8 --n_arms 3 --termination_arm --n_outcomes 4 --temp 0.1 --init_t 1
+srun python -u diag_sweep.py --n_samples 2500 --alphas 0.01 0.1 0.25 0.4 1.0 --costs 0 0.015625 0.03125 --horizons 1 --n_trials 8 --n_arms 2 --n_outcomes 4 --temp 0.1 --init_t 1
+srun python -u diag_sweep.py --n_samples 2500 --alphas 0.01 0.1 0.25 0.4 1.0 --costs 0 0.015625 0.03125 --horizons 1 --n_trials 8 --n_arms 3 --n_outcomes 4 --temp 0.1 --init_t 1
+srun python -u diag_sweep.py --n_samples 2500 --alphas 0.01 0.1 0.25 0.4 1.0 --costs 0 0.015625 0.03125 --horizons 1 --n_trials 8 --n_arms 2 --termination_arm --n_outcomes 4 --temp 0.1 --init_t 1
+srun python -u diag_sweep.py --n_samples 2500 --alphas 0.01 0.1 0.25 0.4 1.0 --costs 0 0.015625 0.03125 --horizons 1 --n_trials 8 --n_arms 3 --termination_arm --n_outcomes 4 --temp 0.1 --init_t 1
