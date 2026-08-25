@@ -336,7 +336,7 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_ar
             sim_out['trial'].append(t)
             sim_out['action'].append(action)
             sim_out['outcome'].append(outcome)
-            sim_out['terminated'].append(action == n_arms if termination_arm else False)
+            sim_out['terminated'].append(action == -1 if termination_arm else False)
             sim_out['counts_array'].append(counts.copy())
             sim_out['max_counts_fraction'].append(max_counts_fraction)
             sim_out['ell_1'].append(ell_1)
