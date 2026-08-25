@@ -86,7 +86,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, fitting=False, 
                 
                     ## since we're not simulating the agent for these trials, fill with nans
                     if not fitting:
-                        actual_action = n_arms + 1
+                        actual_action = n_arms
                         actual_outcome = np.nan
                         Q_a0 = np.nan
                         p_a0 = np.nan
@@ -135,7 +135,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, fitting=False, 
 
                     if row_df['terminated'].values[0]:
                         terminated = True
-                        actual_action = n_arms+1
+                        actual_action = n_arms
                         actual_outcome = np.nan
                         Q_a0 = np.nan
                         p_a0 = np.nan
@@ -202,27 +202,27 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, fitting=False, 
 
                         
                     
-                        ## record the row if simulating agents
-                        if not fitting:
-                            row = {
-                                'subject_id': pid, 'room': r, 'trial': t, 'ell': ell,
-                                'chose_a0': chose_a0, 'chose_a1': chose_a1,
-                                'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
-                                'current_emp': current_emp,
-                                'Q_a0': Q_a0, 'Q_a1': Q_a1,
-                                'chose_a2': chose_a2 if n_arms > 2 else np.nan,
-                                'p_choice_a2': p_a2 if n_arms > 2 else np.nan,
-                                'Q_a2': Q_a2 if n_arms > 2 else np.nan,
-                            }
-                            if termination_arm:
-                                row['Q_terminate'] = Q[-1]
-                                row['p_terminate'] = probs[-1]
-                            records.append(row)
+                    ## record the row if simulating agents
+                    if not fitting:
+                        row = {
+                            'subject_id': pid, 'room': r, 'trial': t, 'ell': ell,
+                            'chose_a0': chose_a0, 'chose_a1': chose_a1,
+                            'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
+                            'current_emp': current_emp,
+                            'Q_a0': Q_a0, 'Q_a1': Q_a1,
+                            'chose_a2': chose_a2 if n_arms > 2 else np.nan,
+                            'p_choice_a2': p_a2 if n_arms > 2 else np.nan,
+                            'Q_a2': Q_a2 if n_arms > 2 else np.nan,
+                        }
+                        if termination_arm:
+                            row['Q_terminate'] = Q[-1]
+                            row['p_terminate'] = probs[-1]
+                        records.append(row)
 
-                        ## record choice probs if fitting
-                        elif fitting:
-                            ppt_choices.append(actual_action)
-                            p_ppt_choices.append(probs[actual_action])
+                    ## record choice probs if fitting
+                    elif fitting:
+                        ppt_choices.append(actual_action)
+                        p_ppt_choices.append(probs[actual_action])
 
                     if terminated:
                         break
@@ -261,7 +261,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, fitting=False, 
     
 
 ## generate a single synthetic dataset, i.e. an ell agent acting in its own emp bandit env
-def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_arm=True, temp=1.0, greedy =False, seed=None):
+def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, horizon, termination_arm=True, temp=1.0, greedy =False, seed=None):
     """Generate synthetic data from an agent in its own emp bandit env."""
     if ell is not None:
         agent = EmpowermentAgent(n_arms=n_arms, n_outcomes=n_outcomes,
@@ -297,7 +297,7 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_ar
         for t in range(n_trials):
 
             ## compute Q 
-            h = (n_trials - t) if h is None else min(h, n_trials - t)
+            h = (n_trials - t) if horizon is None else min(horizon, n_trials - t)
             Q = agent.bellman_Q(counts, h)
             if info_agent:
                 Q = -Q  # negate: info-seeking agent minimises expected posterior variance
@@ -319,13 +319,7 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_ar
             ## convert termination idx
             if termination_arm and action == n_arms:
                 action = -1
-            else:
-                ## update counts
-                counts[action, outcome] += 1
 
-            
-            ## score on current probability of reward - i.e. emp_1
-            ell_1 = ell_1_agent.leaf_value(counts)
 
             ## calculate max counts fraction - i.e. the action that has been sampled the most, divided by total samples
             max_counts_fraction = np.max(counts.sum(axis=1)) / np.sum(counts) if np.sum(counts) > 0 else 0.0
@@ -339,7 +333,6 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_ar
             sim_out['terminated'].append(action == n_arms if termination_arm else False)
             sim_out['counts_array'].append(counts.copy())
             sim_out['max_counts_fraction'].append(max_counts_fraction)
-            sim_out['ell_1'].append(ell_1)
             for a in range(n_arms):
                 sim_out[f'Q_{a}'].append(Q[a])
                 sim_out[f'p_{a}'].append(probs[a])
@@ -347,13 +340,22 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, h, termination_ar
                 sim_out['Q_terminate'].append(Q[-1])
                 sim_out['p_terminate'].append(probs[-1])
 
+
             ## terminate if the agent chose the termination arm
             if terminated or truncated:
                 break
+
+            ## else, update counts
+            else:
+                counts[action, outcome] += 1
+
+                ## score on current probability of reward - i.e. emp_1
+                ell_1 = ell_1_agent.leaf_value(counts)
+                sim_out['ell_1'].append(ell_1)
     
     ## add info to dict about params
     sim_out['gen_ell'] = [ell] * len(sim_out['room'])
-    sim_out['gen_horizon'] = [h] * len(sim_out['room'])
+    sim_out['gen_horizon'] = [horizon] * len(sim_out['room'])
     sim_out['gen_temp'] = [temp] * len(sim_out['room'])
 
     return sim_out
@@ -1038,12 +1040,15 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
     nll = res.fun
     success = res.success
 
+    ## calculate n_trials from the scored count
+    n_fit_trials = len(df_ppt.loc[df_ppt['trial'] >= init_t])
+
     return {
         'subject_id': pid,
         'ell': ell_hat,
         'temp': temp_hat,
         'nll': nll,
         'success': success,
-        'n_trials': len(df_ppt),
+        'n_trials': n_fit_trials,
         'agent_type': agent_type
     }
