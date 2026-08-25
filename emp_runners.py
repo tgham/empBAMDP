@@ -19,12 +19,12 @@ _mod = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 EmpBandit = _mod.EmpBandit
 
-def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, fitting=False, verbose=False):
-    """Run an empowerment-bandit agent yoked to participants' actual trial
+
+def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
+    """Simulate an empowerment-bandit agent yoked to participants' actual trial
     sequences. Returns a tidy DataFrame, one row per (subject_id, room, trial),
     tagged with `ell`, so results from several ell-agents can be pd.concat'd.
     """
-
     ## extract info from df_ppt
     n_trials = int(df_ppt['n_trials'].values[0])
     n_outcomes = int(df_ppt['n_outcomes'].values[0])
@@ -37,11 +37,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, fitting=False, 
     terminate_idx = n_arms if termination_arm else None
     contexts = [(float(alpha), 1.0)]
 
-    if not fitting:
-        records = []
-    elif fitting:
-        ppt_choices = []
-        p_ppt_choices = []
+    records = []
 
     ## determine whether fitting emp or info-seeking agent
     if ell is not None:
@@ -85,34 +81,33 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, fitting=False, 
                     canon_C[actual_action, actual_outcome] += 1
                 
                     ## since we're not simulating the agent for these trials, fill with nans
-                    if not fitting:
-                        actual_action = n_arms
-                        actual_outcome = np.nan
-                        Q_a0 = np.nan
-                        p_a0 = np.nan
-                        chose_a0 = np.nan
-                        Q_a1 = np.nan
-                        p_a1 = np.nan
-                        chose_a1 = np.nan
-                        if n_arms > 2:
-                            Q_a2 = np.nan
-                            p_a2 = np.nan
-                            chose_a2 = np.nan
-                        current_emp = np.nan
-                        row = {
-                            'subject_id': pid, 'room': r, 'trial': t, 'ell': ell,
-                            'chose_a0': chose_a0, 'chose_a1': chose_a1,
-                            'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
-                            'current_emp': current_emp,
-                            'Q_a0': Q_a0, 'Q_a1': Q_a1,
-                            'Q_a2': Q_a2 if n_arms > 2 else np.nan,
-                            'p_a2': p_a2 if n_arms > 2 else np.nan,
-                            'chose_a2': chose_a2 if n_arms > 2 else np.nan,
-                            'Q_terminate': np.nan if not termination_arm else np.nan,
-                            'p_terminate': np.nan if not termination_arm else np.nan,
-                            # 'p_repeat_choice': np.nan if prev_action is None else probs[prev_action],
-                        }
-                        records.append(row)
+                    actual_action = n_arms
+                    actual_outcome = np.nan
+                    Q_a0 = np.nan
+                    p_a0 = np.nan
+                    chose_a0 = np.nan
+                    Q_a1 = np.nan
+                    p_a1 = np.nan
+                    chose_a1 = np.nan
+                    if n_arms > 2:
+                        Q_a2 = np.nan
+                        p_a2 = np.nan
+                        chose_a2 = np.nan
+                    current_emp = np.nan
+                    row = {
+                        'subject_id': pid, 'room': r, 'trial': t, 'ell': ell,
+                        'chose_a0': chose_a0, 'chose_a1': chose_a1,
+                        'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
+                        'current_emp': current_emp,
+                        'Q_a0': Q_a0, 'Q_a1': Q_a1,
+                        'Q_a2': Q_a2 if n_arms > 2 else np.nan,
+                        'p_a2': p_a2 if n_arms > 2 else np.nan,
+                        'chose_a2': chose_a2 if n_arms > 2 else np.nan,
+                        'Q_terminate': np.nan if not termination_arm else np.nan,
+                        'p_terminate': np.nan if not termination_arm else np.nan,
+                        # 'p_repeat_choice': np.nan if prev_action is None else probs[prev_action],
+                    }
+                    records.append(row)
                 else:
                     break
 
@@ -202,27 +197,21 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, fitting=False, 
 
                         
                     
-                    ## record the row if simulating agents
-                    if not fitting:
-                        row = {
-                            'subject_id': pid, 'room': r, 'trial': t, 'ell': ell,
-                            'chose_a0': chose_a0, 'chose_a1': chose_a1,
-                            'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
-                            'current_emp': current_emp,
-                            'Q_a0': Q_a0, 'Q_a1': Q_a1,
-                            'chose_a2': chose_a2 if n_arms > 2 else np.nan,
-                            'p_choice_a2': p_a2 if n_arms > 2 else np.nan,
-                            'Q_a2': Q_a2 if n_arms > 2 else np.nan,
-                        }
-                        if termination_arm:
-                            row['Q_terminate'] = Q[-1]
-                            row['p_terminate'] = probs[-1]
-                        records.append(row)
-
-                    ## record choice probs if fitting
-                    elif fitting:
-                        ppt_choices.append(actual_action)
-                        p_ppt_choices.append(probs[actual_action])
+                    ## record the row
+                    row = {
+                        'subject_id': pid, 'room': r, 'trial': t, 'ell': ell,
+                        'chose_a0': chose_a0, 'chose_a1': chose_a1,
+                        'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
+                        'current_emp': current_emp,
+                        'Q_a0': Q_a0, 'Q_a1': Q_a1,
+                        'chose_a2': chose_a2 if n_arms > 2 else np.nan,
+                        'p_choice_a2': p_a2 if n_arms > 2 else np.nan,
+                        'Q_a2': Q_a2 if n_arms > 2 else np.nan,
+                    }
+                    if termination_arm:
+                        row['Q_terminate'] = Q[-1]
+                        row['p_terminate'] = probs[-1]
+                    records.append(row)
 
                     if terminated:
                         break
@@ -232,36 +221,31 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, fitting=False, 
 
 
 
-    ## merge (if not fitting)
-    if not fitting:
+    ## merge
 
-            # ### concat
+        # ### concat
 
-        # ## ensure all columns are present
-        # for col in df_ell.columns:
-        #     if col not in df_ppt.columns:
-        #         df_ppt[col] = np.nan
-        # df_ppt['ell'] = 'human'
-        # df_full = pd.concat([df_ppt, df_ell], ignore_index=True, sort=False)
-        df_ell = pd.DataFrame.from_records(records)
-        df_ell = df_ell.rename(columns={'chose_a0': 'ell'+str(ell)+'_chose_a0', 'chose_a1': 'ell'+str(ell)+'_chose_a1', 
-                                        'chose_a2': 'ell'+str(ell)+'_chose_a2' if n_arms > 2 else np.nan,
-                                        'p_choice_a0': 'ell'+str(ell)+'_p_choice_a0', 'p_choice_a1': 'ell'+str(ell)+'_p_choice_a1',
-                                        'p_choice_a2': 'ell'+str(ell)+'_p_choice_a2' if n_arms > 2 else np.nan,
-                                        'Q_a0': 'ell'+str(ell)+'_Q_a0', 'Q_a1': 'ell'+str(ell)+'_Q_a1', 
-                                        'Q_a2': 'ell'+str(ell)+'_Q_a2' if n_arms > 2 else np.nan,
-                                        'current_emp': 'ell'+str(ell)+'_current_emp',
-                                        'Q_terminate': 'ell'+str(ell)+'_Q_terminate', 'p_terminate': 'ell'+str(ell)+'_p_terminate'})
-        df_full = df_ppt.merge(df_ell, on=['subject_id', 'room', 'trial'], how='left')
-        return df_full
-    else: 
-        # NLL = np.sum([-(np.log(p) if c else np.log(1-p)) for p, c in zip(p_a0s, chose_a0s)])
-        NLL = np.sum([-(np.log(p)) for p in p_ppt_choices])
-        return NLL
+    # ## ensure all columns are present
+    # for col in df_ell.columns:
+    #     if col not in df_ppt.columns:
+    #         df_ppt[col] = np.nan
+    # df_ppt['ell'] = 'human'
+    # df_full = pd.concat([df_ppt, df_ell], ignore_index=True, sort=False)
+    df_ell = pd.DataFrame.from_records(records)
+    df_ell = df_ell.rename(columns={'chose_a0': 'ell'+str(ell)+'_chose_a0', 'chose_a1': 'ell'+str(ell)+'_chose_a1', 
+                                    'chose_a2': 'ell'+str(ell)+'_chose_a2' if n_arms > 2 else np.nan,
+                                    'p_choice_a0': 'ell'+str(ell)+'_p_choice_a0', 'p_choice_a1': 'ell'+str(ell)+'_p_choice_a1',
+                                    'p_choice_a2': 'ell'+str(ell)+'_p_choice_a2' if n_arms > 2 else np.nan,
+                                    'Q_a0': 'ell'+str(ell)+'_Q_a0', 'Q_a1': 'ell'+str(ell)+'_Q_a1', 
+                                    'Q_a2': 'ell'+str(ell)+'_Q_a2' if n_arms > 2 else np.nan,
+                                    'current_emp': 'ell'+str(ell)+'_current_emp',
+                                    'Q_terminate': 'ell'+str(ell)+'_Q_terminate', 'p_terminate': 'ell'+str(ell)+'_p_terminate'})
+    df_full = df_ppt.merge(df_ell, on=['subject_id', 'room', 'trial'], how='left')
+    return df_full
     
 
 ## generate a single synthetic dataset, i.e. an ell agent acting in its own emp bandit env
-def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, horizon, termination_arm=True, temp=1.0, greedy =False, seed=None):
+def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, termination_arm=True, temp=1.0, greedy =False, seed=None):
     """Generate synthetic data from an agent in its own emp bandit env."""
     if ell is not None:
         agent = EmpowermentAgent(n_arms=n_arms, n_outcomes=n_outcomes,
@@ -275,7 +259,7 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, horizon, terminat
         info_agent=True
         
     ## define ell_1 agent for scoring expected p(reward)
-    ell_1_agent = EmpowermentAgent(n_arms=n_arms, n_outcomes=n_outcomes,
+    ell_1_agent = EmpowermentAgent(n_arms=n_arms, n_outcomes=n_outcomes, cost=cost,
                                 contexts=[(float(alpha), 1.0)], ell=1,
                                 termination_arm=termination_arm)
     
@@ -340,18 +324,17 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, horizon, terminat
                 sim_out['Q_terminate'].append(Q[-1])
                 sim_out['p_terminate'].append(probs[-1])
 
+            ## update counts
+            counts[action, outcome] += 1
 
-            ## terminate if the agent chose the termination arm
+            ## score on current probability of reward - i.e. emp_1
+            ell_1 = ell_1_agent.leaf_value(counts)
+            sim_out['ell_1'].append(ell_1)
+
+            ## but, terminate if the agent chose the termination arm
             if terminated or truncated:
                 break
 
-            ## else, update counts
-            else:
-                counts[action, outcome] += 1
-
-                ## score on current probability of reward - i.e. emp_1
-                ell_1 = ell_1_agent.leaf_value(counts)
-                sim_out['ell_1'].append(ell_1)
     
     ## add info to dict about params
     sim_out['gen_ell'] = [ell] * len(sim_out['room'])
@@ -993,6 +976,11 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
     """
     Fit model for a single subject using differential evolution.
     """
+    
+    ## hoist the data out of the DataFrame
+    design = _design_from_df(df_ppt)
+    rooms = _rooms_from_df(df_ppt)
+
     def compute_nll(params):
         if len(params) == 1: ## info-seeking agent
             ell = None
@@ -1000,16 +988,7 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
         else: ## empowerment agent
             ell, temp = params
 
-        NLL = run_emp(
-            df_ppt=df_ppt,
-            ell=ell,
-            horizon=horizon,
-            init_t=init_t,
-            temp=temp,
-            fitting=True,
-            verbose=False
-        )
-        return NLL
+        return _nll_from_rooms(rooms, design, ell, temp, horizon, init_t)
 
     ## emp vs info agent
     if ell_bounds[0] is not None:
@@ -1052,3 +1031,81 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
         'n_trials': n_fit_trials,
         'agent_type': agent_type
     }
+
+## efficient hoisting of important info for fitting
+def _design_from_df(df_ppt):
+
+    ## get task params
+    return {
+        'n_arms': int(df_ppt['n_arms'].values[0]),
+        'n_outcomes': int(df_ppt['n_outcomes'].values[0]),
+        'n_trials': int(df_ppt['n_trials'].values[0]),
+        'termination_arm': bool(df_ppt['termination_arm'].values[0]),
+        'cost': float(df_ppt['cost'].values[0]),
+        'contexts': [(float(df_ppt['alpha'].values[0]), 1.0)],
+    }
+
+
+def _rooms_from_df(df_ppt):
+
+    ## get trial info
+    df = df_ppt[['subject_id', 'room', 'trial', 'action', 'outcome', 'terminated']]
+    df = df.sort_values(['subject_id', 'room', 'trial'])
+    rooms = []
+    for _, d in df.groupby(['subject_id', 'room'], sort=True):
+        rooms.append((
+            d['trial'].to_numpy(dtype=int),
+            d['action'].fillna(-1).to_numpy(dtype=int),
+            d['outcome'].fillna(-1).to_numpy(dtype=int),
+            d['terminated'].astype(bool).to_numpy(),
+        ))
+    return rooms
+
+
+# NLL of the choices under, given parameterised model
+def _nll_from_rooms(rooms, design, ell, temp, horizon, init_t):
+
+    n_arms = design['n_arms']
+    n_outcomes = design['n_outcomes']
+    n_trials = design['n_trials']
+    termination_arm = design['termination_arm']
+    cost = design['cost']
+    contexts = design['contexts']
+    Q_func = _emp_bellman_Q if ell is not None else _info_bellman_Q
+
+    NLL = 0.0
+    for trials, actions, outcomes, terminated in rooms:
+        counts = np.zeros((n_arms, n_outcomes), dtype=int)
+        for i in range(len(trials)):
+            t = int(trials[i])
+
+            ## before init_t: fill the belief from the actual history - i.e. doesn't contribute to NLL
+            if t < init_t:
+                if terminated[i]:
+                    break
+                counts[actions[i], outcomes[i]] += 1
+                continue
+
+            h = (n_trials - t) if horizon is None else min(horizon, n_trials - t)
+            Q = Q_func(n_arms, n_outcomes, contexts, ell,
+                       termination_arm, counts, h, cost=cost)
+            probs = _softmax(Q / temp)
+
+            if terminated[i]:
+                NLL -= np.log(probs[n_arms])
+                break
+
+            NLL -= np.log(probs[actions[i]])
+            counts[actions[i], outcomes[i]] += 1
+    return NLL
+
+
+def nll_emp(df_ppt, ell=1, horizon=None, init_t=0, temp=1):
+    """NLL of the yoked choices in `df_ppt` under (ell, temp). Returns a float.
+
+    The scoring counterpart to `run_emp`. Extracts the sequence and the task
+    constants, then scores; `_fit_ppt` skips this wrapper and reuses a single
+    extraction across every evaluation of the optimiser.
+    """
+    return _nll_from_rooms(_rooms_from_df(df_ppt), _design_from_df(df_ppt),
+                           ell, temp, horizon, init_t)
