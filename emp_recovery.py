@@ -16,7 +16,7 @@ def main():
     parser.add_argument('--n_trials', type=int, default=8)
     parser.add_argument('--n_rooms', type=int, default=25)
     parser.add_argument('--alpha', type=float, default=0.4)
-    parser.add_argument('--ell_bounds', type=float, default=(0.01, 5), nargs=2)
+    parser.add_argument('--ell_bounds', type=float, default=(0.01, 10), nargs=2)
     parser.add_argument('--temp_bounds', type=float, default=(0.01, 0.4), nargs=2)
     parser.add_argument('--cost', type=float, default=0.0)
     parser.add_argument('--horizon', type=int, default=1)
@@ -51,7 +51,8 @@ def main():
             
             ## Sample parameters 
             if agent_type == 'emp':
-                ell = np.random.uniform(*args.ell_bounds)
+                # ell = np.random.uniform(*args.ell_bounds)
+                ell = np.exp(np.random.uniform(np.log(args.ell_bounds[0]), np.log(args.ell_bounds[1]))) ## sample ell from a log-uniform distribution
             elif agent_type == 'info':
                 ell = None
             temp = np.random.uniform(*args.temp_bounds)
