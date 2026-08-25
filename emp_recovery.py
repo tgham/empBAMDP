@@ -1,5 +1,5 @@
 from emp_runners import gen_emp, fit_emp
-from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canon_to_concrete
+from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canonicalise_histories
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
@@ -104,10 +104,8 @@ def main():
         cols = ['subject_id'] + [c for c in cols if c != 'subject_id']
         df_sim = df_sim[cols]
 
-        ## canonicalise histories
-        df_sim['canonical_counts_array'] = df_sim['counts_array'].apply(lambda x: canonical_count_matrix(x)[0])
-        df_sim['history_str'] = df_sim['canonical_counts_array'].apply(lambda x: array_to_hist(x, args.n_arms, args.n_outcomes)[1])
-        df_sim = df_sim.apply(lambda x: canon_to_concrete(x), axis=1)
+        ## canonicalise histories (memoised on the count matrix -- see emp_utils)
+        df_sim = canonicalise_histories(df_sim, args.n_arms, args.n_outcomes)
 
         ## Save
         print('saving...')
