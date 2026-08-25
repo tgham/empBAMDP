@@ -18,6 +18,7 @@ def main():
     parser.add_argument('--alpha', type=float, default=0.4)
     parser.add_argument('--ell_bounds', type=float, default=(0.01, 5), nargs=2)
     parser.add_argument('--temp_bounds', type=float, default=(0.01, 0.4), nargs=2)
+    parser.add_argument('--cost', type=float, default=0.0)
     parser.add_argument('--h', type=int, default=1)
     parser.add_argument('--init_t', type=int, default=1)
     parser.add_argument('--n_sims', type=int, default=100)
@@ -40,6 +41,7 @@ def main():
         print(f'  - Number of rooms: {args.n_rooms}')
         print(f'  - Alpha: {args.alpha}')
         print(f'  - Horizon: {args.h}')
+        print(f'  - Cost: {args.cost}')
         print(f'  - Initial trial: {args.init_t}')
         print(f'  - Number of simulations: {args.n_sims}')
         print(f'  - Termination arm: {args.termination_arm}')
@@ -84,6 +86,15 @@ def main():
         ## each results is a dictionary. we now need to convert each to a DataFrame and concatenate them into a single DataFrame.
         df_sim = pd.concat([pd.DataFrame.from_dict(res) for res in results], ignore_index=True)
         print(f"Generated {len(df_sim)} rows of data.")
+
+        ## add other useful info
+        df_sim['n_arms'] = args.n_arms
+        df_sim['n_outcomes'] = args.n_outcomes
+        df_sim['n_trials'] = args.n_trials
+        df_sim['n_rooms'] = args.n_rooms
+        df_sim['alpha'] = args.alpha
+        df_sim['termination_arm'] = args.termination_arm
+        df_sim['cost'] = args.cost
 
         # Reorder columns so that 'subject_id' is first
         cols = df_sim.columns.tolist()
