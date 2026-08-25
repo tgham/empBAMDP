@@ -19,20 +19,22 @@ _mod = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 EmpBandit = _mod.EmpBandit
 
-def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t = 0, temp = 1, fitting=False, verbose=False, cost = 0.0):
+def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, fitting=False, verbose=False):
     """Run an empowerment-bandit agent yoked to participants' actual trial
     sequences. Returns a tidy DataFrame, one row per (subject_id, room, trial),
     tagged with `ell`, so results from several ell-agents can be pd.concat'd.
     """
 
-    ## extract info from df_ppt ## hack for now
-    n_trials = int(df_ppt['trial'].max() + 1)
-    n_outcomes = int(df_ppt['outcome'].max() + 1)
-    n_arms = int(df_ppt['action'].max() + 1)
-    n_rooms = int(df_ppt['room'].max()+1)  
+    ## extract info from df_ppt
+    n_trials = int(df_ppt['n_trials'].values[0])
+    n_outcomes = int(df_ppt['n_outcomes'].values[0])
+    n_arms = int(df_ppt['n_arms'].values[0])
+    n_rooms = int(df_ppt['n_rooms'].values[0])  
+    alpha = float(df_ppt['alpha'].values[0])
+    termination_arm = bool(df_ppt['termination_arm'].values[0])
+    cost = float(df_ppt['cost'].values[0]) if 'cost' in df_ppt.columns else 0.0
     n_actions = n_arms + int(termination_arm)
     terminate_idx = n_arms if termination_arm else None
-    alpha = 0.4
     contexts = [(float(alpha), 1.0)]
 
     if not fitting:
@@ -64,7 +66,7 @@ def run_emp(df_ppt, ell=1, horizon = None, k=0.0, termination_arm=True, init_t =
 
     # for pid in df_ppt['subject_id'].unique():
     if verbose:
-        print(f'Running run_emp for ell={ell}, horizon={horizon}, k={k}, termination_arm={termination_arm}, init_t={init_t}, temp={temp}')
+        print(f'Running run_emp for ell={ell}, horizon={horizon}, cost={cost}, termination_arm={termination_arm}, init_t={init_t}, temp={temp}')
         pbar = tqdm(range(len(df_ppt['subject_id'].unique())), desc='Subjects')
     for p in range(len(df_ppt['subject_id'].unique())):
         pid = df_ppt['subject_id'].unique()[p]
@@ -932,7 +934,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
 def fit_emp(df_ppt, 
             # ell_bounds=(0.1, 5.0), temp_bounds=(0.1, 10.0),
             param_bounds, agent_types=['emp', 'info'],
-                           horizon=None, k=0.0, termination_arm=True, init_t=0,
+                           horizon=None, init_t=0,
                            maxiter=200, tol=1e-6, n_jobs=-1, verbose=True):
     """
     Parallelized version of fit_emp_model using joblib.
@@ -945,7 +947,6 @@ def fit_emp(df_ppt,
         Parameter bounds
     horizon : int or None
     k : float
-    termination_arm : bool
     init_t : int
     maxiter : int
     tol : float
@@ -972,8 +973,6 @@ def fit_emp(df_ppt,
                     ell_bounds=ell_bounds,
                     temp_bounds=temp_bounds,
                     horizon=horizon,
-                    k=k,
-                    termination_arm=termination_arm,
                     init_t=init_t,
                     maxiter=maxiter,
                     tol=tol,
@@ -986,8 +985,8 @@ def fit_emp(df_ppt,
         else:
             df_fits = pd.concat([df_fits, pd.DataFrame(results)], ignore_index=True)
     return df_fits
-def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon, k,
-             termination_arm, init_t, maxiter, tol, verbose,
+def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
+             init_t, maxiter, tol, verbose,
              popsize=15, mutation=(0.5, 1), recombination=0.7, seed=None):
     """
     Fit model for a single subject using differential evolution.
@@ -1003,8 +1002,6 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon, k,
             df_ppt=df_ppt,
             ell=ell,
             horizon=horizon,
-            k=k,
-            termination_arm=termination_arm,
             init_t=init_t,
             temp=temp,
             fitting=True,
