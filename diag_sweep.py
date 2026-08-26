@@ -23,12 +23,17 @@ def main():
 
     ## diagnosticity-specific: the ell prior and the choice policy
     parser.add_argument('--n_samples', type=int, default=200)
-    parser.add_argument('--temp', type=float, default=1.0)
+    parser.add_argument('--temp_emp', type=float, default=1.0)
+    parser.add_argument('--temp_info', type=float, default=None)
     parser.add_argument('--prior_mu', type=float, default=0.0)
     parser.add_argument('--prior_sigma', type=float, default=1.0)
     parser.add_argument('--sampling', type=str, default='quantile',
                         choices=['quantile', 'random'])
     parser.add_argument('--seed', type=int, default=None)
+    parser.add_argument('--target', type=str, default='ell',
+                        choices=['ell', 'model'])
+    parser.add_argument('--p_model', type=float, nargs=2, default=[0.5, 0.5],
+                        metavar=('P_EMP', 'P_INFO'))
 
     args = parser.parse_args()
 
@@ -37,6 +42,7 @@ def main():
             f'{args.n_trials}trials_{tag}')
     if args.contexts is not None:
         stem += '_unknown_contexts'
+    stem += f'_{args.target}'
     os.makedirs('useful_saves/diag', exist_ok=True)
 
     ## run expt
@@ -48,11 +54,13 @@ def main():
         n_arms=args.n_arms, n_outcomes=args.n_outcomes, n_trials=args.n_trials,
         alphas=args.alphas, contexts=args.contexts, context_prior=args.context_prior,
         independent_contexts=args.independent_contexts,
-        termination_arm=args.termination_arm, temp=args.temp,
+        termination_arm=args.termination_arm, temp_emp=args.temp_emp,
         horizons=args.horizons, costs=args.costs,
         n_samples=args.n_samples, prior_mu=args.prior_mu,
         prior_sigma=args.prior_sigma, sampling=args.sampling, seed=args.seed,
         init_t=args.init_t, n_jobs=args.n_jobs,
+        target=args.target, temp_info=args.temp_info,
+        p_model=tuple(args.p_model),
     )
 
     ## save

@@ -474,7 +474,7 @@ def _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cos
                              independent_contexts=independent_contexts)
     return agent.bellman_Q(counts, h)
 
-def _info_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cost =None):
+def _info_bellman_Q(n_arms, n_outcomes, ctx, ell=None, termination_arm=False, counts=None, h=0, cost=None):
     """Module-level (picklable) helper: build an InfoSeekingAgent and return its
     horizon-h Q over the given counts. Used by the joblib path.
     (takes ell and cost to ensure compatibility with the _emp_bellman_Q signature, but ignores it)
@@ -725,7 +725,7 @@ def _mi_from_policies(P):
     return H_marg, H_cond, max(H_marg - H_cond, 0.0)
 
 
-def _diag_row_for_history(t, canon_C, canon_counts, history_str, orbit_size,
+def _diag_emp_row(t, canon_C, canon_counts, history_str,
                           ell_samples, n_arms, n_outcomes, n_trials, ctx,
                           alpha_label, context_set, independent_contexts,
                           termination_arm, horizon, cost, temp):
@@ -758,7 +758,6 @@ def _diag_row_for_history(t, canon_C, canon_counts, history_str, orbit_size,
         'alpha': alpha_label, 'context_set': context_set,
         'horizon': horizon, 'cost': cost, 'temp': temp,
         't': t, 'history_str': history_str, 'history': canon_counts,
-        'orbit_size': orbit_size,
         'H_A_h': H_marg,
         'E_H_A_h_ell': H_cond,
         'mi': mi,
@@ -775,16 +774,127 @@ def _diag_row_for_history(t, canon_C, canon_counts, history_str, orbit_size,
         row['best_a_frac_terminate'] = frac[-1]
     return row
 
+def _diag_model_row(t, canon_C, canon_counts, history_str,
+                    ell_samples, n_arms, n_outcomes, n_trials, ctx,
+                    alpha_label, context_set, independent_contexts,
+                    termination_arm, horizon, cost, temp,
+                    temp_info=None, p_model=(0.5, 0.5)):
+    """Per-canonical-history MODEL diagnosticity I(A;M|h), M in {emp, info}.
+
+    The counterpart to `_diag_emp_row`: where that asks how much the next action
+    reveals about ell WITHIN the empowerment model, this asks how much it reveals
+    about WHICH MODEL is generating the choices.
+
+        I(A;M|h) = H(A|h) - sum_m p(m) H(A|h,m)
+
+    with p(a|h,emp) = E_ell[p(a|h,ell)] the ell-MARGINALISED emp policy (the
+    nuisance parameter is integrated out, not conditioned on) and p(a|h,info) the
+    single info-seeking policy. Using E_ell[H(A|h,ell)] here instead would give
+    I(A;M,ell|h), which double-counts the ell-diagnosticity; that quantity is
+    still reported as `mi_joint` for reference, and satisfies
+
+        mi_joint = mi + p(emp) * mi_ell.
+
+    TEMPERATURE: the emp objective (sum_o (max_a p)^ell) and the info objective
+    (negated summed Dirichlet variance) are on unrelated scales, so a single temp
+    would largely decide which policy looks deterministic -- and I(A;M|h) would
+    then read off that artifact rather than genuine policy divergence. `temp_info`
+    sets the info agent's temperature separately (defaults to `temp`); pass the
+    per-model fitted values from `fit_emp` for a calibrated comparison.
+
+    COST: `cost` reaches the emp agent only -- `InfoSeekingAgent.leaf_value`
+    ignores it, so the info policy is cost-invariant by construction. Across a
+    cost sweep only the emp side moves; that is a property of the model, but read
+    any mi-vs-cost trend with it in mind.
+
+    PRIOR vs POSTERIOR: both p(ell) and p(m) are PRIORS, not beliefs updated on h.
+    This is a design-time score -- "if I showed a participant this history, how
+    much would their next choice tell me?" -- not an observer's running belief.
+    """
+    h_remaining = int(np.min([horizon, n_trials - t]))
+    n_actions = n_arms + int(termination_arm)
+    temp_info = temp if temp_info is None else temp_info
+
+    ### p(a|h,m) for each model
+
+    ## emp agent: one policy per sampled ell, then marginalise over ell
+    P_emp = np.empty((len(ell_samples), n_actions))
+    for m, ell in enumerate(ell_samples):
+        Q = _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm,
+                           canon_C, h_remaining, cost=cost,
+                           independent_contexts=independent_contexts)
+        P_emp[m] = _softmax(Q / temp)
+    H_marg_emp, H_cond_emp, mi_emp = _mi_from_policies(P_emp)
+    p_marg_emp = P_emp.mean(axis=0)
+
+    ## info-seeking agent: not parameterised by ell, so a single policy.
+    info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, None, termination_arm,
+                             canon_C, h_remaining)
+    p_marg_info = _softmax(info_Q / temp_info)
+    H_marg_info = float(_neg_p_log_p(p_marg_info))   # H(A|h,info); I(A;ell|h,info) = 0
+
+    ## E_m[H(A|h,m)] = sum_m p(m) H(A|h,m)
+    p_m = np.asarray(p_model, dtype=float)
+    p_m = p_m / p_m.sum()
+    H_cond_model = p_m[0] * H_marg_emp + p_m[1] * H_marg_info
+
+    ## p(a|h) = sum_m p(m) p(a|h,m)
+    p_marg_model = p_m[0] * p_marg_emp + p_m[1] * p_marg_info
+    H_marg_model = float(_neg_p_log_p(p_marg_model))
+
+    ## I(A;M|h) = H(A|h) - E_m[H(A|h,m)]
+    mi_model = max(H_marg_model - H_cond_model, 0.0)
+
+    ## I(A;M,ell|h) = H(A|h) - E_m[E_ell[H(A|h,ell,m)]] -- kept for the identity check
+    mi_joint = max(H_marg_model - (p_m[0] * H_cond_emp + p_m[1] * H_marg_info), 0.0)
+
+    ## normalise by H(M): I(A;M|h) <= min(H(A), H(M))
+    H_M = float(_neg_p_log_p(p_m))
+    mi_norm = mi_model / H_M if H_M > 0 else 0.0
+
+    ## get LML (belief-model property, shared by both agents)
+    LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining,
+                   cost=cost, independent_contexts=independent_contexts)
+
+    row = {
+        'alpha': alpha_label, 'context_set': context_set,
+        'horizon': horizon, 'cost': cost, 'temp': temp, 'temp_info': temp_info,
+        't': t, 'history_str': history_str, 'history': canon_counts,
+        'target': 'model',
+        'p_model_emp': p_m[0],
+        'H_A_h': H_marg_model,
+        'E_m_H_A_h': H_cond_model,
+        'H_A_h_emp': H_marg_emp,
+        'H_A_h_info': H_marg_info,
+        'mi': mi_model,
+        'mi_bits': mi_model / np.log(2.0),
+        'mi_norm': mi_norm,
+        'mi_ell': mi_emp,        # I(A;ell|h,emp) -- the _diag_emp_row quantity
+        'mi_joint': mi_joint,    # I(A;M,ell|h) = mi + p(emp)*mi_ell
+        'n_ell_samples': len(ell_samples),
+        'LML': LML,
+    }
+    for a in range(n_arms):
+        row[f'p_marg_{a}'] = p_marg_model[a]
+        row[f'p_marg_emp_{a}'] = p_marg_emp[a]
+        row[f'p_marg_info_{a}'] = p_marg_info[a]
+    if termination_arm:
+        row['p_marg_terminate'] = p_marg_model[-1]
+        row['p_marg_emp_terminate'] = p_marg_emp[-1]
+        row['p_marg_info_terminate'] = p_marg_info[-1]
+    return row
+
 
 def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             contexts=None, context_prior=None,
                             independent_contexts=False,
-                            termination_arm=True, temp=1.0,
+                            termination_arm=True, temp_emp=1.0, temp_info=1.0,
                             horizons=None, costs=(0.0,),
                             n_samples=200, prior_mu=0.0, prior_sigma=1.0,
                             sampling='quantile', seed=None,
-                            init_t=0, n_jobs=1):
-    """Diagnosticity I(A;ell|h) for every canonical history.
+                            init_t=0, n_jobs=1,
+                            target='ell', p_model=(0.5, 0.5)):
+    """Diagnosticity of every canonical history, for one of two targets.
 
     Mirrors `enumerate_curves`: the same canonical-history enumeration, the same
     agent specs (one KNOWN-context agent per value in `alphas`, plus one
@@ -792,6 +902,15 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     the same horizon / cost sweeps. Where `enumerate_curves` reports the Q/p curve
     at each ell, this reports the single scalar that summarises how much the
     action reveals about ell.
+
+    `target` selects WHAT the action is diagnostic OF:
+      - 'ell'   (default): I(A;ell|h) -- which ell, within the empowerment model
+                (`_diag_emp_row`).
+      - 'model':           I(A;M|h) with M in {emp, info} -- which model, with ell
+                marginalised out of the emp policy (`_diag_model_row`). Takes the
+                extra `temp_info` (info agent's softmax temperature, defaults to
+                `temp`) and `p_model` (prior over the two models).
+    Both emit a `target` column and a comparable `mi`, so the two frames concat.
 
     The ell sample is drawn ONCE and reused across every history, alpha, horizon
     and cost -- common random numbers, so the resulting mi values are directly
@@ -805,6 +924,10 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     cost) -- the same shape of cost as `enumerate_curves` with
     n_ell_samples = n_samples. `n_jobs` parallelises over histories.
     """
+    if target not in ('ell', 'model'):
+        raise ValueError(f"target must be 'ell' or 'model', got {target!r}")
+    row_fn = _diag_emp_row if target == 'ell' else _diag_model_row
+
     ## shared ell sample from the truncated-normal prior
     ell_samples = ell_prior_samples(n_samples, mu=prior_mu, sigma=prior_sigma,
                                     sampling=sampling, seed=seed)
@@ -832,23 +955,27 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     for alpha_label, context_set, ctx in agent_specs:
         for horizon in horizons:
             for cost in costs:
-                desc = f"Diagnosticity (alpha={alpha_label}, h={horizon}, cost={cost})"
+                desc = (f"Diagnosticity[{target}] (alpha={alpha_label}, "
+                        f"h={horizon}, cost={cost})")
                 args = (ell_samples, n_arms, n_outcomes, n_trials, ctx,
                         alpha_label, context_set, independent_contexts,
-                        termination_arm, horizon, cost, temp)
+                        termination_arm, horizon, cost, temp_emp)
+                if target == 'model':
+                    args = args + (temp_info, p_model)
                 if n_jobs == 1:
                     rows.extend(
-                        _diag_row_for_history(t, C, cc, hs, os, *args)
+                        row_fn(t, C, cc, hs, *args)
                         for (t, C, cc, hs, os) in tqdm(states, desc=desc)
                     )
                 else:
                     with tqdm_joblib(tqdm(total=len(states), desc=desc)):
                         rows.extend(Parallel(n_jobs=n_jobs)(
-                            delayed(_diag_row_for_history)(t, C, cc, hs, os, *args)
+                            delayed(row_fn)(t, C, cc, hs, *args)
                             for (t, C, cc, hs, os) in states
                         ))
 
     df = pd.DataFrame(rows)
+    df['target'] = target
     df['prior_mu'] = prior_mu
     df['prior_sigma'] = prior_sigma
     return df
@@ -857,9 +984,10 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
 def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
                              alpha=0.1, contexts=None, context_prior=None,
                              independent_contexts=False,
-                             termination_arm=True, temp=1.0, horizon=None, cost=0.0,
+                             termination_arm=True, temp_emp=1.0, temp_info=1.0, horizon=None, cost=0.0,
                              n_samples=200, prior_mu=0.0, prior_sigma=1.0,
-                             sampling='quantile', seed=None):
+                             sampling='quantile', seed=None,
+                             target='ell', p_model=(0.5, 0.5)):
     """Diagnosticity for ONE arbitrary (non-canonical) count matrix.
 
     For scoring a real participant's history (`run_emp`) or a simulated one
@@ -871,8 +999,13 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
     `n_trials` and `horizon` both default to "t pulls already taken, t more to
     come"; pass them explicitly to match a particular task design.
 
+    `target` ('ell' or 'model'), `temp_info` and `p_model` behave exactly as in
+    `enumerate_diagnosticity`.
+
     Returns the row dict.
     """
+    if target not in ('ell', 'model'):
+        raise ValueError(f"target must be 'ell' or 'model', got {target!r}")
     C = np.asarray(C, dtype=int)
     if n_arms is None or n_outcomes is None:
         n_arms, n_outcomes = C.shape
@@ -896,11 +1029,16 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
 
     ell_samples = ell_prior_samples(n_samples, mu=prior_mu, sigma=prior_sigma,
                                     sampling=sampling, seed=seed)
-    row = _diag_row_for_history(t, canon_C, canon_counts, history_str,
-                                orbit_sequence_count(canon_C), ell_samples,
-                                n_arms, n_outcomes, n_trials, ctx,
-                                alpha_label, context_set, independent_contexts,
-                                termination_arm, horizon, cost, temp)
+    args = (ell_samples, n_arms, n_outcomes, n_trials, ctx,
+            alpha_label, context_set, independent_contexts,
+            termination_arm, horizon, cost, temp_emp, temp_info)
+    if target == 'ell':
+        row = _diag_emp_row(t, canon_C, canon_counts, history_str, *args)
+    else:
+        row = _diag_model_row(t, canon_C, canon_counts, history_str, *args,
+                              temp_info=temp_info, p_model=p_model)
+    row['target'] = target
+    row['orbit_size'] = orbit_sequence_count(canon_C)
     row['prior_mu'] = prior_mu
     row['prior_sigma'] = prior_sigma
     return row
