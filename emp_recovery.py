@@ -149,6 +149,7 @@ def main():
     term = ["noTermination", "Termination"][args.termination_arm]
     path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_{args.alpha}alpha_{term}_fits.csv'
     df_fits.to_csv(path, index=False)
+    print(f"Saved fits to {path}")
 
 if __name__ == '__main__':
     main()
