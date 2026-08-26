@@ -234,15 +234,30 @@ class EmpowermentAgent(EmpAgent):
                          independent_contexts=independent_contexts)
         self.ell = ell
 
+        ## define emp normaliser
+        # if self.ell>1:
+        #     self._emp_norm = self.n_outcomes ** (1-self.ell) * np.min([self.n_arms, self.n_outcomes])**self.ell
+        # else:
+        #     self._emp_norm = self.n_arms
+        self._emp_norm = self.n_outcomes
+
     def _opt(self, a, b):
         return a if a > b else b
 
     def leaf_value(self, counts):
         p = self.predictive(counts)
 
+        emp = float(np.sum((np.max(p, axis=0) ** self.ell)))
+
+        ## normalise
+        emp /= self._emp_norm
+
         ## cost is determined by number of pulls taken already - i.e. reachable reward enters into expectation calculation
         n_pulls = counts.sum()
-        return float(np.sum((np.max(p, axis=0) ** self.ell) * (1 - n_pulls * self.cost)))
+        # emp *= (1 - n_pulls * self.cost)
+        emp = emp - (n_pulls * self.cost)
+
+        return emp
 
 class InfoSeekingAgent(EmpAgent):
     """Minimises end-state posterior variance (mixture: law of total variance).
@@ -251,11 +266,20 @@ class InfoSeekingAgent(EmpAgent):
     over all (a, o) cells. LOWER IS BETTER. Reduces to the single-context
     Dirichlet variance when there is one context (the between term vanishes).
     """
+    # _worst = np.inf
+    _worst = -np.inf
 
-    _worst = np.inf
+    def __init__(self, n_arms, n_outcomes, contexts, termination_arm=False, cost=0, independent_contexts=False):
+        super().__init__(n_arms, n_outcomes, contexts, termination_arm, cost, independent_contexts)
+
+        ## define MSE(h_0) - i.e. the posterior variance at root
+        var, _ = self._context_var_mean(np.zeros((self.n_arms, self.n_outcomes)), self.alphas_z[0])
+        self._var_norm = var.sum()
+
 
     def _opt(self, a, b):
-        return a if a < b else b
+        # return a if a < b else b
+        return a if a > b else b
 
     def _context_var_mean(self, counts, a_z):
         a = a_z + counts
@@ -265,9 +289,22 @@ class InfoSeekingAgent(EmpAgent):
         return var, mean
 
     def leaf_value(self, counts):
+        
+        ## single context
         if self.single:
             var, _ = self._context_var_mean(counts, self.alphas_z[0])
-            return float(var.sum())
+
+            ## normalise var
+            var = 1-(var.sum() / self._var_norm)
+
+            ## apply cost
+            var = float(var - (counts.sum() * self.cost))
+
+            return var
+            # return float(var.sum())
+            # return float(var * (1 - counts.sum() * self.cost))
+        
+        ## unknown context
         weights = self._context_weights(counts)                # broadcastable per z
         Z = len(weights)
         vars_z, means_z = [], []

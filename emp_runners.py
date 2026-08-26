@@ -480,7 +480,8 @@ def _info_bellman_Q(n_arms, n_outcomes, ctx, ell=None, termination_arm=False, co
     (takes ell and cost to ensure compatibility with the _emp_bellman_Q signature, but ignores it)
     """
     agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm=termination_arm)
-    return - agent.bellman_Q(counts, h) ## negate because minimising posterior variance
+    # return - agent.bellman_Q(counts, h) ## negate because minimising posterior variance
+    return agent.bellman_Q(counts, h) ## negate because minimising posterior variance
 
 
 def _get_LML(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cost=0.0,
