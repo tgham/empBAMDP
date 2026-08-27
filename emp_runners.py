@@ -974,7 +974,8 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     states = [s for s in states if int(s[0]) >= init_t]
 
     if horizons is None:
-        horizons = [n_trials]
+        # horizons = [n_trials]
+        horizons = [1]
 
     ## agents to sweep: one per known alpha, plus the unknown-context agent
     agent_specs = [(alpha_val, str(alpha_val), [(float(alpha_val), 1.0)])

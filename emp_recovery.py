@@ -104,7 +104,7 @@ def main():
         cols = ['subject_id'] + [c for c in cols if c != 'subject_id']
         df_sim = df_sim[cols]
 
-        ## canonicalise histories (memoised on the count matrix -- see emp_utils)
+        ## canonicalise histories 
         df_sim = canonicalise_histories(df_sim, args.n_arms, args.n_outcomes)
 
         ## Save
