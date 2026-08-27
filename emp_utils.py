@@ -245,8 +245,9 @@ class EmpowermentAgent(EmpAgent):
         return a if a > b else b
 
     def leaf_value(self, counts):
-        p = self.predictive(counts)
 
+        ## calculate skewed expectation
+        p = self.predictive(counts)
         emp = float(np.sum((np.max(p, axis=0) ** self.ell)))
 
         ## normalise
@@ -254,8 +255,7 @@ class EmpowermentAgent(EmpAgent):
 
         ## cost is determined by number of pulls taken already - i.e. reachable reward enters into expectation calculation
         n_pulls = counts.sum()
-        # emp *= (1 - n_pulls * self.cost)
-        emp = emp - (n_pulls * self.cost)
+        emp *= (1 - n_pulls * self.cost)
 
         return emp
 
@@ -266,8 +266,9 @@ class InfoSeekingAgent(EmpAgent):
     over all (a, o) cells. LOWER IS BETTER. Reduces to the single-context
     Dirichlet variance when there is one context (the between term vanishes).
     """
-    # _worst = np.inf
-    _worst = -np.inf
+
+    # _worst = np.inf # if minimising 
+    _worst = -np.inf # if maximising
 
     def __init__(self, n_arms, n_outcomes, contexts, termination_arm=False, cost=0, independent_contexts=False):
         super().__init__(n_arms, n_outcomes, contexts, termination_arm, cost, independent_contexts)
@@ -277,9 +278,11 @@ class InfoSeekingAgent(EmpAgent):
         self._var_norm = var.sum()
 
 
+
     def _opt(self, a, b):
-        # return a if a < b else b
-        return a if a > b else b
+        # return a if a < b else b # if minimising 
+        return a if a > b else b # if maximising
+    
 
     def _context_var_mean(self, counts, a_z):
         a = a_z + counts
@@ -298,14 +301,15 @@ class InfoSeekingAgent(EmpAgent):
             var = 1-(var.sum() / self._var_norm)
 
             ## apply cost
-            var = float(var - (counts.sum() * self.cost))
+            var = float(var * (1 - counts.sum() * self.cost))
 
             return var
-            # return float(var.sum())
-            # return float(var * (1 - counts.sum() * self.cost))
         
         ## unknown context
-        weights = self._context_weights(counts)                # broadcastable per z
+        if self.single:
+            var, _ = self._context_var_mean(counts, self.alphas_z[0])
+            return float(var.sum())
+        weights = self._context_weights(counts)
         Z = len(weights)
         vars_z, means_z = [], []
         for a_z in self.alphas_z:
