@@ -474,12 +474,12 @@ def _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cos
                              independent_contexts=independent_contexts)
     return agent.bellman_Q(counts, h)
 
-def _info_bellman_Q(n_arms, n_outcomes, ctx, ell=None, termination_arm=False, counts=None, h=0, cost=None):
+def _info_bellman_Q(n_arms, n_outcomes, ctx, ell=None, termination_arm=False, counts=None, h=0, cost=0.0):
     """Module-level (picklable) helper: build an InfoSeekingAgent and return its
     horizon-h Q over the given counts. Used by the joblib path.
     (takes ell and cost to ensure compatibility with the _emp_bellman_Q signature, but ignores it)
     """
-    agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm=termination_arm)
+    agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm=termination_arm, cost=cost)
     # return - agent.bellman_Q(counts, h) ## negate because minimising posterior variance
     return agent.bellman_Q(counts, h) ## negate because minimising posterior variance
 
@@ -587,10 +587,15 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     sweep_tasks = [task for task in sweep_tasks if task[0] >= init_t] ## skip first init_t trials (uninteresting + costly)
 
     ## function for quickly getting current empowerment for one belief state at one ell
-    def _leaf_emp(ctx, e, canon_C):
-        agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e,
-                                 termination_arm=termination_arm,
+    def _leaf_emp(ctx, e, canon_C, cost):
+        agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e, 
+                                 termination_arm=termination_arm, cost=cost,
                                  independent_contexts=independent_contexts)
+        return agent.leaf_value(canon_C)
+    
+    ## function for quickly getting current MSE for one belief state
+    def _leaf_mse(ctx, canon_C, cost):
+        agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm=termination_arm, cost=cost)
         return agent.leaf_value(canon_C)
 
     
@@ -613,14 +618,6 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                 ## get LML of history
                 LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining, cost=0.0, independent_contexts=independent_contexts)
 
-                ## info-seeking agent (not parameterised by ell)
-                info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining)
-                info_best_a = int(np.argmax(info_Q))
-                info_probs = _softmax(info_Q / temp)
-
-                ## emp of current belief state for each ell agent
-                current_emps = [_leaf_emp(ctx, e, canon_C) for e in sample_ells]
-
                 ## posterior prob of context if unknown
                 if context_set.startswith('ctx'):
                     agent_tmp = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=sample_ells[0],
@@ -629,9 +626,29 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                     p_ctx = agent_tmp.context_posterior(canon_C)
                 else: # known context, so no posterior needed
                     p_ctx = np.array([1.0])
-                    
-                ## evaluate Q at each cost
+
+                ## get info-seeker's current MSE (no cost)
+                current_info_cost_free = _leaf_mse(ctx, canon_C, cost=0.0)
+
+                ## loop through costs
                 for cost in costs:
+
+                    ## get info-seeker's current MSE
+                    current_info = _leaf_mse(ctx, canon_C, cost=cost)
+
+                    ## emp of current belief state for each ell agent, with and without cost
+                    current_emps = [_leaf_emp(ctx, e, canon_C, cost=cost) for e in sample_ells]
+                    current_emps_cost_free = [_leaf_emp(ctx, e, canon_C, cost=0.0) for e in sample_ells]
+
+
+                    ### Q values
+
+                    ## info-seeking agent (not parameterised by ell)
+                    info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining, cost=cost)
+                    info_best_a = int(np.argmax(info_Q))
+                    info_probs = _softmax(info_Q / temp)
+
+                    ## empowerment agents (for each ell)
                     if n_jobs == 1:
                         Qs = [_emp_bellman_Q(n_arms, n_outcomes, ctx, e,
                                              termination_arm, canon_C, h_remaining, cost=cost, 
@@ -651,7 +668,9 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                         Q = Qs[ei]
                         probs = _softmax(Q / temp)
                         row = {'alpha': alpha_label, 'context_set': context_set,
-                            'horizon': horizon, 'history_str': history_str, 't': t, 'ell': e, 'current_emp': current_emps[ei],
+                            'horizon': horizon, 'history_str': history_str, 't': t, 'ell': e, 
+                            'current_emp': current_emps[ei], 'current_info': current_info,
+                            'current_emp_cost_free': current_emps_cost_free[ei], 'current_info_cost_free': current_info_cost_free,
                             'cost': cost,
                             'LML': LML,
                             'info_best_a': info_best_a}
