@@ -464,6 +464,23 @@ def enumerate_emp_rows(n_arms=2, n_outcomes=2, n_trials=3, alpha=1.0, terminatio
 
 
 
+def _emp_bellman_V(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cost=0.0,
+                   independent_contexts=False):
+    """Module-level (picklable) helper: build an EmpowermentAgent for one ell
+    and return its horizon-h V over the given counts. Used by the joblib path."""
+    agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=ell,
+                             termination_arm=termination_arm, cost=cost,
+                             independent_contexts=independent_contexts)
+    return agent.bellman_V(counts, h)
+
+def _info_bellman_V(n_arms, n_outcomes, ctx, ell=None, termination_arm=False, counts=None, h=0, cost=0.0):
+    """Module-level (picklable) helper: build an InfoSeekingAgent and return its
+    horizon-h V over the given counts. Used by the joblib path.
+    """
+    agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm=termination_arm, cost=cost)
+    # return - agent.bellman_Q(counts, h) ## negate because minimising posterior variance
+    return agent.bellman_V(counts, h)
+
 def _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cost=0.0,
                    independent_contexts=False):
     """Module-level (picklable) helper: build an EmpowermentAgent for one ell
@@ -481,7 +498,7 @@ def _info_bellman_Q(n_arms, n_outcomes, ctx, ell=None, termination_arm=False, co
     """
     agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm=termination_arm, cost=cost)
     # return - agent.bellman_Q(counts, h) ## negate because minimising posterior variance
-    return agent.bellman_Q(counts, h) ## negate because minimising posterior variance
+    return agent.bellman_Q(counts, h)
 
 
 def _get_LML(n_arms, n_outcomes, ctx, ell, termination_arm, counts, h, cost=0.0,
@@ -1267,3 +1284,50 @@ def nll_emp(df_ppt, ell=1, horizon=None, init_t=0, temp=1):
     """
     return _nll_from_rooms(_rooms_from_df(df_ppt), _design_from_df(df_ppt),
                            ell, temp, horizon, init_t)
+
+### calculate PFs for info-seeking agent
+def pareto_run(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
+                        contexts=None, context_prior=None,
+                        independent_contexts=False,
+                        termination_arm=True, 
+                        init_t=0, n_jobs=1,):
+
+    ## agents to sweep: one per known alpha, plus the unknown-context agent
+    agent_specs = [(alpha_val, str(alpha_val), [(float(alpha_val), 1.0)])
+                   for alpha_val in alphas]
+    if contexts is not None:
+        if context_prior is None:
+            context_prior = [1.0 / len(contexts)] * len(contexts)   ## flat prior
+        ctx_unknown = [(float(a), float(p)) for a, p in zip(contexts, context_prior)]
+        context_set_str = 'ctx' + str(tuple(float(a) for a in contexts))
+        agent_specs.append(('unknown', context_set_str, ctx_unknown))
+    rows = []
+    for alpha_label, context_set, ctx in agent_specs:
+        desc = (f"PF: alpha={alpha_label}")
+        
+        ## calculate value of root state (i.e. flat prior) with different horizons
+        counts = np.zeros((n_arms, n_outcomes), dtype=int)
+        for h_remaining in range(n_trials, -1, -1):
+            V = _info_bellman_V(n_arms, n_outcomes, ctx, None,
+                                termination_arm, counts, h_remaining, cost=0)
+            row = {
+                'alpha': alpha_label,
+                'V': V,
+                'h_remaining': h_remaining,
+            }
+            rows.append(row)
+    df = pd.DataFrame(rows)
+
+    ## calculate ∆V for each horizon
+    df['delta_V'] = df['V'].diff(-1)
+
+    ## calculate c* = \frac{V(h+1) - V(h)}{(h+1)V(h+1)-hV(h)} for each horizon
+    df['c_star'] = df['delta_V'] / ((df['h_remaining'] + 1) * df['V'] - df['h_remaining'] * df['V'].shift(-1))
+    
+    return df
+    
+
+
+
+
+
