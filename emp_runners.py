@@ -778,14 +778,8 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
                            canon_C, h_remaining, cost=cost,
                            independent_contexts=independent_contexts)
         P[m] = _softmax(Q / temp)
-        best_a[m] = int(np.argmax(Q))
-
     H_marg, H_cond, mi = _mi_from_policies(P)
     p_marg = P.mean(axis=0)
-
-    ## fraction of sampled ells for which each action is the greedy choice --
-    ## shows WHICH action the diagnosticity comes from.
-    frac = np.bincount(best_a, minlength=n_actions) / len(ell_samples)
 
     ## get LML
     LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining, cost=cost,
@@ -805,10 +799,8 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
     }
     for a in range(n_arms):
         row[f'p_marg_{a}'] = p_marg[a]
-        row[f'best_a_frac_{a}'] = frac[a]
     if termination_arm:
         row['p_marg_terminate'] = p_marg[-1]
-        row['best_a_frac_terminate'] = frac[-1]
     return row
 
 def _diag_model_row(t, canon_C, canon_counts, history_str,
@@ -974,7 +966,8 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     states = [s for s in states if int(s[0]) >= init_t]
 
     if horizons is None:
-        horizons = [n_trials]
+        # horizons = [n_trials]
+        horizons = [1]
 
     ## agents to sweep: one per known alpha, plus the unknown-context agent
     agent_specs = [(alpha_val, str(alpha_val), [(float(alpha_val), 1.0)])
@@ -1323,7 +1316,7 @@ def pareto_run(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
 
     ## calculate c* = \frac{V(h+1) - V(h)}{(h+1)V(h+1)-hV(h)} for each horizon
     df['c_star'] = df['delta_V'] / ((df['h_remaining'] + 1) * df['V'] - df['h_remaining'] * df['V'].shift(-1))
-    
+
     return df
     
 
