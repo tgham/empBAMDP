@@ -6,6 +6,47 @@ from tqdm import tqdm
 from joblib import Parallel, delayed
 from tqdm_joblib import tqdm_joblib
 import argparse
+import ast
+
+def load_diag_histories(args, term):
+    """The `args.n_rooms` most diagnostic histories for this design.
+
+    The diagnosticity tables sweep alpha / horizon / cost, so they must be
+    filtered down to the condition being recovered before ranking -- otherwise
+    the top of the table is just whichever alpha happens to score highest, and
+    the same history reappears once per condition.
+
+    `--diag_target model` ranks by how well a history separates the empowerment
+    agent from the info-seeking one (model recovery); `--diag_target ell` ranks
+    by how well it separates ells (parameter recovery).
+
+    Returns a list of histories, each `(((arm, outcome), count), ...)`.
+    """
+    path = (f'useful_saves/diag/{args.n_arms}arms_{args.n_outcomes}outcomes_'
+            f'{args.n_trials}trials_{term}_{args.diag_target}_diag.csv')
+    df_diag = pd.read_csv(path)
+
+    ## keep only the rows generated under this run's design
+    sel = df_diag
+    for col, val in (('alpha', args.alpha), ('horizon', args.horizon), ('cost', args.cost)):
+        if col in sel.columns:
+            match = sel.loc[np.isclose(sel[col].astype(float), float(val))]
+            if match.empty:
+                raise ValueError(
+                    f'{path} has no rows with {col}={val} '
+                    f'(available: {sorted(sel[col].unique())})'
+                )
+            sel = match
+
+    ## one row per history, then the most diagnostic n_rooms of them
+    sel = sel.sort_values('mi', ascending=False).drop_duplicates('history')
+    if len(sel) < args.n_rooms:
+        raise ValueError(
+            f'{path} only has {len(sel)} distinct histories for this condition, '
+            f'but --n_rooms={args.n_rooms} were requested'
+        )
+    return [ast.literal_eval(h) for h in sel.head(args.n_rooms)['history']]
+
 
 def main():
     
@@ -30,7 +71,23 @@ def main():
     parser.add_argument('--gen_data', action='store_true')
     parser.add_argument('--termination_arm', action='store_true')
 
+    ## horizons task
+    parser.add_argument('--preset_histories', action='store_true')
+    parser.add_argument('--n_subseq_trials', type=int, default=1)
+    parser.add_argument('--diag_target', choices=['model', 'ell'], default='model')
+
     args = parser.parse_args()
+
+    term = ["noTermination", "Termination"][args.termination_arm]
+
+    init_t = 0 if args.preset_histories else args.init_t
+
+    ## pathname for saving
+    stem = (f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_'
+            f'{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_'
+            f'{args.alpha}alpha_{term}')
+    if args.preset_histories:
+        stem += f'_preset{args.n_rooms}diag{args.diag_target}_{args.n_subseq_trials}subseq'
 
     if args.gen_data:
         print('EMP RECOVERY')
@@ -42,9 +99,20 @@ def main():
         print(f'  - Alpha: {args.alpha}')
         print(f'  - Horizon: {args.horizon}')
         print(f'  - Cost: {args.cost}')
-        print(f'  - Initial trial: {args.init_t}')
+        print(f'  - Initial trial: {init_t}')
         print(f'  - Termination arm: {args.termination_arm}')
         print(f'  - Agent types: {args.agent_types}')
+        print(f'  - Preset histories: {args.preset_histories}')
+        print(f'  - N subsequent trials: {args.n_subseq_trials}')
+
+        ## load preset histories with the largest diagnosticity scores
+        if args.preset_histories:
+            diag_histories = load_diag_histories(args, term)
+            print(f'  - Diagnosticity target: {args.diag_target}')
+            print(f'  - Loaded {len(diag_histories)} diagnostic histories '
+                  f'(lengths {sorted({sum(c for _, c in h) for h in diag_histories})})')
+        else:
+            diag_histories = None
 
         # Define the worker function
         def _gen_single_sim(sim_id, args, agent_type):
@@ -68,7 +136,11 @@ def main():
                 horizon=args.horizon,
                 cost = args.cost,
                 temp=temp,
-                termination_arm=args.termination_arm
+                termination_arm=args.termination_arm,
+
+                ## horizons task
+                diag_histories=diag_histories,
+                n_subseq_trials=args.n_subseq_trials
             )
             sim_tmp['subject_id'] = [sim_id] * len(sim_tmp['room'])
             sim_tmp['agent_type'] = [agent_type] * len(sim_tmp['room'])
@@ -109,8 +181,7 @@ def main():
 
         ## Save
         print('saving...')
-        term = ["noTermination", "Termination"][args.termination_arm]
-        path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_{args.alpha}alpha_{term}.csv'
+        path = f'{stem}.csv'
         df_sim.to_csv(path, index=False)
 
         print(f"Saved {len(df_sim)} rows to {path}")
@@ -118,8 +189,7 @@ def main():
     
     ## or preload existing data
     else:
-        term = ["noTermination", "Termination"][args.termination_arm]
-        path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_{args.alpha}alpha_{term}.csv'
+        path = f'{stem}.csv'
         df_sim = pd.read_csv(path)
 
 
@@ -134,7 +204,7 @@ def main():
         agent_types=args.agent_types,
         param_bounds=param_bounds,
         horizon=args.horizon,
-        init_t=args.init_t,
+        init_t=init_t,
         n_jobs=args.n_jobs,
         verbose=True
     )
@@ -146,8 +216,7 @@ def main():
         df_fits.loc[df_fits['subject_id']==sim, 'gen_temp'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_temp'].iloc[0]
 
     ## save fits
-    term = ["noTermination", "Termination"][args.termination_arm]
-    path = f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_{args.alpha}alpha_{term}_fits.csv'
+    path = f'{stem}_fits.csv'
     df_fits.to_csv(path, index=False)
     print(f"Saved fits to {path}")
 

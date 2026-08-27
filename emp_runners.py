@@ -1,3 +1,4 @@
+import ast
 import importlib.util as _ilu
 import numpy as np
 import pandas as pd
@@ -245,7 +246,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
     
 
 ## generate a single synthetic dataset, i.e. an ell agent acting in its own emp bandit env
-def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, termination_arm=True, temp=1.0, greedy =False, seed=None):
+def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, termination_arm=True, diag_histories=None, n_subseq_trials=1, temp=1.0, greedy =False, seed=None):
     """Generate synthetic data from an agent in its own emp bandit env."""
     if ell is not None:
         agent = EmpowermentAgent(n_arms=n_arms, n_outcomes=n_outcomes,
@@ -266,7 +267,6 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
     ## init data
     sim_out = defaultdict(list)
     
-    
     ## loop through bandit envs
     for r in range(n_rooms):
 
@@ -274,17 +274,35 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
         env = make_emp_env(n_arms=n_arms, n_outcomes=n_outcomes, n_trials=n_trials,
                         alpha=alpha, ell=ell, termination_arm=termination_arm,
                         seed=seed)
+        
+        ## if full expt, initialise counts to 0 and play the whole room
         counts = np.zeros((n_arms, n_outcomes), dtype=int)
-        env.reset()
+        if diag_histories is None:
+            history_0 = ()
+            t0 = 0
+            n_trials_in_room = n_trials
+
+        ## if preset histories, seed the belief with one of the diagnostic histories
+        else:
+            history_0 = diag_histories[r % len(diag_histories)]
+            for (a_obs, o_obs), c in history_0:
+                counts[a_obs, o_obs] += c
+            t0 = int(counts.sum())
+            n_trials_in_room = min(n_subseq_trials, n_trials - t0)
+            if n_trials_in_room < 1:
+                raise ValueError(
+                    f'preset history of length {t0} leaves no room for '
+                    f'{n_subseq_trials} subsequent trials within n_trials={n_trials}'
+                )
 
         ## loop through trials
-        for t in range(n_trials):
+        env.reset() ## NEED TO UPDATE: if preset, need to update env to reflect this
+        for i in range(n_trials_in_room):
+            t = t0 + i
 
             ## compute Q 
             h = (n_trials - t) if horizon is None else min(horizon, n_trials - t)
             Q = agent.bellman_Q(counts, h)
-            if info_agent:
-                Q = -Q  # negate: info-seeking agent minimises expected posterior variance
             probs = _softmax(Q/temp)
 
             ## select action
@@ -297,7 +315,7 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
                     action = int(best_arms[0])
             else: #prob matching
                 action = int(np.random.choice(len(probs), p=probs))
-            (_, outcome), reward, terminated, truncated, _ = env.step(action)
+            (_, outcome), _, terminated, truncated, _ = env.step(action)
 
 
             ## convert termination idx
@@ -312,6 +330,7 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
             ## save
             sim_out['room'].append(r)
             sim_out['trial'].append(t)
+            sim_out['history_0'].append(repr(history_0))
             sim_out['action'].append(action)
             sim_out['outcome'].append(outcome)
             sim_out['terminated'].append(action == -1 if termination_arm else False)
@@ -778,14 +797,8 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
                            canon_C, h_remaining, cost=cost,
                            independent_contexts=independent_contexts)
         P[m] = _softmax(Q / temp)
-        best_a[m] = int(np.argmax(Q))
-
     H_marg, H_cond, mi = _mi_from_policies(P)
     p_marg = P.mean(axis=0)
-
-    ## fraction of sampled ells for which each action is the greedy choice --
-    ## shows WHICH action the diagnosticity comes from.
-    frac = np.bincount(best_a, minlength=n_actions) / len(ell_samples)
 
     ## get LML
     LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining, cost=cost,
@@ -805,10 +818,8 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
     }
     for a in range(n_arms):
         row[f'p_marg_{a}'] = p_marg[a]
-        row[f'best_a_frac_{a}'] = frac[a]
     if termination_arm:
         row['p_marg_terminate'] = p_marg[-1]
-        row['best_a_frac_terminate'] = frac[-1]
     return row
 
 def _diag_model_row(t, canon_C, canon_counts, history_str,
@@ -1096,7 +1107,8 @@ def fit_emp(df_ppt,
             # ell_bounds=(0.1, 5.0), temp_bounds=(0.1, 10.0),
             param_bounds, agent_types=['emp', 'info'],
                            horizon=None, init_t=0,
-                           maxiter=200, tol=1e-6, n_jobs=-1, verbose=True):
+                           maxiter=200, tol=1e-6, n_jobs=-1, 
+                           verbose=True):
     """
     Parallelized version of fit_emp_model using joblib.
 
@@ -1109,6 +1121,9 @@ def fit_emp(df_ppt,
     horizon : int or None
     k : float
     init_t : int
+        Leading trials used to warm the belief without being scored. Preset
+        ("horizons") rooms need init_t=0: their warm-up is the instructed
+        history in `preset_history`, which is already in the belief.
     maxiter : int
     tol : float
     n_jobs : int
@@ -1222,18 +1237,57 @@ def _design_from_df(df_ppt):
     }
 
 
+def _counts_from_preset(history, n_arms, n_outcomes):
+    """Turn a preset history -- `(((a, o), count), ...)`, or its repr as read
+    back from CSV -- into the count matrix the agent starts the room with.
+
+    Returns None for an absent/empty history, i.e. "start from a flat prior".
+    This is the same encoding as the `history` column of the diagnosticity
+    tables, so a preset history can be dropped straight into `gen_emp`.
+    """
+    if history is None or (isinstance(history, float) and np.isnan(history)):
+        return None
+    if isinstance(history, str):
+        history = history.strip()
+        if not history or history in ('()', 'nan'):
+            return None
+        history = ast.literal_eval(history)
+    if len(history) == 0:
+        return None
+    counts = np.zeros((n_arms, n_outcomes), dtype=int)
+    for (a_obs, o_obs), c in history:
+        counts[int(a_obs), int(o_obs)] += int(c)
+    return counts
+
+
 def _rooms_from_df(df_ppt):
+    """Hoist each room's choice sequence out of the DataFrame, together with the
+    belief it starts from.
+
+    In the full task that starting belief is flat; in the preset-history
+    ("horizons") task each room opens with an instructed history, carried in the
+    `preset_history` column, and only the choices that follow it are scored.
+    """
+    cols = ['subject_id', 'room', 'trial', 'action', 'outcome', 'terminated']
+    has_history_0 = 'history_0' in df_ppt.columns
+    if has_history_0:
+        cols = cols + ['history_0']
+        n_arms = int(df_ppt['n_arms'].values[0])
+        n_outcomes = int(df_ppt['n_outcomes'].values[0])
 
     ## get trial info
-    df = df_ppt[['subject_id', 'room', 'trial', 'action', 'outcome', 'terminated']]
+    df = df_ppt[cols]
     df = df.sort_values(['subject_id', 'room', 'trial'])
     rooms = []
     for _, d in df.groupby(['subject_id', 'room'], sort=True):
+        init_counts = (_counts_from_preset(d['history_0'].iloc[0], n_arms, n_outcomes)
+                       if has_history_0 else None)
         rooms.append((
             d['trial'].to_numpy(dtype=int),
             d['action'].fillna(-1).to_numpy(dtype=int),
             d['outcome'].fillna(-1).to_numpy(dtype=int),
             d['terminated'].astype(bool).to_numpy(),
+            init_counts,
         ))
     return rooms
 
@@ -1250,8 +1304,15 @@ def _nll_from_rooms(rooms, design, ell, temp, horizon, init_t):
     Q_func = _emp_bellman_Q if ell is not None else _info_bellman_Q
 
     NLL = 0.0
-    for trials, actions, outcomes, terminated in rooms:
-        counts = np.zeros((n_arms, n_outcomes), dtype=int)
+    for trials, actions, outcomes, terminated, init_counts in rooms:
+
+        ## flat prior for the full task
+        if init_counts is None:
+            counts = np.zeros((n_arms, n_outcomes), dtype=int)
+        
+        ## or, instructed history for the horizons task
+        else:
+            counts = init_counts.copy()
         for i in range(len(trials)):
             t = int(trials[i])
 
@@ -1324,7 +1385,7 @@ def pareto_run(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
 
     ## calculate c* = \frac{V(h+1) - V(h)}{(h+1)V(h+1)-hV(h)} for each horizon
     df['c_star'] = df['delta_V'] / ((df['h_remaining'] + 1) * df['V'] - df['h_remaining'] * df['V'].shift(-1))
-    
+
     return df
     
 
