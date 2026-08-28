@@ -1,5 +1,5 @@
 from emp_runners import gen_emp, fit_emp
-from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canon_to_concrete
+from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canonicalise_histories
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
@@ -16,7 +16,8 @@ def main():
     parser.add_argument('--n_trials', type=int, default=8)
     parser.add_argument('--n_rooms', type=int, default=25)
     parser.add_argument('--alpha', type=float, default=0.4)
-    parser.add_argument('--h', type=int, default=1)
+    parser.add_argument('--horizon', type=int, default=1)
+    parser.add_argument('--cost', type=float, default=0.0)
     parser.add_argument('--init_t', type=int, default=1)
     parser.add_argument('--n_sims', type=int, default=100)
     parser.add_argument('--greedy', action='store_true')
@@ -33,7 +34,7 @@ def main():
     print(f'  - Number of trials: {args.n_trials}')
     print(f'  - Number of rooms: {args.n_rooms}')
     print(f'  - Alpha: {args.alpha}')
-    print(f'  - Horizon: {args.h}')
+    print(f'  - Horizon: {args.horizon}')
     print(f'  - Greedy: {args.greedy}')
     print(f'  - Initial trial: {args.init_t}')
     print(f'  - Number of simulations: {args.n_sims}')
@@ -52,7 +53,8 @@ def main():
             n_rooms=args.n_rooms,
             alpha=args.alpha,
             ell=ell,
-            h=args.h,
+            horizon=args.horizon,
+            cost=args.cost,
             temp=temp,
             greedy=args.greedy,
             termination_arm=args.termination_arm
@@ -89,19 +91,13 @@ def main():
     cols = ['subject_id'] + [c for c in cols if c != 'subject_id']
     df_sim = df_sim[cols]
 
-    ## canonicalise histories
-    # assert isinstance(df_sim['counts_array'].iloc[0], np.ndarray), "counts_array is not an array"
-    # print('Getting canonical count matrix...')
-    # df_sim['canonical_counts_array'] = df_sim['counts_array'].apply(lambda x: canonical_count_matrix(x)[0])
-    # print('Getting history strings...')
-    # df_sim['history_str'] = df_sim['canonical_counts_array'].apply(lambda x: array_to_hist(x, args.n_arms, args.n_outcomes)[1])
-    # print('Getting concrete histories...')
-    # df_sim = df_sim.apply(lambda x: canon_to_concrete(x), axis=1)
+    ## canonicalise histories 
+    df_sim = canonicalise_histories(df_sim, args.n_arms, args.n_outcomes)
 
     ## Save
     print('saving...')
     term = ["noTermination", "Termination"][args.termination_arm]
-    path = f'useful_saves/scoring/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.h}h_{args.alpha}alpha_{term}.csv'
+    path = f'useful_saves/scoring/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_{args.alpha}alpha_{term}.csv'
     df_sim.to_csv(path, index=False)
 
     print(f"Saved {len(df_sim)} rows to {path}")
