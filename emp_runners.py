@@ -797,8 +797,13 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
                            canon_C, h_remaining, cost=cost,
                            independent_contexts=independent_contexts)
         P[m] = _softmax(Q / temp)
+        best_a[m] = int(np.argmax(Q))
     H_marg, H_cond, mi = _mi_from_policies(P)
     p_marg = P.mean(axis=0)
+
+    ## fraction of sampled ells for which each action is the greedy choice --
+    ## shows WHICH action the diagnosticity comes from.
+    frac = np.bincount(best_a, minlength=n_actions) / len(ell_samples)
 
     ## get LML
     LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining, cost=cost,
@@ -818,8 +823,10 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
     }
     for a in range(n_arms):
         row[f'p_marg_{a}'] = p_marg[a]
+        row[f'best_a_frac_{a}'] = frac[a]
     if termination_arm:
         row['p_marg_terminate'] = p_marg[-1]
+        row['best_a_frac_terminate'] = frac[-1]
     return row
 
 def _diag_model_row(t, canon_C, canon_counts, history_str,
