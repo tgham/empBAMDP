@@ -45,7 +45,13 @@ def load_diag_histories(args, term):
             f'{path} only has {len(sel)} distinct histories for this condition, '
             f'but --n_rooms={args.n_rooms} were requested'
         )
-    return [ast.literal_eval(h) for h in sel.head(args.n_rooms)['history']]
+
+    ## or: just keep the n_rooms/2 best, and then repeat each 2 times
+    n_repeats = 2
+    sel = sel.head(args.n_rooms // n_repeats)
+    sel = pd.concat([sel] * n_repeats, ignore_index=True)
+
+    return [ast.literal_eval(h) for h in sel['history']]
 
 
 def main():
@@ -58,7 +64,7 @@ def main():
     parser.add_argument('--n_rooms', type=int, default=25)
     parser.add_argument('--alpha', type=float, default=0.4)
     parser.add_argument('--ell_bounds', type=float, default=(0.01, 10), nargs=2)
-    parser.add_argument('--temp_bounds', type=float, default=(0.01, 0.4), nargs=2)
+    parser.add_argument('--temp_bounds', type=float, default=(0.001, 0.2), nargs=2)
     parser.add_argument('--cost', type=float, default=0.0)
     parser.add_argument('--horizon', type=int, default=1)
     parser.add_argument('--init_t', type=int, default=1)
@@ -74,7 +80,7 @@ def main():
     ## horizons task
     parser.add_argument('--preset_histories', action='store_true')
     parser.add_argument('--n_subseq_trials', type=int, default=1)
-    parser.add_argument('--diag_target', choices=['model', 'ell'], default='model')
+    parser.add_argument('--diag_target', choices=['model', 'ell'], default='ell')
 
     args = parser.parse_args()
 
@@ -87,7 +93,7 @@ def main():
             f'{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_'
             f'{args.alpha}alpha_{term}')
     if args.preset_histories:
-        stem += f'_preset{args.n_rooms}diag{args.diag_target}_{args.n_subseq_trials}subseq'
+        stem += f'_preset_{args.n_rooms}rooms'
 
     if args.gen_data:
         print('EMP RECOVERY')
