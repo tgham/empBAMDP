@@ -901,8 +901,8 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
 def _diag_model_row(t, canon_C, canon_counts, history_str,
                     ell_samples, n_arms, n_outcomes, n_trials, ctx,
                     alpha_label, context_set, independent_contexts,
-                    termination_arm, horizon, cost, temp,
-                    temp_info=None, p_model=(0.5, 0.5), tie_tol=None):
+                    termination_arm, horizon, cost, temp_emp,
+                    temp_info, p_model=(0.5, 0.5), tie_tol=None):
     """Per-canonical-history MODEL diagnosticity I(A;M|h), M in {emp, info}.
 
     The counterpart to `_diag_emp_row`: where that asks how much the next action
@@ -918,18 +918,6 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
     still reported as `mi_joint` for reference, and satisfies
 
         mi_joint = mi + p(emp) * mi_ell.
-
-    TEMPERATURE: the emp objective (sum_o (max_a p)^ell) and the info objective
-    (negated summed Dirichlet variance) are on unrelated scales, so a single temp
-    would largely decide which policy looks deterministic -- and I(A;M|h) would
-    then read off that artifact rather than genuine policy divergence. `temp_info`
-    sets the info agent's temperature separately (defaults to `temp`); pass the
-    per-model fitted values from `fit_emp` for a calibrated comparison.
-
-    COST: `cost` reaches the emp agent only -- `InfoSeekingAgent.leaf_value`
-    ignores it, so the info policy is cost-invariant by construction. Across a
-    cost sweep only the emp side moves; that is a property of the model, but read
-    any mi-vs-cost trend with it in mind.
 
     PRIOR vs POSTERIOR: both p(ell) and p(m) are PRIORS, not beliefs updated on h.
     This is a design-time score -- "if I showed a participant this history, how
@@ -965,7 +953,6 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
     """
     h_remaining = int(np.min([horizon, n_trials - t]))
     n_actions = n_arms + int(termination_arm)
-    temp_info = temp if temp_info is None else temp_info
 
     ### p(a|h,m) for each model
 
@@ -978,7 +965,7 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
                            canon_C, h_remaining, cost=cost,
                            independent_contexts=independent_contexts)
         Qs_emp[m] = Q
-        P_emp[m] = _softmax(Q / temp)
+        P_emp[m] = _softmax(Q / temp_emp)
     H_marg_emp, H_cond_emp, mi_emp = _mi_from_policies(P_emp)
     p_marg_emp = P_emp.mean(axis=0)
 
@@ -994,12 +981,12 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
     ## within emp, across ell: the same diagnostics `_diag_emp_row` reports --
     ## `best_a_frac_emp_{a}` counts ells where a is AMONG the best (so it does
     ## not sum to 1), `_dec_` where it is uniquely best.
-    near_best_emp = Qs_emp >= Qs_emp.max(axis=1, keepdims=True) - tie_tol * temp
+    near_best_emp = Qs_emp >= Qs_emp.max(axis=1, keepdims=True) - tie_tol * temp_emp
     decisive_emp = near_best_emp.sum(axis=1) == 1
     frac_emp = near_best_emp.mean(axis=0)
     frac_dec_emp = (near_best_emp & decisive_emp[:, None]).mean(axis=0)
     gap_emp = _top2_gap(Qs_emp)
-    gap_emp_temp = gap_emp / temp
+    gap_emp_temp = gap_emp / temp_emp
 
     ## within info: one policy, so gap/temp_info IS its top-two log-odds
     gap_info = float(_top2_gap(info_Q)[0])
@@ -1040,7 +1027,7 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
 
     row = {
         'alpha': alpha_label, 'context_set': context_set,
-        'horizon': horizon, 'cost': cost, 'temp': temp, 'temp_info': temp_info,
+        'horizon': horizon, 'cost': cost, 'temp_emp': temp_emp, 'temp_info': temp_info,
         't': t, 'history_str': history_str, 'history': canon_counts,
         'target': 'model',
         'p_model_emp': p_m[0],
