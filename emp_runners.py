@@ -374,9 +374,9 @@ def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size, hor
     a0 = alphas.sum(axis=1, keepdims=True)
     current_var = float(np.sum(alphas * (a0 - alphas) / (a0**2 * (a0 + 1))))
     info_Q = bellman_info_Q(alphas.copy(), n_arms, n_outcomes,
-                            h_remaining, termination_arm)        # lower = better
-    info_best_a = int(np.argmin(info_Q))
-    info_probs = _softmax(-info_Q / temp)                        # negate: minimisation
+                            h_remaining, termination_arm)        
+    info_best_a = int(np.argmax(info_Q))
+    info_probs = _softmax(info_Q / temp)                        
 
     rows = []
     for ell in ells:
@@ -768,6 +768,20 @@ def _neg_p_log_p(p):
     return -np.sum(np.where(p > 0, p * np.log(np.where(p > 0, p, 1.0)), 0.0), axis=-1)
 
 
+def _top2_gap(V):
+    """Top-two gap along the last axis of an (..., A) array, as a flat array.
+
+    The margin behind every hard argmax in this module. In Q units it is what
+    `temp` divides to set the choice odds; in probability units log(top1/top2)
+    plays the same role. Zero when there is only one action.
+    """
+    V = np.atleast_2d(np.asarray(V, dtype=float))
+    if V.shape[-1] < 2:
+        return np.zeros(V.shape[0])
+    S = np.sort(V, axis=-1)
+    return S[..., -1] - S[..., -2]
+
+
 def _mi_from_policies(P):
     """(H_marg, H_cond, mi) from an (M, A) array of equal-weight policies.
 
@@ -784,26 +798,70 @@ def _mi_from_policies(P):
 def _diag_emp_row(t, canon_C, canon_counts, history_str,
                           ell_samples, n_arms, n_outcomes, n_trials, ctx,
                           alpha_label, context_set, independent_contexts,
-                          termination_arm, horizon, cost, temp):
-    """Per-canonical-history diagnosticity row. Module-level so joblib can pickle it."""
+                          termination_arm, horizon, cost, temp, tie_tol=None):
+    """Per-canonical-history diagnosticity row. Module-level so joblib can pickle it.
+
+    TIES: a hard argmax makes an ell whose top two Q's differ by 1e-9 look fully
+    committed to the winner, and on a symmetric history (`init`, `a0o0:1-a1o0:1`)
+    the arms tie to machine precision, so np.argmax hands the whole mass to the
+    lowest index -- (1, 0, 0) for a history with no preference at all. So the
+    membership is what is counted, not the argmax: an action counts for an ell
+    when it is (one of) the BEST actions, i.e. within `tie_tol` of the top Q.
+    A permissive and a strict count bracket the truth:
+
+      - `best_a_frac_{a}`     : fraction of ells for which a is AMONG the best,
+                                Q_a >= max_Q - tie_tol*temp. Ties credit every
+                                tied action, so this does NOT sum to 1 -- a sum
+                                above 1 is precisely the signature of ties, and
+                                two actions both reading ~1 means the ells are
+                                globally indifferent, not split.
+      - `best_a_frac_dec_{a}` : fraction for which a is UNIQUELY best, i.e. no
+                                other action within tie_tol. `tie_frac` collects
+                                the rest, so sum_a best_a_frac_dec_{a} + tie_frac
+                                = 1. Use this to select genuine ell-splits.
+      - `gap_*`               : the top-two Q gap per ell, raw and in temp units.
+                                gap/temp is the behaviourally meaningful scale --
+                                the winner beats the runner-up exp(gap/temp):1 in
+                                a two-way softmax.
+      - `p_best_mean`         : E_ell[max_a p(a|h,ell)], a soft decisiveness
+                                scalar (1/n_actions when every ell is
+                                indifferent, 1 when all are decisive).
+
+    `tie_tol` is in temp units; default log(3) ~ 1.0986, i.e. the winner must be
+    at least 3:1 over the runner-up to count as uniquely best. `tie_tol=0` gives
+    exact ties only, recovering the old argmax count except that exactly-tied
+    actions now share credit instead of going to the lowest index. Note `mi` is
+    ALREADY tie-robust -- built from the softmax policies, near-indifferent ells
+    barely move it.
+    """
     h_remaining = int(np.min([horizon, n_trials - t]))
     n_actions = n_arms + int(termination_arm)
+    n_ell = len(ell_samples)
+    tie_tol = float(np.log(3.0)) if tie_tol is None else float(tie_tol)
 
     ## p(a|h,ell) for each sampled ell
-    P = np.empty((len(ell_samples), n_actions))
-    best_a = np.empty(len(ell_samples), dtype=int)
+    P = np.empty((n_ell, n_actions))
+    Qs = np.empty((n_ell, n_actions))
     for m, ell in enumerate(ell_samples):
         Q = _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm,
                            canon_C, h_remaining, cost=cost,
                            independent_contexts=independent_contexts)
+        Qs[m] = Q
         P[m] = _softmax(Q / temp)
-        best_a[m] = int(np.argmax(Q))
     H_marg, H_cond, mi = _mi_from_policies(P)
     p_marg = P.mean(axis=0)
 
-    ## fraction of sampled ells for which each action is the greedy choice --
-    ## shows WHICH action the diagnosticity comes from.
-    frac = np.bincount(best_a, minlength=n_actions) / len(ell_samples)
+    ## which action(s) the diagnosticity comes from. `near_best[m, a]` is "a is
+    ## among the best actions at ell_m"; an ell is decisive when that set is a
+    ## singleton, which is exactly gap/temp > tie_tol. See TIES.
+    near_best = Qs >= Qs.max(axis=1, keepdims=True) - tie_tol * temp
+    decisive = near_best.sum(axis=1) == 1
+    frac = near_best.mean(axis=0)                        # does NOT sum to 1
+    frac_dec = (near_best & decisive[:, None]).mean(axis=0)
+
+    ## how decisive is that choice? top-two Q gap per ell, in temp units.
+    gap = _top2_gap(Qs)                                  # >= 0
+    gap_temp = gap / temp
 
     ## get LML
     LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining, cost=cost,
@@ -818,22 +876,33 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
         'mi': mi,
         'mi_bits': mi / np.log(2.0),
         'mi_norm': mi / np.log(n_actions),
-        'n_ell_samples': len(ell_samples),
+        'n_ell_samples': n_ell,
         'LML': LML,
+        ## tie diagnostics
+        'tie_tol': tie_tol,
+        'tie_frac': float(1.0 - decisive.mean()),
+        'gap_mean': float(gap.mean()),
+        'gap_median': float(np.median(gap)),
+        'gap_min': float(gap.min()),
+        'gap_mean_temp': float(gap_temp.mean()),
+        'gap_median_temp': float(np.median(gap_temp)),
+        'p_best_mean': float(P.max(axis=1).mean()),
     }
     for a in range(n_arms):
         row[f'p_marg_{a}'] = p_marg[a]
         row[f'best_a_frac_{a}'] = frac[a]
+        row[f'best_a_frac_dec_{a}'] = frac_dec[a]
     if termination_arm:
         row['p_marg_terminate'] = p_marg[-1]
         row['best_a_frac_terminate'] = frac[-1]
+        row['best_a_frac_dec_terminate'] = frac_dec[-1]
     return row
 
 def _diag_model_row(t, canon_C, canon_counts, history_str,
                     ell_samples, n_arms, n_outcomes, n_trials, ctx,
                     alpha_label, context_set, independent_contexts,
                     termination_arm, horizon, cost, temp,
-                    temp_info=None, p_model=(0.5, 0.5)):
+                    temp_info=None, p_model=(0.5, 0.5), tie_tol=None):
     """Per-canonical-history MODEL diagnosticity I(A;M|h), M in {emp, info}.
 
     The counterpart to `_diag_emp_row`: where that asks how much the next action
@@ -865,6 +934,34 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
     PRIOR vs POSTERIOR: both p(ell) and p(m) are PRIORS, not beliefs updated on h.
     This is a design-time score -- "if I showed a participant this history, how
     much would their next choice tell me?" -- not an observer's running belief.
+
+    TIES: `mi` itself is tie-robust (it is a Jensen-Shannon divergence between
+    the two softmax policies -- exactly JSD when p_model = (0.5, 0.5)), but any
+    argmax READING of this row is not, so the margins are reported on all three
+    fronts. `tie_tol` is a log-odds threshold, default log(3) ~ 1.0986 (winner
+    at least 3:1 over the runner-up), and applies to each:
+
+      - WITHIN emp, across ell: `gap_*_emp`, `tie_frac_emp`, `p_best_mean_emp`
+        and `best_a_frac[_dec]_emp_{a}` -- the `_diag_emp_row` diagnostics for
+        the ell-split that `mi_ell` scores. Q gaps here are divided by `temp`.
+        As there, `best_a_frac_emp_{a}` counts ells where a is AMONG the best
+        (it does not sum to 1) and `_dec_` where it is uniquely best.
+      - WITHIN info: `gap_info` (raw) and `gap_info_temp` = gap/`temp_info`,
+        which IS the log-odds of the info agent's top two actions; `info_tie`
+        flags gap_info_temp <= tie_tol, i.e. an info policy with no real
+        preference. `p_best_info` is its max probability.
+      - BETWEEN models: `best_a_emp` / `best_a_info` / `models_agree` is the
+        hard read -- "the two models want different actions" -- and it is the
+        one to distrust. The emp marginal has no single Q, so its margin is in
+        probability units: `logodds_emp_marg` = log(p_top1/p_top2), with
+        `emp_marg_tie` flagging it. `model_tie` is True when EITHER side is
+        indifferent, in which case `models_agree` is reading argmax noise.
+        `tvd_emp_info` = 0.5*sum_a |p(a|h,emp) - p(a|h,info)| is the scale-free
+        0-1 companion: how far apart the two policies actually are.
+
+    The Q scales of the two agents are unrelated (see TEMPERATURE), so there is
+    no meaningful cross-model gap in Q units -- every between-model quantity
+    here is in probability space, the only common currency.
     """
     h_remaining = int(np.min([horizon, n_trials - t]))
     n_actions = n_arms + int(termination_arm)
@@ -873,11 +970,14 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
     ### p(a|h,m) for each model
 
     ## emp agent: one policy per sampled ell, then marginalise over ell
-    P_emp = np.empty((len(ell_samples), n_actions))
+    n_ell = len(ell_samples)
+    P_emp = np.empty((n_ell, n_actions))
+    Qs_emp = np.empty((n_ell, n_actions))
     for m, ell in enumerate(ell_samples):
         Q = _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm,
                            canon_C, h_remaining, cost=cost,
                            independent_contexts=independent_contexts)
+        Qs_emp[m] = Q
         P_emp[m] = _softmax(Q / temp)
     H_marg_emp, H_cond_emp, mi_emp = _mi_from_policies(P_emp)
     p_marg_emp = P_emp.mean(axis=0)
@@ -887,6 +987,33 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
                              canon_C, h_remaining)
     p_marg_info = _softmax(info_Q / temp_info)
     H_marg_info = float(_neg_p_log_p(p_marg_info))   # H(A|h,info); I(A;ell|h,info) = 0
+
+    ### margins -- see TIES. tie_tol is a log-odds threshold throughout.
+    tie_tol = float(np.log(3.0)) if tie_tol is None else float(tie_tol)
+
+    ## within emp, across ell: the same diagnostics `_diag_emp_row` reports --
+    ## `best_a_frac_emp_{a}` counts ells where a is AMONG the best (so it does
+    ## not sum to 1), `_dec_` where it is uniquely best.
+    near_best_emp = Qs_emp >= Qs_emp.max(axis=1, keepdims=True) - tie_tol * temp
+    decisive_emp = near_best_emp.sum(axis=1) == 1
+    frac_emp = near_best_emp.mean(axis=0)
+    frac_dec_emp = (near_best_emp & decisive_emp[:, None]).mean(axis=0)
+    gap_emp = _top2_gap(Qs_emp)
+    gap_emp_temp = gap_emp / temp
+
+    ## within info: one policy, so gap/temp_info IS its top-two log-odds
+    gap_info = float(_top2_gap(info_Q)[0])
+    gap_info_temp = gap_info / temp_info
+
+    ## between models: probability space, the only common currency
+    best_a_emp = int(np.argmax(p_marg_emp))
+    best_a_info = int(np.argmax(p_marg_info))
+    p_emp_sorted = np.sort(p_marg_emp)
+    logodds_emp_marg = float(np.log(p_emp_sorted[-1] / p_emp_sorted[-2])
+                             if n_actions > 1 and p_emp_sorted[-2] > 0 else 0.0)
+    emp_marg_tie = bool(logodds_emp_marg <= tie_tol)
+    info_tie = bool(gap_info_temp <= tie_tol)
+    tvd = float(0.5 * np.abs(p_marg_emp - p_marg_info).sum())
 
     ## E_m[H(A|h,m)] = sum_m p(m) H(A|h,m)
     p_m = np.asarray(p_model, dtype=float)
@@ -926,17 +1053,43 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
         'mi_norm': mi_norm,
         'mi_ell': mi_emp,        # I(A;ell|h,emp) -- the _diag_emp_row quantity
         'mi_joint': mi_joint,    # I(A;M,ell|h) = mi + p(emp)*mi_ell
-        'n_ell_samples': len(ell_samples),
+        'n_ell_samples': n_ell,
         'LML': LML,
+        ## tie diagnostics -- within emp (across ell)
+        'tie_tol': tie_tol,
+        'tie_frac_emp': float(1.0 - decisive_emp.mean()),
+        'gap_mean_emp': float(gap_emp.mean()),
+        'gap_median_emp': float(np.median(gap_emp)),
+        'gap_min_emp': float(gap_emp.min()),
+        'gap_mean_temp_emp': float(gap_emp_temp.mean()),
+        'gap_median_temp_emp': float(np.median(gap_emp_temp)),
+        'p_best_mean_emp': float(P_emp.max(axis=1).mean()),
+        ## -- within info
+        'gap_info': gap_info,
+        'gap_info_temp': gap_info_temp,
+        'p_best_info': float(p_marg_info.max()),
+        'info_tie': info_tie,
+        ## -- between models
+        'best_a_emp': best_a_emp,
+        'best_a_info': best_a_info,
+        'models_agree': bool(best_a_emp == best_a_info),
+        'logodds_emp_marg': logodds_emp_marg,
+        'emp_marg_tie': emp_marg_tie,
+        'model_tie': bool(emp_marg_tie or info_tie),
+        'tvd_emp_info': tvd,
     }
     for a in range(n_arms):
         row[f'p_marg_{a}'] = p_marg_model[a]
         row[f'p_marg_emp_{a}'] = p_marg_emp[a]
         row[f'p_marg_info_{a}'] = p_marg_info[a]
+        row[f'best_a_frac_emp_{a}'] = frac_emp[a]
+        row[f'best_a_frac_dec_emp_{a}'] = frac_dec_emp[a]
     if termination_arm:
         row['p_marg_terminate'] = p_marg_model[-1]
         row['p_marg_emp_terminate'] = p_marg_emp[-1]
         row['p_marg_info_terminate'] = p_marg_info[-1]
+        row['best_a_frac_emp_terminate'] = frac_emp[-1]
+        row['best_a_frac_dec_emp_terminate'] = frac_dec_emp[-1]
     return row
 
 
@@ -948,7 +1101,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             n_samples=200, prior_mu=0.0, prior_sigma=1.0,
                             sampling='quantile', seed=None,
                             init_t=0, n_jobs=1,
-                            target='ell', p_model=(0.5, 0.5)):
+                            target='ell', p_model=(0.5, 0.5), tie_tol=None):
     """Diagnosticity of every canonical history, for one of two targets.
 
     Mirrors `enumerate_curves`: the same canonical-history enumeration, the same
@@ -960,11 +1113,21 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
 
     `target` selects WHAT the action is diagnostic OF:
       - 'ell'   (default): I(A;ell|h) -- which ell, within the empowerment model
-                (`_diag_emp_row`).
+                (`_diag_emp_row`). Takes the extra `tie_tol` (in temp units,
+                default log(3)): how far below the top Q an action may sit and
+                still count as one of the best. `best_a_frac_{a}` counts ells
+                where a is among the best (ties credit every tied action, so it
+                does not sum to 1); `best_a_frac_dec_{a}` counts only ells where
+                a is uniquely best, with `tie_frac` taking the remainder. Select
+                genuine ell-splits on the `_dec_` columns -- a plain argmax
+                would score a 1e-9 Q difference as a decisive win.
       - 'model':           I(A;M|h) with M in {emp, info} -- which model, with ell
                 marginalised out of the emp policy (`_diag_model_row`). Takes the
                 extra `temp_info` (info agent's softmax temperature, defaults to
-                `temp`) and `p_model` (prior over the two models).
+                `temp`) and `p_model` (prior over the two models). `tie_tol`
+                applies here too, as a log-odds threshold on each model's own
+                top-two margin: `model_tie` flags the histories where
+                `models_agree` is reading argmax noise.
     Both emit a `target` column and a comparable `mi`, so the two frames concat.
 
     The ell sample is drawn ONCE and reused across every history, alpha, horizon
@@ -1016,8 +1179,8 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                 args = (ell_samples, n_arms, n_outcomes, n_trials, ctx,
                         alpha_label, context_set, independent_contexts,
                         termination_arm, horizon, cost, temp_emp)
-                if target == 'model':
-                    args = args + (temp_info, p_model)
+                args = args + ((temp_info, p_model, tie_tol) if target == 'model'
+                               else (tie_tol,))
                 if n_jobs == 1:
                     rows.extend(
                         row_fn(t, C, cc, hs, *args)
@@ -1043,7 +1206,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
                              termination_arm=True, temp_emp=1.0, temp_info=1.0, horizon=None, cost=0.0,
                              n_samples=200, prior_mu=0.0, prior_sigma=1.0,
                              sampling='quantile', seed=None,
-                             target='ell', p_model=(0.5, 0.5)):
+                             target='ell', p_model=(0.5, 0.5), tie_tol=None):
     """Diagnosticity for ONE arbitrary (non-canonical) count matrix.
 
     For scoring a real participant's history (`run_emp`) or a simulated one
@@ -1087,12 +1250,14 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
                                     sampling=sampling, seed=seed)
     args = (ell_samples, n_arms, n_outcomes, n_trials, ctx,
             alpha_label, context_set, independent_contexts,
-            termination_arm, horizon, cost, temp_emp, temp_info)
+            termination_arm, horizon, cost, temp_emp)
     if target == 'ell':
-        row = _diag_emp_row(t, canon_C, canon_counts, history_str, *args)
+        row = _diag_emp_row(t, canon_C, canon_counts, history_str, *args,
+                            tie_tol=tie_tol)
     else:
         row = _diag_model_row(t, canon_C, canon_counts, history_str, *args,
-                              temp_info=temp_info, p_model=p_model)
+                              temp_info=temp_info, p_model=p_model,
+                              tie_tol=tie_tol)
     row['target'] = target
     row['orbit_size'] = orbit_sequence_count(canon_C)
     row['prior_mu'] = prior_mu
