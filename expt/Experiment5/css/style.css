@@ -528,3 +528,56 @@ p.screen-note {
     color: #333;
     opacity: 0.75;
 }
+
+/* ------------------------------------ */
+/*  room progress bar                     */
+/* ------------------------------------ */
+/* jsPsych's own progress bar, restyled. Two things matter here:
+
+   1. It is `position: fixed`, so it sits OUTSIDE the flow. The .screen scaffold
+      above is a 100vh box that centres the room, and anything occupying real
+      height above it would push the room off centre and introduce a scrollbar.
+   2. It carries no message and no numbers -- how far through you are is the bar
+      and nothing else -- so the message span is removed outright.
+
+   Hidden until the first room begins, and hidden again on the exclusion screen;
+   setRoomProgress() / hideRoomProgress() in js/trials.js toggle .progress-visible. */
+#jspsych-progressbar-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    line-height: 0;
+    z-index: 100;
+    pointer-events: none;
+    /* fade in when the rooms start rather than appearing abruptly */
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.4s ease;
+}
+#jspsych-progressbar-container.progress-visible {
+    opacity: 1;
+    visibility: visible;
+}
+/* no "Completion Progress", no percentage: the bar is the whole message */
+#jspsych-progressbar-container span {
+    display: none;
+}
+#jspsych-progressbar-outer {
+    width: 100%;
+    margin: 0;
+    height: 28px;
+    display: block;
+    background-color: #e6e6e6;
+    box-shadow: none;
+}
+#jspsych-progressbar-inner {
+    height: 100%;
+    background-color: #7a8ca0;
+    /* the bar advances once per room, so ease the jump */
+    transition: width 0.5s ease;
+}

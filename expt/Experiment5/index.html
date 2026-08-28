@@ -46,6 +46,14 @@
         var quiz_attempts = 0;
 
         var jsPsych = initJsPsych({
+            // A bare progress bar pinned to the top of the screen: no message, no
+            // numbers. It is driven by hand from each room intro (see
+            // setRoomProgress), not by jsPsych's naive trial count, which would
+            // include the instructions and questionnaires. CSS keeps it hidden
+            // until the rooms begin.
+            show_progress_bar: true,
+            message_progress_bar: "",
+            auto_update_progress_bar: false,
             on_finish: function () {
                 // download the full trial-by-trial data as CSV
                 // jsPsych.data.get().localSave("csv", "exp4_" + subject_id + ".csv");
@@ -260,7 +268,9 @@
                         `Before we calculate your bonus and return you to Prolific, we have a few short questions that we'd like to ask you.`
                     ]
                 }),
-                data: { task: "end_congrats" }
+                data: { task: "end_congrats" },
+                // every room is done: fill the bar before the questionnaires
+                on_start: function () { setRoomProgress(1); }
             }],
             conditional_function: function () { return !attention_failed; }
         });
@@ -315,8 +325,12 @@
             conditional_function: function () { return !attention_failed; }
         });
         // exclusion screen (only if the attention criterion was failed)
+        // the task has been halted, so a part-filled bar would be misleading
         experiment_timeline.push({
-            timeline: [make_attention_excluded_trial()],
+            timeline: [{
+                timeline: [make_attention_excluded_trial()],
+                on_timeline_start: hideRoomProgress
+            }],
             conditional_function: function () { return attention_failed; }
         });
         timeline.push({

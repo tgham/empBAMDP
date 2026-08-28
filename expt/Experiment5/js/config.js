@@ -6,7 +6,7 @@
 // conditional on it), and the Prolific redirect at the end is suppressed.
 // MUST be false for any real run: it bypasses the comprehension gate.
 //----------------------------------------------------------------------------//
-const DEBUGGING = true;
+const DEBUGGING = false;
 
 //----------------------------------------------------------------------------//
 // Experiment parameters
@@ -14,7 +14,7 @@ const DEBUGGING = true;
 // N=3 buttons, K=4 outcomes (cardinal directions), T=8 trials, Dirichlet alpha
 const N_BUTTONS = 3;
 const K_OUTCOMES = 4;
-const N_TRIALS = 8;   // total presses a room is worth: the observed (preset) presses
+const N_TRIALS = 10;   // total presses a room is worth: the observed (preset) presses
                       // plus the participant's own. Also sets the token capacity of a
                       // counter cell and the denominator of the default press cost.
 
@@ -23,7 +23,8 @@ const N_REMAINING_TRIALS = 1;
 
 // Cost of a single press, as a fraction of the room's gold coin.
 // Set to 0 for a cost-free version: nothing depletes, in the demo or the choice.
-const SAMPLE_COST = 1 / (N_TRIALS + 1);
+// const SAMPLE_COST = 1 / (N_TRIALS + 1);
+const SAMPLE_COST = 0;
 
 // Do the presses the participant WATCHES also spend the coin? true is the faithful
 // version (the model charges for every trial in the history); false gives the
@@ -32,13 +33,14 @@ const DEPLETE_DURING_DEMO = false;
 
 // Pacing of the observation phase, in ms. press pulse -> agent moves -> token lands
 // -> pause on the outcome -> return to centre -> pause before the next press.
-const DEMO_PRESS_MS = 450;    // button pulse before the agent moves
-const DEMO_VIEW_MS = 800;     // time spent looking at the reached location
-const DEMO_GAP_MS = 550;      // pause back at the centre before the next press
+const DEMO_PRESS_MS = 300;    // button pulse before the agent moves
+const DEMO_VIEW_MS = 500;     // time spent looking at the reached location
+const DEMO_GAP_MS = 300;      // pause back at the centre before the next press
 
-// N_ROOMS is not a constant any more: it is the number of preset histories in
-// presets.json, and so is only known once that file has been fetched. See
-// loadPresets() below -- everything downstream of it must run inside that promise.
+// N_ROOMS is not a constant any more: it is the number of preset histories in the
+// presets file, and so is only known once that file has been fetched. See
+// PRESETS_FILE / loadPresets() below -- everything downstream of loadPresets must
+// run inside that promise.
 let N_ROOMS = 0;
 
 // CONTEXTUAL controls which prior each button's hidden transition function is
@@ -49,7 +51,7 @@ let N_ROOMS = 0;
 //            in a room can come from different priors. The context drawn is
 //            recorded in BUTTON_CTX and logged, but is never cued to the
 //            participant.
-const ALPHA = 0.4;
+const ALPHA = 0.25;
 const CONTEXTUAL = false;
 const ALPHA_CTX1 = 0.25; // context 1 prior
 const ALPHA_CTX2 = 1; // context 2 prior
@@ -104,8 +106,9 @@ let ROOM_BUTTON_ORDERS = [];
 //----------------------------------------------------------------------------//
 // Preset observation histories
 //----------------------------------------------------------------------------//
-// presets.json is a list of n_rooms CANONICAL histories, as written by the
-// modelling notebook. Each history is a list of [[action, outcome], count] pairs
+// The presets file is a list of n_rooms CANONICAL histories, as written by the
+// modelling notebook, named for the arity it was generated at (see PRESETS_FILE
+// below). Each history is a list of [[action, outcome], count] pairs
 // over canonical (smallest-first) labels, e.g.
 //     [[[0, 0], 5], [[1, 0], 2]]
 // = canonical action 0 led to canonical outcome 0 five times, action 1 to
@@ -156,31 +159,111 @@ function buildRoomPreset(history) {
     };
 }
 
-// Fetch presets.json and derive N_ROOMS, the per-room button layouts and the
+// The presets file carries the arity it was generated for in its NAME -- the
+// notebook writes `expt/Experiment5/{n_arms}arms_{n_outcomes}outcomes_presets.json`.
+// We build the same name from the configured design, so N_BUTTONS/K_OUTCOMES pick
+// the matching file and a mismatch shows up as a 404 rather than as histories
+// silently mapped onto the wrong number of buttons or locations.
+const PRESETS_FILE = `${N_BUTTONS}arms_${K_OUTCOMES}outcomes_presets.json`;
+
+// Reject anything the display could not honestly show: a history referring to a
+// button or a location this design does not have. `BUTTONS` and `OUTCOMES` are what
+// actually get drawn, so they are the real bound, not N_BUTTONS/K_OUTCOMES.
+function validatePresets(data) {
+    if (!Array.isArray(data) || data.length === 0) {
+        throw new Error(`${PRESETS_FILE} must be a non-empty list of histories`);
+    }
+    if (BUTTONS.length !== N_BUTTONS || OUTCOMES.length !== K_OUTCOMES) {
+        throw new Error(
+            `design mismatch: N_BUTTONS=${N_BUTTONS}/K_OUTCOMES=${K_OUTCOMES} but ` +
+            `${BUTTONS.length} button colours and ${OUTCOMES.length} locations are ` +
+            `defined. The grid geometry and the button triangle are drawn from ` +
+            `BUTTONS/OUTCOMES, so both must be updated together.`
+        );
+    }
+    let maxAction = -1, maxOutcome = -1;
+    data.forEach(function (history, r) {
+        if (!Array.isArray(history) || history.length === 0) {
+            throw new Error(`${PRESETS_FILE}: room ${r} is not a non-empty history`);
+        }
+        for (const entry of history) {
+            const a = entry[0][0], o = entry[0][1], n = entry[1];
+            if (!Number.isInteger(a) || !Number.isInteger(o) || !Number.isInteger(n) || n < 1) {
+                throw new Error(`${PRESETS_FILE}: room ${r} has a malformed entry ${JSON.stringify(entry)}`);
+            }
+            if (a >= N_BUTTONS || o >= K_OUTCOMES || a < 0 || o < 0) {
+                throw new Error(
+                    `${PRESETS_FILE}: room ${r} uses action ${a} / outcome ${o}, outside ` +
+                    `the ${N_BUTTONS}-button, ${K_OUTCOMES}-location design this file is named for`
+                );
+            }
+            if (a > maxAction) maxAction = a;
+            if (o > maxOutcome) maxOutcome = o;
+        }
+    });
+    // not an error -- canonical histories legitimately leave later arms/outcomes
+    // unobserved -- but worth seeing in the console when checking a new preset set
+    console.log(
+        `${PRESETS_FILE}: ${data.length} rooms, actions 0-${maxAction} of ${N_BUTTONS}, ` +
+        `outcomes 0-${maxOutcome} of ${K_OUTCOMES}`
+    );
+}
+
+// N_TRIALS is the room's press budget, and it sets two hard capacities:
+//   - a counter cell draws exactly N_TRIALS token slots per button, so the
+//     (button, location) with the most observations must fit inside it. Tokens
+//     beyond that are silently NOT DRAWN -- the participant would press a button
+//     and see nothing appear.
+//   - with SAMPLE_COST = 1/(N_TRIALS+1), a room worth more than N_TRIALS presses
+//     spends the whole coin before the participant chooses.
+// Both are warnings rather than errors: a preset set can legitimately be paired
+// with a larger N_TRIALS, and this tells you when it has to be.
+function checkPresetCapacity() {
+    const longest = Math.max.apply(null, ROOM_PRESETS.map(p => p.n_preset_presses));
+    let fullestCell = 0;
+    ROOM_PRESETS.forEach(function (p) {
+        for (const b of BUTTONS) {
+            for (const o of OUTCOMES) {
+                if (p.presetCounts[b][o] > fullestCell) fullestCell = p.presetCounts[b][o];
+            }
+        }
+    });
+    // the participant's own presses can land on the already-fullest cell
+    const worstCell = fullestCell + N_REMAINING_TRIALS;
+    if (worstCell > N_TRIALS) {
+        console.warn(
+            `${PRESETS_FILE}: a counter cell may need ${worstCell} tokens ` +
+            `(fullest preset cell ${fullestCell} + ${N_REMAINING_TRIALS} own press` +
+            `${N_REMAINING_TRIALS === 1 ? "" : "es"}) but only ${N_TRIALS} slots are ` +
+            `drawn. Raise N_TRIALS to at least ${worstCell} or tokens will go missing.`
+        );
+    }
+    if (longest + N_REMAINING_TRIALS > N_TRIALS) {
+        console.warn(
+            `${PRESETS_FILE}: longest history (${longest}) + N_REMAINING_TRIALS ` +
+            `(${N_REMAINING_TRIALS}) = ${longest + N_REMAINING_TRIALS} exceeds ` +
+            `N_TRIALS (${N_TRIALS}). With a non-zero SAMPLE_COST the coin runs out ` +
+            `before the participant chooses; raise N_TRIALS to at least ` +
+            `${longest + N_REMAINING_TRIALS}.`
+        );
+    }
+}
+
+// Fetch the presets file and derive N_ROOMS, the per-room button layouts and the
 // per-room concretised presets. index.html builds its timeline inside this promise.
 function loadPresets() {
-    return fetch("presets.json")
+    return fetch(PRESETS_FILE)
         .then(function (resp) {
-            if (!resp.ok) throw new Error("presets.json: HTTP " + resp.status);
+            if (!resp.ok) throw new Error(`${PRESETS_FILE}: HTTP ${resp.status}`);
             return resp.json();
         })
         .then(function (data) {
-            if (!Array.isArray(data) || data.length === 0) {
-                throw new Error("presets.json must be a non-empty list of histories");
-            }
+            validatePresets(data);
             PRESETS = data;
             N_ROOMS = PRESETS.length;
             ROOM_BUTTON_ORDERS = Array.from({ length: N_ROOMS }, randomButtonOrder);
             ROOM_PRESETS = PRESETS.map(buildRoomPreset);
-            // a preset must leave room for the participant's own choices
-            const longest = Math.max.apply(null, ROOM_PRESETS.map(p => p.n_preset_presses));
-            if (longest + N_REMAINING_TRIALS > N_TRIALS) {
-                console.warn(
-                    `longest preset history (${longest}) + N_REMAINING_TRIALS ` +
-                    `(${N_REMAINING_TRIALS}) exceeds N_TRIALS (${N_TRIALS}): the coin ` +
-                    `will run out and counter cells may overflow.`
-                );
-            }
+            checkPresetCapacity();
             return ROOM_PRESETS;
         });
 }

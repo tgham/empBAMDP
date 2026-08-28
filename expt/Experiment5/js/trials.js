@@ -61,6 +61,24 @@ function observationsRemainingText(remaining) {
     return `${remaining} choice${remaining === 1 ? "" : "s"} left to watch`;
 }
 
+// The progress bar at the top of the screen. It carries no numbers -- how far
+// through the rooms you are is shown by the bar alone -- and is hidden outside the
+// rooms themselves (instructions, questionnaires, exclusion screen). `fraction` is
+// the proportion of rooms COMPLETED, so it reads 0 in the first room's intro and
+// fills as rooms are finished.
+function setRoomProgress(fraction) {
+    const container = document.getElementById("jspsych-progressbar-container");
+    if (container) container.classList.add("progress-visible");
+    if (jsPsych.progressBar) {
+        jsPsych.progressBar.progress = Math.max(0, Math.min(1, fraction));
+    }
+}
+
+function hideRoomProgress() {
+    const container = document.getElementById("jspsych-progressbar-container");
+    if (container) container.classList.remove("progress-visible");
+}
+
 // Redraw the belief display (and the sample-counter titles) from current counts.
 function refreshBeliefs(highlight, buttonOrder) {
     if (BELIEF_DISPLAY === "counters") {
@@ -159,7 +177,7 @@ function make_room_intro(room_num) {
     return {
         type: jsPsychHtmlKeyboardResponse,
         stimulus: screenHTML({
-            title: `Room ${room_num} of ${N_ROOMS}`,
+            // no "Room n of N": the progress bar at the top carries this instead
             lines: [
                 `You are in a new room with new buttons.`,
                 `First, watch as ${preset.n_preset_presses} choices are made for you.`,
@@ -172,6 +190,8 @@ function make_room_intro(room_num) {
             for (const b of BUTTONS) {
                 for (const o of OUTCOMES) counts[b][o] = 0;
             }
+            // rooms completed so far -- 0 at the start of room 1
+            setRoomProgress((room_num - 1) / N_ROOMS);
             GOLD_FRACTION = 1;              // fresh coin for this room
             // hidden dynamics consistent with the observations about to be shown
             sampleTrueTFromPreset(preset.presetCounts);
