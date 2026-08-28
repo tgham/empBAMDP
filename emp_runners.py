@@ -984,7 +984,7 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
 
     ## info-seeking agent: not parameterised by ell, so a single policy.
     info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, None, termination_arm,
-                             canon_C, h_remaining)
+                             canon_C, h_remaining, cost=cost)
     p_marg_info = _softmax(info_Q / temp_info)
     H_marg_info = float(_neg_p_log_p(p_marg_info))   # H(A|h,info); I(A;ell|h,info) = 0
 
