@@ -24,7 +24,7 @@ def main():
     ## diagnosticity-specific: the ell prior and the choice policy
     parser.add_argument('--n_samples', type=int, default=200)
     parser.add_argument('--temp_emp', type=float, default=1.0)
-    parser.add_argument('--temp_info', type=float, default=None)
+    parser.add_argument('--temp_info', type=float, default=1.0)
     parser.add_argument('--prior_mu', type=float, default=0.0)
     parser.add_argument('--prior_sigma', type=float, default=1.0)
     parser.add_argument('--sampling', type=str, default='quantile',

@@ -24,7 +24,9 @@ from joblib import Parallel, delayed
 
 ## create empowerment env
 def make_emp_env(n_arms=3, n_outcomes=5, n_trials=20, alpha=1.0, ell=1.0,
-                 termination_arm=False, seed=None):
+                 termination_arm=False, 
+                 p_matrix = None,
+                 seed=None):
     """
     Create an EmpBanditWrapper (MCTS-compatible empowerment bandit).
 
@@ -53,7 +55,7 @@ def make_emp_env(n_arms=3, n_outcomes=5, n_trials=20, alpha=1.0, ell=1.0,
 
     env = _mod.EmpBanditWrapper(
         n_arms=n_arms, n_outcomes=n_outcomes, alpha=alpha, ell=ell, n_trials=n_trials,
-        termination_arm=termination_arm, seed=seed,
+        termination_arm=termination_arm, p_matrix=p_matrix, seed=seed,
     )
     return env
 
@@ -251,7 +253,7 @@ class EmpowermentAgent(EmpAgent):
         emp = float(np.sum((np.max(p, axis=0) ** self.ell)))
 
         ## normalise
-        emp /= self._emp_norm
+        # emp /= self._emp_norm
 
         ## cost is determined by number of pulls taken already - i.e. reachable reward enters into expectation calculation
         n_pulls = counts.sum()

@@ -270,10 +270,6 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
     ## loop through bandit envs
     for r in range(n_rooms):
 
-        ## fresh initialisation of env
-        env = make_emp_env(n_arms=n_arms, n_outcomes=n_outcomes, n_trials=n_trials,
-                        alpha=alpha, ell=ell, termination_arm=termination_arm,
-                        seed=seed)
         
         ## if full expt, initialise counts to 0 and play the whole room
         counts = np.zeros((n_arms, n_outcomes), dtype=int)
@@ -281,6 +277,7 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
             history_0 = ()
             t0 = 0
             n_trials_in_room = n_trials
+            p_matrix = None
 
         ## if preset histories, seed the belief with one of the diagnostic histories
         else:
@@ -294,9 +291,20 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
                     f'preset history of length {t0} leaves no room for '
                     f'{n_subseq_trials} subsequent trials within n_trials={n_trials}'
                 )
+            
+            ## true env needs to be consistent with the preset history - i.e. posterior draw from the prior, conditioned on the preset history
+            prior = np.full((n_arms, n_outcomes), float(alpha))
+            prior += counts
+            p_matrix = np.random.dirichlet(prior.T).T
+            p_matrix = p_matrix.reshape((n_arms, n_outcomes))
 
+        ## fresh initialisation of env
+        env = make_emp_env(n_arms=n_arms, n_outcomes=n_outcomes, n_trials=n_trials,
+                        alpha=alpha, ell=ell, termination_arm=termination_arm, p_matrix=p_matrix,
+                        seed=seed)
+        env.reset() 
+        
         ## loop through trials
-        env.reset() ## NEED TO UPDATE: if preset, need to update env to reflect this
         for i in range(n_trials_in_room):
             t = t0 + i
 
