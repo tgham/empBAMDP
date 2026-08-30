@@ -24,7 +24,9 @@ from joblib import Parallel, delayed
 
 ## create empowerment env
 def make_emp_env(n_arms=3, n_outcomes=5, n_trials=20, alpha=1.0, ell=1.0,
-                 termination_arm=False, seed=None):
+                 termination_arm=False, 
+                 p_matrix = None,
+                 seed=None):
     """
     Create an EmpBanditWrapper (MCTS-compatible empowerment bandit).
 
@@ -53,7 +55,7 @@ def make_emp_env(n_arms=3, n_outcomes=5, n_trials=20, alpha=1.0, ell=1.0,
 
     env = _mod.EmpBanditWrapper(
         n_arms=n_arms, n_outcomes=n_outcomes, alpha=alpha, ell=ell, n_trials=n_trials,
-        termination_arm=termination_arm, seed=seed,
+        termination_arm=termination_arm, p_matrix=p_matrix, seed=seed,
     )
     return env
 
@@ -96,9 +98,8 @@ class EmpAgent:
         ## or different priors). If False (default), a single GLOBAL posterior p(z|h)
         ## is shared across all arms. No effect when single-context.
         self.independent = bool(independent_contexts)
+        
         ## per-pull sampling cost, paid on every arm pull throughout the horizon.
-        ## Only meaningful for the maximising EmpowermentAgent; the minimising
-        ## InfoSeekingAgent must leave this at 0 (a negative term would corrupt it).
         self.cost = float(cost)
 
         alphas = np.array([float(a) for a, _ in contexts], dtype=float) ## i.e. the alpha for each context
@@ -108,14 +109,16 @@ class EmpAgent:
         with np.errstate(divide='ignore'):           # a zero prior -> -inf is intended
             self.log_prior = np.log(priors)          # (Z,)
         self.single = len(contexts) == 1
+        
         ## constant Dirichlet log-normaliser per context, per arm:
-        ## log B(a_z * 1_K) = K*gammaln(a_z) - gammaln(K*a_z). Only needed for
-        ## context inference; skipped when single (a_z may be 0 there).
-        if self.single:
-            self._logB0_z = None
-        else:
-            K = n_outcomes
-            self._logB0_z = K * gammaln(alphas) - gammaln(K * alphas)
+        ## log B(a_z * 1_K) = K*gammaln(a_z) - gammaln(K*a_z) - i.e. the denominator in the multinomial beta function
+        # if self.single:
+        #     self._logB0_z = None
+        # else:
+        #     K = n_outcomes
+        #     self._logB0_z = K * gammaln(alphas) - gammaln(K * alphas)
+        K = n_outcomes
+        self._logB0_z = K * gammaln(alphas) - gammaln(K * alphas)
 
     def _opt(self, a, b):
         raise NotImplementedError
@@ -133,14 +136,15 @@ class EmpAgent:
         p(n_a|z) = B(a_z + n_a)/B(a_z) using ONLY that arm's counts.
         """
         row_sums = counts.sum(axis=1)                          # (A,)
-        if self.independent:
+        if self.independent and not self.single:
             ## per arm a, per context z:
             ##   sum_o gammaln(a_z + n_{a,o}) - gammaln(K*a_z + n_a.sum()) - logB0_z
             loglik = np.empty((self.n_arms, len(self.alphas_z)))
             for z, a_z in enumerate(self.alphas_z):
                 num = gammaln(a_z + counts).sum(axis=1)        # (A,)
                 den = gammaln(self.n_outcomes * a_z + row_sums)  # (A,)
-                loglik[:, z] = (num - den) - self._logB0_z[z]
+                logB_pseudo = (num - den) ## log B(a_z + n_a) - log B(a_z)
+                loglik[:, z] = logB_pseudo - self._logB0_z[z] ## i.e. minus the log B(a_z) term
             return self.log_prior[None, :] + loglik            # (A, Z)
         loglik = np.empty(len(self.alphas_z))
         for z, a_z in enumerate(self.alphas_z):
@@ -148,8 +152,14 @@ class EmpAgent:
             ##   sum_o gammaln(a_z + n_{a,o}) - gammaln(K*a_z + n_a.sum())
             num = gammaln(a_z + counts).sum()
             den = gammaln(self.n_outcomes * a_z + row_sums).sum()
-            loglik[z] = (num - den) - self.n_arms * self._logB0_z[z]
+            logB_pseudo = (num - den) ## log B(a_z + n_a) - log B(a_z)
+            loglik[z] = logB_pseudo - self.n_arms * self._logB0_z[z] ## i.e. minus the log B(a_z) term
         return self.log_prior + loglik
+    
+    ## for ease: marginal likelihood under context 0 (only meaningful when single-context).
+    def marginal_likelihood(self, counts):
+        return self.context_log_posterior(counts)[0]
+
 
     def context_posterior(self, counts):
         """Normalised context weights: (Z,) global, (A, Z) independent."""
@@ -182,10 +192,10 @@ class EmpAgent:
         if depth == 0:
             return self.leaf_value(counts)
         p = self.predictive(counts)
-        ## value of terminating now (current belief), no more pulls -- no cost
+        ## value of terminating now (current belief), no more pulls 
         best = self.leaf_value(counts) if self.termination_arm else self._worst
         for a in range(self.n_arms):
-            ev = -self.cost                          # pulling arm a pays the sampling cost
+            ev = 0.0
             for o in range(self.n_outcomes):
                 p_o = p[a, o]
                 counts[a, o] += 1
@@ -210,9 +220,8 @@ class EmpAgent:
                 work[a, o] += 1
                 Q[a] += p_o * self.bellman_V(work, h - 1)
                 work[a, o] -= 1
-            Q[a] -= self.cost                        # pulling arm a pays the sampling cost
         if self.termination_arm:
-            Q[-1] = self.leaf_value(work)            # terminate: no cost
+            Q[-1] = self.leaf_value(work)
         return Q
 
 
@@ -227,13 +236,30 @@ class EmpowermentAgent(EmpAgent):
                          independent_contexts=independent_contexts)
         self.ell = ell
 
+        ## define emp normaliser
+        # if self.ell>1:
+        #     self._emp_norm = self.n_outcomes ** (1-self.ell) * np.min([self.n_arms, self.n_outcomes])**self.ell
+        # else:
+        #     self._emp_norm = self.n_arms
+        self._emp_norm = self.n_outcomes
+
     def _opt(self, a, b):
         return a if a > b else b
 
     def leaf_value(self, counts):
-        p = self.predictive(counts)
-        return float(np.sum(np.max(p, axis=0) ** self.ell))
 
+        ## calculate skewed expectation
+        p = self.predictive(counts)
+        emp = float(np.sum((np.max(p, axis=0) ** self.ell)))
+
+        ## normalise
+        # emp /= self._emp_norm
+
+        ## cost is determined by number of pulls taken already - i.e. reachable reward enters into expectation calculation
+        n_pulls = counts.sum()
+        emp *= (1 - n_pulls * self.cost)
+
+        return emp
 
 class InfoSeekingAgent(EmpAgent):
     """Minimises end-state posterior variance (mixture: law of total variance).
@@ -243,10 +269,22 @@ class InfoSeekingAgent(EmpAgent):
     Dirichlet variance when there is one context (the between term vanishes).
     """
 
-    _worst = np.inf
+    # _worst = np.inf # if minimising 
+    _worst = -np.inf # if maximising
+
+    def __init__(self, n_arms, n_outcomes, contexts, termination_arm=False, cost=0, independent_contexts=False):
+        super().__init__(n_arms, n_outcomes, contexts, termination_arm, cost, independent_contexts)
+
+        ## define MSE(h_0) - i.e. the posterior variance at root
+        var, _ = self._context_var_mean(np.zeros((self.n_arms, self.n_outcomes)), self.alphas_z[0])
+        self._var_norm = var.sum()
+
+
 
     def _opt(self, a, b):
-        return a if a < b else b
+        # return a if a < b else b # if minimising 
+        return a if a > b else b # if maximising
+    
 
     def _context_var_mean(self, counts, a_z):
         a = a_z + counts
@@ -256,10 +294,24 @@ class InfoSeekingAgent(EmpAgent):
         return var, mean
 
     def leaf_value(self, counts):
+        
+        ## single context
+        if self.single:
+            var, _ = self._context_var_mean(counts, self.alphas_z[0])
+
+            ## normalise var
+            var = 1-(var.sum() / self._var_norm)
+
+            ## apply cost
+            var = float(var * (1 - counts.sum() * self.cost))
+
+            return var
+        
+        ## unknown context
         if self.single:
             var, _ = self._context_var_mean(counts, self.alphas_z[0])
             return float(var.sum())
-        weights = self._context_weights(counts)                # broadcastable per z
+        weights = self._context_weights(counts)
         Z = len(weights)
         vars_z, means_z = [], []
         for a_z in self.alphas_z:
@@ -416,28 +468,136 @@ def array_to_hist(canon_C, n_arms, n_outcomes):
     return canon_counts, history_str
 
 ## make the history_str concrete
+
+def _row_map_via_permutation_search(a1, a2):
+    """Exhaustive fallback: finds a row mapping consistent with a single
+    global column permutation. Used only when sort-based matching is ambiguous."""
+    n_rows, n_cols = a1.shape
+
+    for col_perm in itertools.permutations(range(n_cols)):
+        permuted = a1[:, col_perm]
+        used = set()
+        mapping = [None] * n_rows
+        ok = True
+
+        for i in range(n_rows):
+            match = None
+            for j in range(n_rows):
+                if j in used:
+                    continue
+                if np.array_equal(permuted[i], a2[j]):
+                    match = j
+                    break
+            if match is None:
+                ok = False
+                break
+            mapping[i] = match
+            used.add(match)
+
+        if ok:
+            return mapping
+
+    raise ValueError("No consistent row/column permutation found.")
+
+
+## make the history_str concrete
+def count_matrix_row_map(C, canon_C):
+    """Row mapping from `C` onto its canonical form: arm `i` of `C` is arm
+    `mapping[i]` of `canon_C`.
+
+    Depends only on the pair of matrices, so it is safe to memoise on `C` --
+    see `canonicalise_histories`.
+    """
+    n = C.shape[0]
+
+    # Create canonical form of each row by sorting
+    canonical_a1 = np.sort(C, axis=1)
+    canonical_a2 = np.sort(canon_C, axis=1)
+
+    # Check for ties: duplicate sorted-row signatures mean the fast
+    # sort-based matching below could silently pick the wrong row.
+    a1_keys = [tuple(r) for r in canonical_a1]
+    a2_keys = [tuple(r) for r in canonical_a2]
+    has_ties = len(set(a1_keys)) < n or len(set(a2_keys)) < n
+
+    if has_ties:
+        # Fall back to exhaustive column-permutation search, which enforces
+        # a single consistent column permutation across all rows and so
+        # can't be fooled by rows that are permutations of each other.
+        return _row_map_via_permutation_search(C, canon_C)
+
+    # Fast path: build a mapping from canonical row to list of indices in a2
+    canonical_to_indices = defaultdict(list)
+    for j in range(n):
+        canonical_to_indices[a2_keys[j]].append(j)
+
+    # Map each row in a1 to a row in a2
+    mapping = []
+    for i in range(n):
+        key = a1_keys[i]
+        if not canonical_to_indices[key]:
+            raise ValueError(f"No matching row found for a1 row {i}")
+        mapping.append(canonical_to_indices[key].pop())
+    return mapping
+
+
 def canon_to_concrete(row):
 
     ### map colours onto actions
 
-    ## see if sums of rows have been flipped
-    sum_pre = np.sum(row['counts_array'], axis=1)
-    sum_post = np.sum(row['canonical_counts_array'], axis=1)
-    
-    ## flipped, i.e. a0=red, a1=blue
-    if np.any(sum_pre != sum_post):
-        row['a0'] = 'red'
-        row['a1'] = 'blue'
-        row['chose_a0'] = row['action'] == 'red'
-        row['chose_a1'] = row['action'] == 'blue'
-    ## not flipped, i.e. a0=blue, a1=red
-    else:
-        row['a0'] = 'blue'
-        row['a1'] = 'red'
-        row['chose_a0'] = row['action'] == 'blue'
-        row['chose_a1'] = row['action'] == 'red'
-    
+    n, m = row['counts_array'].shape
+    mapping = count_matrix_row_map(row['counts_array'], row['canonical_counts_array'])
+
+    ## map back onto colours (blue, red, green)
+    colors = ['blue', 'red', 'green']
+    for i in range(n):
+        row[f'a{i}'] = colors[mapping[i]]
+        # row[f'chose_a{i}'] = row['action'] == colors[mapping[i]]
+        row[f'chose_a{i}'] = row['action'] == mapping[i]
+
     return row
+
+
+def canonicalise_histories(df, n_arms=None, n_outcomes=None):
+    """Add the canonical-history columns to `df`, memoised on the count matrix.
+
+    Adds `canonical_counts_array`, `history_str` and the concrete colour mapping
+    (`a{i}` / `chose_a{i}`) -- the same columns as canonicalising row by row and
+    then applying `canon_to_concrete`, but the per-matrix work is done once per
+    DISTINCT `counts_array` instead of once per row. The reachable belief states
+    are bounded by the design (a few thousand for a typical run) while rows run
+    to millions, so the cache is what makes this step scale.
+
+    `chose_a{i}` depends on each row's own `action`, so only the row mapping is
+    cached; the comparison itself is vectorised.
+    """
+    df = df.copy()
+    counts = df['counts_array'].to_numpy()
+    if n_arms is None or n_outcomes is None:
+        n_arms, n_outcomes = counts[0].shape
+
+    ## one canonicalisation + row map per distinct count matrix
+    cache = {}
+    keys = [C.tobytes() for C in counts]
+    for key, C in zip(keys, counts):
+        if key in cache:
+            continue
+        canon_C, _ = canonical_count_matrix(C)
+        cache[key] = (canon_C,
+                      array_to_hist(canon_C, n_arms, n_outcomes)[1],
+                      count_matrix_row_map(C, canon_C))
+
+    df['canonical_counts_array'] = [cache[k][0] for k in keys]
+    df['history_str'] = [cache[k][1] for k in keys]
+
+    colors = ['blue', 'red', 'green']
+    action = df['action'].to_numpy()
+    for i in range(n_arms):
+        mapped = np.array([cache[k][2][i] for k in keys])
+        df[f'a{i}'] = [colors[m] for m in mapped]
+        df[f'chose_a{i}'] = action == mapped
+
+    return df
 
     
     ### map locations onto outcomes (todo...)

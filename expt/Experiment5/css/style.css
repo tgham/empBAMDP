@@ -1,0 +1,583 @@
+/* hide the required-question asterisks in the comprehension survey */
+.jspsych-survey-multi-choice-text span.required {
+    display: none;
+}
+
+/* Centre every screen vertically (jspsych.css's own `margin: auto`). Keeping the
+   room from drifting as text/feedback come and go is handled by the .screen
+   scaffold below, not by anchoring the page to the top. */
+.jspsych-content {
+    margin: auto;
+}
+
+/* ------------------------------------ */
+/*  screen scaffold                       */
+/* ------------------------------------ */
+/* Every screen that shows the room (task trials, attention checks, instruction
+   slides) is a full-viewport box holding three things:
+
+     .screen-stage  the room / buttons / illustration -- DEAD CENTRE
+     .screen-text   the text, starting a fixed distance from the top of the screen
+     .screen-below  a note sitting just under the stage
+
+   The text and the note are positioned off the centre rather than flowing into
+   it, so neither the number of lines of text nor feedback appearing can shift
+   the room. It therefore sits in exactly the same place on every screen of the
+   task and the instructions.
+
+   The room is viewport-relative with a px cap, so a short laptop screen scales
+   it down instead of scrolling. */
+/* The room is dead centre, so the text above it has 50vh - room/2 to live in.
+   Every text metric below is therefore in vh as well: text and room then shrink
+   together on a short screen and the text can never grow down into the room. */
+:root {
+    --room-size: min(500px, 46vh);
+    --text-top: clamp(12px, 5vh, 60px);
+    /* wide enough that a sentence per <p> generally lands on a single line */
+    --screen-width: min(1300px, 94vw);
+}
+.screen {
+    position: relative;
+    width: 100%;
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.screen-stage {
+    min-height: var(--room-size);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.screen-text {
+    position: absolute;
+    top: var(--text-top);
+    left: 50%;
+    transform: translateX(-50%);
+    width: var(--screen-width);
+    text-align: center;
+}
+.screen-below {
+    position: absolute;
+    top: calc(50% + var(--room-size) / 2 + 14px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: var(--screen-width);
+    text-align: center;
+}
+/* Slides with no stage use the same box, so their text starts at the same place
+   as every other screen's rather than jumping to the middle of the page. */
+
+/* screen typography: one sentence per paragraph, one line per sentence */
+.screen-title {
+    font-size: clamp(16px, 2.9vh, 31px);
+    font-weight: bold;
+    line-height: 1.3;
+    margin: 0 0 1.4vh 0;
+}
+.screen-text p,
+.screen-below p {
+    font-size: clamp(12px, 1.85vh, 21px);
+    line-height: 1.45;
+    margin: 0 0 1vh 0;
+}
+.screen-text p:last-child,
+.screen-below p:last-child {
+    margin-bottom: 0;
+}
+/* asides ("in the real experiment you won't see this"), a size down from the body */
+p.screen-note {
+    font-style: italic;
+    color: #555;
+    font-size: clamp(13px, 1.55vh, 18px);
+}
+/* the coin result, shown where the prompt was: above the room, not under it */
+.screen-feedback {
+    font-size: clamp(19px, 2.4vh, 26px);
+    font-weight: bold;
+    line-height: 1.3;
+    margin: 0 0 10px 0;
+}
+
+/* Navigation ("Next" / "Continue" / the instructions plugin's own nav) is pinned
+   to the bottom of the viewport. Out of the flow, it can't change the height of
+   the block being centred -- which is what keeps the stage in one place across
+   slides that have nav and screens that don't. */
+.screen-nav,
+.jspsych-instructions-nav,
+.jspsych-content:has(.screen) .jspsych-btn-group,
+.jspsych-content:has(.screen) #jspsych-html-button-response-btngroup {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 26px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+}
+
+/* ------------------------------------ */
+/*  main room: base tile + agent overlay  */
+/* ------------------------------------ */
+.container {
+    position: relative;
+    width: var(--room-size);
+    height: var(--room-size);
+    flex: 0 0 auto;
+}
+.base-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    z-index: 1;
+}
+.agent-image {
+    position: absolute;
+    width: 27%;
+    height: auto;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 3;
+    /* animate movement between cells */
+    transition: top 0.4s ease, left 0.4s ease;
+}
+.gold-image {
+    position: absolute;
+    width: 21%;
+    height: auto;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 2; /* above the belief overlay, below the agent */
+}
+/* free-standing coin for instruction slides (no room around it). Matches the
+   on-screen size of .gold-image in a room: 21% of the container. */
+.gold-coin-static {
+    display: block;
+    width: calc(var(--room-size) * 0.21);
+    height: auto;
+    margin: 0;
+}
+
+.screen-gap {
+    position: absolute;
+    top: var(--text-top);
+    height: calc(50% - var(--room-size) / 2.75 - var(--text-top));
+    left: 50%;
+    transform: translateX(-50%);
+    width: var(--screen-width);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.gold-cost-wrap {
+    width:  100px;
+    height: 100px;
+}
+
+.gold-cost-coin {
+    width:  100%;
+    height: 100%;
+    display: block;
+    transition: -webkit-mask-image 0.25s linear, mask-image 0.25s linear;
+}
+
+/* ------------------------------------ */
+/*  belief overlay on the main grid       */
+/*  (overlay display mode)                */
+/* ------------------------------------ */
+.belief-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2; /* above base tile (1), below agent (3) */
+    pointer-events: none;
+}
+.overlay-cell {
+    position: absolute;
+}
+.overlay-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+.overlay-num {
+    font-family: Arial, sans-serif;
+    font-size: 16px;
+    fill: #222;
+    opacity: 0.7;
+    text-anchor: middle;
+    dominant-baseline: middle;
+}
+
+/* ------------------------------------ */
+/*  counter/token belief mode             */
+/* ------------------------------------ */
+/* counters sit in front of the agent and gold coin (they're the live readout) */
+.belief-overlay.counter-layer {
+    z-index: 6;
+}
+.counter-cell {
+    position: absolute;
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+}
+.counter-half {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6%;
+}
+.counter-slot {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.counter-token {
+    width: 80%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+/* pop a freshly placed token in once the agent has reached the cell */
+@keyframes counter-token-pop {
+    0%   { transform: scale(0); opacity: 0; }
+    60%  { transform: scale(1.28); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+}
+.counter-token.token-new {
+    animation: counter-token-pop 0.4s ease;
+}
+
+.counter-section {
+    width: 33.333%;
+    height: 100%;
+    display: grid;
+    grid-auto-flow: row;              /* was: column — this was the bug */
+    grid-template-columns: repeat(2, 1fr);
+    /* grid-template-rows set inline per-cell, as before */
+}
+
+.counter-section:not(:last-child) {
+    border-right: 1px solid #99999900;
+}
+
+/* instruction illustration: reachable-location highlight */
+.reachable-cell {
+    position: absolute;
+    background: rgba(255, 200, 0, 0.28);
+    border: 2px dashed #c99700;
+    border-radius: 6px;
+    box-sizing: border-box;
+}
+
+/* demo Continue button */
+.demo-continue {
+    padding: 12px 30px;
+    font-size: 20px;
+    cursor: pointer;
+}
+
+/* ------------------------------------ */
+/*  overall layout                        */
+/* ------------------------------------ */
+.task-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 60px;
+}
+.trial-counter {
+    color: #000000;
+    font-size: 25px;
+    /* bold */
+    font-weight: 600;
+}
+
+/* ------------------------------------ */
+/*  buttons (coloured circles)            */
+/* ------------------------------------ */
+.button-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 48px;
+}
+.button-stack-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    width: 140px;
+}
+.button-label {
+    font-family: Arial, sans-serif;
+    font-size: 20px;
+    color: #000000;
+    text-align: center;
+    line-height: 1.50;
+    /* font-weight: bold; */
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+}
+.button-triangle {
+    position: relative;
+    width: 220px;   /* match roughly 2x your old .button-stack width */
+    height: 200px;
+}
+.button-triangle-item {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+.pos-top {
+    top: -48%;
+    left: 50%;
+    transform: translateX(-20%);
+}
+.pos-bottom-left {
+    bottom: -20%;
+    left: 10%;
+    transform: translateX(-20%);
+}
+.pos-bottom-right {
+    bottom: -20%;
+    left: 90%;
+    transform: translateX(-20%);
+}
+.cbtn.green {
+    background: rgba(40,170,70,0.9); /* match how .cbtn.red/.cbtn.blue are styled */
+}
+.button-label.hidden {
+    visibility: hidden;
+}
+/* the lower button is offset to the right so the pair sits on a 45-degree
+   diagonal rather than a vertical stack (which could imply a spatial colour
+   mapping). Offset = centre-to-centre vertical distance = button (140) + gap (48). */
+.cbtn-lower {
+    margin-left: 188px;
+    margin-top: -40px;
+}
+.cbtn {
+    width: 140px;
+    height: 140px;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+    transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+.cbtn.red {
+    background: rgb(220, 40, 40);
+}
+.cbtn.blue {
+    background: rgb(40, 90, 220);
+}
+.cbtn:hover {
+    transform: scale(1.08);
+}
+.cbtn:active {
+    transform: scale(0.95);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.cbtn.disabled {
+    pointer-events: none;
+    opacity: 0.45;
+}
+.cbtn.hidden {
+    visibility: hidden;
+}
+/* visually normal but not clickable (used in guided demos) */
+.cbtn.inert {
+    pointer-events: none;
+}
+/* the computer "pressing" a button in the auto-play reliability demos */
+@keyframes cbtn-press {
+    0%   { transform: scale(1); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3); }
+    45%  { transform: scale(1.18); box-shadow: 0 0 0 10px rgba(0, 0, 0, 0.10); }
+    100% { transform: scale(1); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3); }
+}
+.cbtn.pressing {
+    animation: cbtn-press 0.42s ease;
+}
+
+/* "done sampling" tick button, left of the room */
+.check-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+.checkbtn {
+    width: 205px;
+    height: 205px;
+    border-radius: 16px;
+    border: 4px solid #2ca02c00;
+    background: #ffffff00;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0);
+    transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+.checkbtn img {
+    width: 62%;
+    height: auto;
+}
+.checkbtn:hover {
+    transform: scale(1.06);
+}
+.checkbtn:active {
+    transform: scale(0.95);
+}
+.checkbtn.disabled {
+    pointer-events: none;
+    opacity: 0.45;
+}
+.check-stack.hidden {
+    visibility: hidden;
+}
+.check-label {
+    font-family: Arial, sans-serif;
+    font-size: 25px;
+    color: #000000;
+    text-align: center;
+    line-height: 1.50;
+    font-weight: bold;
+}
+
+/* ------------------------------------ */
+/*  belief grids                          */
+/* ------------------------------------ */
+.belief-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 48px;
+}
+.belief-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+.belief-label {
+    font-family: Arial, sans-serif;
+    font-size: 22px;
+    font-weight: bold;
+}
+.belief-body {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.belief-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    width: 240px;
+    height: 240px;
+    border: 3px solid #333;
+}
+
+/* colorbar: probability (0 bottom -> 1 top) mapped to the button's shade */
+.colorbar-wrap {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+    height: 240px;
+}
+.colorbar {
+    width: 30px;
+    height: 100%;
+    border: 1px solid #333;
+}
+.colorbar-ticks {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: flex-end;
+    font-family: Arial, sans-serif;
+    font-size: 18px;
+    color: #333;
+    line-height: 1;
+}
+.belief-cell {
+    position: relative;
+    border: 1px solid #ccc;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.belief-dot {
+    width: 55%;
+    height: 55%;
+    border-radius: 50%;
+}
+.belief-num {
+    font-family: Arial, sans-serif;
+    font-size: 20px;
+    color: #333;
+    opacity: 0.75;
+}
+
+/* ------------------------------------ */
+/*  room progress bar                     */
+/* ------------------------------------ */
+/* jsPsych's own progress bar, restyled. Two things matter here:
+
+   1. It is `position: fixed`, so it sits OUTSIDE the flow. The .screen scaffold
+      above is a 100vh box that centres the room, and anything occupying real
+      height above it would push the room off centre and introduce a scrollbar.
+   2. It carries no message and no numbers -- how far through you are is the bar
+      and nothing else -- so the message span is removed outright.
+
+   Hidden until the first room begins, and hidden again on the exclusion screen;
+   setRoomProgress() / hideRoomProgress() in js/trials.js toggle .progress-visible. */
+#jspsych-progressbar-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    line-height: 0;
+    z-index: 100;
+    pointer-events: none;
+    /* fade in when the rooms start rather than appearing abruptly */
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.4s ease;
+}
+#jspsych-progressbar-container.progress-visible {
+    opacity: 1;
+    visibility: visible;
+}
+/* no "Completion Progress", no percentage: the bar is the whole message */
+#jspsych-progressbar-container span {
+    display: none;
+}
+#jspsych-progressbar-outer {
+    width: 100%;
+    margin: 0;
+    height: 28px;
+    display: block;
+    background-color: #e6e6e6;
+    box-shadow: none;
+}
+#jspsych-progressbar-inner {
+    height: 100%;
+    background-color: #7a8ca0;
+    /* the bar advances once per room, so ease the jump */
+    transition: width 0.5s ease;
+}
