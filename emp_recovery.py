@@ -91,7 +91,7 @@ def main():
     ## pathname for saving
     stem = (f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_'
             f'{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_'
-            f'{args.alpha}alpha_{args.cost}_{term}')
+            f'{args.alpha}alpha_{args.cost}_cost_{term}')
     if args.preset_histories:
         stem += f'_preset_{args.n_rooms}rooms'
 
