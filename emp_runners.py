@@ -295,8 +295,9 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
             ## true env needs to be consistent with the preset history - i.e. posterior draw from the prior, conditioned on the preset history
             prior = np.full((n_arms, n_outcomes), float(alpha))
             prior += counts
-            p_matrix = np.random.dirichlet(prior.T).T
-            p_matrix = p_matrix.reshape((n_arms, n_outcomes))
+            p_matrix = np.zeros((n_arms, n_outcomes))
+            for a in range(n_arms):
+                p_matrix[a] = np.random.dirichlet(prior[a])
 
         ## fresh initialisation of env
         env = make_emp_env(n_arms=n_arms, n_outcomes=n_outcomes, n_trials=n_trials,
