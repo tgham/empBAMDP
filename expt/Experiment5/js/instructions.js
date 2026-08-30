@@ -167,7 +167,7 @@ function outcomeByTokenCount(which) {
 // keep playing.
 //----------------------------------------------------------------------------//
 function make_auto_demo_trial(cfg) {
-    const revealAfter = cfg.revealAfter || 5;
+    const revealAfter = cfg.revealAfter || 1;
     return {
         type: jsPsychHtmlKeyboardResponse,
         choices: "NO_KEYS",
@@ -249,7 +249,7 @@ function make_auto_demo_trial(cfg) {
                 jsPsych.finishTrial({ task: "auto_demo", demo_button: cfg.button, observations: i });
             });
         }
-    };``
+    };
 }
 
 //----------------------------------------------------------------------------//
@@ -341,7 +341,7 @@ function make_testing_cost_demo_trial() {
         stimulus: screenHTML({
             title: `Testing cost`,
             lines: [
-                `Each time you test a button, a portion of the room's gold coin <strong>is lost</strong>.`
+                `Each time a button is tested, a portion of the room's gold coin <strong>is lost</strong>.`
             ],
             gap: goldCostCoinHTML(),
             stage: `
@@ -384,7 +384,7 @@ function make_testing_cost_demo_trial() {
                 counts[button][outcome] += 1;
                 moveAgent(outcome);
 
-                GOLD_FRACTION = Math.max(0, GOLD_FRACTION - 1 / (N_TRIALS + 1));
+                GOLD_FRACTION = Math.max(0, GOLD_FRACTION - SAMPLE_COST);
                 updateGoldCostCoin();
 
                 setTimeout(function () {
@@ -416,14 +416,19 @@ function make_testing_cost_demo_trial() {
     };
 }
 
-function make_finish_testing_early_demo_trial() {
+// The tick is introduced at a different point depending on whether testing costs
+// anything (see make_instructions_timeline), so the slide takes its own lines:
+// after the cost demo it is the escape from a depleting coin, after the practice
+// it is the alternative to spending a press.
+function make_finish_testing_early_demo_trial(opts) {
+    opts = opts || {};
     return {
         type: jsPsychHtmlKeyboardResponse,
         choices: "NO_KEYS",
         stimulus: screenHTML({
-            title: `Finishing testing early`,
-            lines: [
-                `Although you have up to ${N_TRIALS} tests, you have the option to <strong>finish testing early</strong>.`,
+            title: opts.title || `Finishing testing early`,
+            lines: opts.lines || [
+                `Although you have the option of testing ${N_REMAINING_TRIALS} more time${N_REMAINING_TRIALS === 1 ? "" : "s"}, you do have the option to <strong>finish testing early</strong>.`,
             ],
             gap: goldCostCoinHTML(),
             stage: `
@@ -442,8 +447,10 @@ function make_finish_testing_early_demo_trial() {
         },
         on_load: function () {
             // this slide deliberately keeps the tokens + coin exactly as left by
-            // the previous (testing cost) trial -- counts and GOLD_FRACTION are
-            // module-level state, so simply not resetting them here reuses it.
+            // whatever ran before it -- the cost demo when testing costs something,
+            // the practice room when it doesn't. counts and GOLD_FRACTION are
+            // module-level state, so simply not resetting them here carries the room
+            // they were just in straight onto this slide.
             refreshBeliefs();
             updateGoldCostCoin();
 
@@ -602,6 +609,23 @@ function make_review_choice_trial() {
 }
 
 //----------------------------------------------------------------------------//
+// Prime the globals a practice room needs, exactly as make_room_intro does for a
+// real one: an empty tally, a full coin, and hidden dynamics drawn from the
+// posterior implied by the history that is about to be watched -- so the presses
+// the participant watches are consistent with what their own press then does.
+//----------------------------------------------------------------------------//
+function startPracticeRoom(preset) {
+    for (const b of BUTTONS) {
+        for (const o of OUTCOMES) counts[b][o] = 0;
+    }
+    GOLD_FRACTION = 1;
+    sampling_ended = false;
+    agent_topPos = topPos0;
+    agent_leftPos = leftPos0;
+    sampleTrueTFromPreset(preset.presetCounts);
+}
+
+//----------------------------------------------------------------------------//
 // Build the full instructions timeline (array of trials).
 //----------------------------------------------------------------------------//
 function instructionBlock(pages, extra) {
@@ -617,6 +641,18 @@ function instructionBlock(pages, extra) {
 
 function make_instructions_timeline() {
     const tl = [];
+
+    // How many presses of their own the participant gets in a room, and whether
+    // that reads as "1 time" or "3 times". Used throughout the slides below.
+    const nOwn = N_REMAINING_TRIALS;
+    const sOwn = nOwn === 1 ? "" : "s";
+
+    // Two real preset histories, drawn at random and concretised the same way a
+    // room's is (buildRoomPreset gives each its own colour/direction mapping and
+    // shuffles the presses). One for the practice that teaches the structure, one
+    // for the full practice room at the end -- different histories, so the second
+    // is not a replay of the first.
+    const practicePresets = shuffled(PRESETS).slice(0, 2).map(buildRoomPreset);
 
     // ---- Overview click demo + testing intro + token explanation ----
     tl.push(instructionBlock(function () {
@@ -696,12 +732,11 @@ function make_instructions_timeline() {
         ]
     }));
 
-    // ---- Independence, made on the tokens the two demos just built up.
+    // ---- Independence, made on the tokens the three demos just built up.
     //      `pages` is a function so the slide is rendered when it is reached,
     //      off the counts the participant actually saw: the timeline is built
-    //      up front (when every count is still zero), and either demo can be
+    //      up front (when every count is still zero), and any demo can be
     //      skipped early, so the tally cannot be baked in here. ----
-    // merge: independence + both "interpreting the tokens" screens
     tl.push(instructionBlock(function () {
         return [
             screenHTML({
@@ -712,39 +747,73 @@ function make_instructions_timeline() {
                     `Learning about one button therefore tells you nothing about the others.`
                 ],
                 stage: taskDisplayStaticHTML(counts)
-            }),
-            screenHTML({
-                title: `Interpreting the tokens`,
-                lines: [
-                    `When you first enter the room, before a button has been tested, there are <strong>no tokens</strong>.`,
-                    `So, at this point, it's reasonable to believe each button is just as likely to lead <strong>anywhere</strong>.`
-                ],
-                stage: taskDisplayStaticHTML()
-            }),
-            screenHTML({
-                title: `Interpreting the tokens`,
-                lines: [
-                    `After testing a button a few times, however, some locations may have more tokens than others. This indicates the button is <strong>less likely</strong> to lead to those other locations that <strong>have not yet been reached</strong>.`,
-                    `For example, in the room below the tokens suggest the <strong>blue</strong> button is likely to lead <strong>up</strong>. This indicates it is <strong>less likely</strong> to lead to any of the other locations.`
-                ],
-                stage: taskDisplayStaticHTML({
-                    red:  { up: 0, right: 0, down: 0, left: 0 },
-                    blue: { up: 5, right: 0, down: 0, left: 0 }
-                })
-            }),
-            screenHTML({
-                title: `How much can I test the buttons?`,
-                lines: [
-                    `You can test the buttons up to <strong>${N_TRIALS} times</strong> in total, splitting your presses between the ${BUTTONS.length} buttons however you like.`,
-                    `However, testing <strong>comes at a price...</strong>`
-                ],
-                stage: taskDisplayStaticHTML()
             })
         ];
     }));
 
-    tl.push(make_testing_cost_demo_trial());
-    tl.push(make_finish_testing_early_demo_trial());
+    // ---- The cost of testing, only when there is one. With SAMPLE_COST = 0 nothing
+    //      depletes, so this slide would teach a rule the task does not have -- and
+    //      its coin (goldCostCoinHTML) would render as nothing at all. It sits before
+    //      the press budget below, so "here's the catch" lands on a cost the
+    //      participant has already been shown. ----
+    if (SAMPLE_COST > 0) {
+        tl.push(make_testing_cost_demo_trial());
+        // straight on, keeping that demo's tokens and part-spent coin on screen:
+        // the tick is the way out of the depletion just demonstrated
+        tl.push(make_finish_testing_early_demo_trial({
+            lines: [
+                `Luckily, you also have the option to <strong>finish testing early</strong>, by clicking the tick button.`,
+                `Clicking the tick moves you straight on, so no more of the room's gold coin is lost.`
+            ]
+        }));
+    }
+
+    // ---- The press budget: a history watched, then N_REMAINING_TRIALS presses of
+    //      their own. Explained, then practised immediately. ----
+    tl.push(instructionBlock([
+        screenHTML({
+            title: `How do I test the buttons?`,
+            lines: [
+                `Here's the catch: when you enter a room, the buttons will first be tested automatically &mdash; that is, the buttons will be pressed for you, and you will observe their outcomes.`,
+                `Once these automatic presses are complete, you will then have the chance to press any of the buttons <strong>${nOwn} more time${sOwn}</strong> yourself.`,
+                `Let's practise...`
+            ],
+            // the room the practice is about to start in: the observation phase
+            // opens on exactly this picture, so the buttons just begin pressing
+            stage: taskDisplayStaticHTML()
+        })
+    ], {
+        on_start: function () { startPracticeRoom(practicePresets[0]); }
+    }));
+    // room_num -1 keeps these rows out of the way of the full practice room (0) and
+    // of the real rooms (1..N_ROOMS)
+    tl.push(make_room_demo(-1, { preset: practicePresets[0], practice: true }));
+    // the tick is only offered here if it has already been explained (which it has,
+    // above, when testing costs something); otherwise it appears for the first time
+    // on the slide that introduces it, just below
+    tl.push(make_room_sampling(-1, {
+        practice: true,
+        nTrials: N_REMAINING_TRIALS,
+        tick: SAMPLE_COST > 0
+    }));
+    
+    // ---- The point of the observation phase, on the room they have just left. ----
+    tl.push(instructionBlock(function () {
+        return [
+            screenHTML({
+                title: `How do I test the buttons?`,
+                lines: [
+                    `The number of times the buttons are pressed for you, and which buttons are pressed, varies from room to room.`,
+                    `So, this means you will already have some knowledge about how the buttons work before you start pressing them yourself.`
+                ],
+                stage: taskDisplayStaticHTML(counts)
+            })
+        ];
+    }));
+
+    if (SAMPLE_COST === 0) {
+        tl.push(make_finish_testing_early_demo_trial());
+    }
 
     // ---- The gold-collection phase. A fresh illustrative room (unrelated to the
     //      practice): red reaches "up" reliably, blue tends "right", and "down" is
@@ -753,17 +822,23 @@ function make_instructions_timeline() {
         red:  { up: 2, right: 0, down: 0, left: 0 },
         blue: { up: 0, right: 1, down: 1, left: 0 }
     };
+    // a representative four-press depletion, so these slides show the coin as a
+    // tested room leaves it. Whole when testing is free.
+    const demoCoinFraction = Math.max(0, 1 - 4 * SAMPLE_COST);
     tl.push(instructionBlock([
         screenHTML({
-            useCurrentBeliefs: true,
             title: `Collecting the gold`,
             lines: [
-                `Once you've finished testing the buttons, whatever is left of the room's <strong>gold coin</strong> will appear at one of the ${K_OUTCOMES} locations.`,
-                `You must then choose the button you think is <strong>most likely to take you to the gold</strong>, based on what you have learned about each button.`,
-                `Note that the size of the gold coin, and therefore its value, is determined by how many times you just tested the buttons.`,
+                SAMPLE_COST > 0
+                    ? `Once you've finished testing the buttons, whatever is left of the room's <strong>gold coin</strong> will appear at one of the ${K_OUTCOMES} locations.`
+                    : `Once you've finished testing the buttons, the room's <strong>gold coin</strong> will appear at one of the ${K_OUTCOMES} locations.`,
+                `You must then choose the button you think is <strong>most likely to take you to the gold</strong>, based on what you have learned about each button.`
+            ].concat(SAMPLE_COST > 0 ? [
+                `Note that the size of the gold coin, and therefore its value, is determined by how many times you just tested the buttons.`
+            ] : []).concat([
                 `Here's a fresh room. Let's try a couple of examples.`
-            ],
-            stage: goldCoinStaticHTML(1-4/(N_TRIALS + 1))
+            ]),
+            stage: goldCoinStaticHTML(demoCoinFraction)
         })
     ]));
 
@@ -798,63 +873,61 @@ function make_instructions_timeline() {
         ]
     }));
 
-    tl.push(instructionBlock([
-        screenHTML({
-            useCurrentBeliefs: true,
-            title: `Balancing testing vs gold collection`,
-            lines: [
-                `Remember: if you manage to reach the gold coin, its value is determined by its size.`,
-                `Therefore, you are faced with a trade-off:`,
-                `<strong>- Testing the buttons in order to learn enough about how they work...</strong>`,
-                `<strong>- ...while also balancing this against the cost of testing.</strong>`
-            ],
-            stage: goldCoinStaticHTML(1-4/(N_TRIALS + 1))
-        })
-    ]));    
+    // ---- The trade-off only exists when testing costs something. ----
+    if (SAMPLE_COST > 0) {
+        tl.push(instructionBlock([
+            screenHTML({
+                title: `Balancing testing vs gold collection`,
+                lines: [
+                    `Remember: if you manage to reach the gold coin, its value is determined by its size.`,
+                    `Therefore, you are faced with a trade-off:`,
+                    `<strong>- Testing the buttons in order to learn enough about how they work...</strong>`,
+                    `<strong>- ...while also balancing this against the cost of testing.</strong>`
+                ],
+                stage: goldCoinStaticHTML(demoCoinFraction)
+            })
+        ]));
+    }
 
-    // merge: finishing the testing phase + practice, on_start stays attached here
+    // ---- A full room, gold phase included, on a second preset history. ----
     tl.push(instructionBlock([
         screenHTML({
             title: `Let's practise`,
             lines: [
                 `The next part works exactly like a real room.`,
-                `Press the buttons to test them, and then try the gold collection phase.`,
-                `Feel free to use all ${N_TRIALS} presses, or to click the tick button when you feel you've learned enough.`
+                `The buttons will be pressed for you first, and then you have the chance to test <strong>${nOwn} more time${sOwn}</strong>.`,
+                `Feel free to use your ${nOwn} extra choice${sOwn}, or click the tick button when you feel you've learned enough.`
             ]
         })
     ], {
-        on_start: function () {
-            for (const b of BUTTONS) {
-                for (const o of OUTCOMES) counts[b][o] = 0;
-            }
-            sampleTrueT();
-            sampling_ended = false;
-        }
+        on_start: function () { startPracticeRoom(practicePresets[1]); }
     }));
 
-
-    // the practice room still plays a whole room's worth of free presses, and
-    // starts from a full coin (no observation phase precedes it)
-    tl.push(make_room_sampling(0, { practice: true, nTrials: N_TRIALS, resetGold: true }));
+    tl.push(make_room_demo(0, { preset: practicePresets[1], practice: true }));
+    tl.push(make_room_sampling(0, { practice: true, nTrials: N_REMAINING_TRIALS }));
     tl.push(make_gold_pause(0));
     tl.push(make_gold_trial(0, { practice: true }));
-    
 
     // ---- The aim of the task (bonus) + note that the real task hides the outcome ----
     tl.push(instructionBlock([
         screenHTML({
             title: `The aim of the task`,
-            lines: [
+            lines: SAMPLE_COST > 0 ? [
                 `The aim of the task is to maximise the <strong>combined value of the gold coins</strong> that you collect.`,
                 `The more gold coins you collect, and the more valuable they are, the <strong>bigger the bonus</strong> you will receive on Prolific.`,
                 `<strong>Remember:</strong> the more times you test the buttons in a room, the smaller and less valuable the gold coin that will appear in that room.`,
                 `So in each room, test out the buttons until you feel you've learned enough to continue to the gold collection phase.`,
+            ] : [
+                `The aim of the task is to collect <strong>as many gold coins as possible</strong>.`,
+                `The more gold coins you collect, the <strong>bigger the bonus</strong> you will receive on Prolific.`,
+                `So in each room, use what you have watched &mdash; and your own ${nOwn} choice${sOwn} &mdash; to work out which button is most likely to reach the gold.`,
             ]
         })
     ]));
 
     // ---- End: start, or review the instructions again ----
     tl.push(make_review_choice_trial());
+
 
     return tl;
 }

@@ -9,8 +9,10 @@
 // (globals: quiz_passed, quiz_attempts).
 //----------------------------------------------------------------------------//
 
-// Each question: prompt, the correct option, and the distractors.
-const QUIZ_QUESTIONS = [
+// Each question: prompt, the correct option, and the distractors. `costOnly`
+// marks a question that only makes sense when testing costs something -- see the
+// filter below.
+const ALL_QUIZ_QUESTIONS = [
     {
         name: "buttons",
         prompt: "In each room, what do the buttons let you do?",
@@ -41,7 +43,7 @@ const QUIZ_QUESTIONS = [
     {
         name: "relationship",
         prompt: "What is the relationship between the buttons?",
-        correct: "They both control movement in the same room, but the locations they reach are independent of each other.",
+        correct: "They all control movement in the same room, but the locations they reach are independent of each other.",
         distractors: [
             "They always reach the same locations as each other.",
             "They operate in completely separate rooms."
@@ -66,7 +68,17 @@ const QUIZ_QUESTIONS = [
         ]
     },
     {
+        name: "auto_presses",
+        prompt: "When you enter a new room, what happens first?",
+        correct: `Some presses are made for me to watch, and then I get ${N_REMAINING_TRIALS} press${N_REMAINING_TRIALS === 1 ? "" : "es"} of my own.`,
+        distractors: [
+            "I get to press the buttons as many times as I like.",
+            "The gold coin appears straight away, before any button has been pressed."
+        ]
+    },
+    {
         name: "cost",
+        costOnly: true,
         prompt: "What is the cost of testing a button?",
         correct: "Testing a button reduces the size, and therefore value, of the gold coin that I can possibly collect in the current room.",
         distractors: [
@@ -85,6 +97,7 @@ const QUIZ_QUESTIONS = [
     },
     {
         name: "coin_size",
+        costOnly: true,
         prompt: "In the gold collection phase, what is the value of the gold coin that can possibly be collected?",
         correct: "The value depends on the size of the coin, which is determined by the number of buttons pressed.",
         distractors: [
@@ -104,13 +117,18 @@ const QUIZ_QUESTIONS = [
     {
         name: "coin_correct",
         prompt: "In the gold collection phase, is there a button that guarantees leading to the location with the coin?",
-        correct: "Not necessarily - sometimes neither button reliably leads to the location with the coin.",
+        correct: "Not necessarily - sometimes no button reliably leads to the location with the coin.",
         distractors: [
             "Yes - there is always one button that certainly leads to the location with the coin.",
             "Yes - the button with the most tokens certainly leads to the location with the coin."
         ]
     },
 ];
+
+// With SAMPLE_COST = 0 nothing depletes the coin, so the two cost questions have
+// no right answer for a participant who understood the task. Drop them rather than
+// grade people on a rule the instructions (correctly) never taught.
+const QUIZ_QUESTIONS = ALL_QUIZ_QUESTIONS.filter(q => SAMPLE_COST > 0 || !q.costOnly);
 
 const QUIZ_PASS_FRACTION = 2/3;
 const QUIZ_MAX_ATTEMPTS = 2;

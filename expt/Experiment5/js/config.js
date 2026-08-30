@@ -25,6 +25,7 @@ const N_REMAINING_TRIALS = 1;
 // Set to 0 for a cost-free version: nothing depletes, in the demo or the choice.
 // const SAMPLE_COST = 1 / (N_TRIALS + 1);
 const SAMPLE_COST = 0;
+// const SAMPLE_COST = 1/64;
 
 // Do the presses the participant WATCHES also spend the coin? true is the faithful
 // version (the model charges for every trial in the history); false gives the
@@ -164,7 +165,7 @@ function buildRoomPreset(history) {
 // We build the same name from the configured design, so N_BUTTONS/K_OUTCOMES pick
 // the matching file and a mismatch shows up as a 404 rather than as histories
 // silently mapped onto the wrong number of buttons or locations.
-const PRESETS_FILE = `${N_BUTTONS}arms_${K_OUTCOMES}outcomes_presets.json`;
+const PRESETS_FILE = `rooms/${N_BUTTONS}arms_${K_OUTCOMES}outcomes_noTermination_presets.json`;
 
 // Reject anything the display could not honestly show: a history referring to a
 // button or a location this design does not have. `BUTTONS` and `OUTCOMES` are what

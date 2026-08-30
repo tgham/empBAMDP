@@ -177,9 +177,9 @@ function make_room_intro(room_num) {
     return {
         type: jsPsychHtmlKeyboardResponse,
         stimulus: screenHTML({
+            title: `New room`,
             // no "Room n of N": the progress bar at the top carries this instead
             lines: [
-                `You are in a new room with new buttons.`,
                 `First, watch as ${preset.n_preset_presses} choices are made for you.`,
                 `Then you will have ${N_REMAINING_TRIALS} choice${N_REMAINING_TRIALS === 1 ? "" : "s"} of your own.`,
                 `Press any key to begin.`
@@ -220,12 +220,18 @@ function make_room_intro(room_num) {
 //
 // Nothing is clickable (every button carries .inert). The whole phase is a single
 // jsPsych trial, with one data row per observation pushed onto the collection
-// (task "observe"), mirroring how make_room_sampling logs its presses.
+// (task "observe"/"practice_observe"), mirroring how make_room_sampling logs its
+// presses.
+//
+// `opts.preset` supplies the history directly, for the instruction practices --
+// they have no room of their own, so roomPreset() has nothing to look up.
 //----------------------------------------------------------------------------//
 function make_room_demo(room_num, opts) {
     opts = opts || {};
+    const practice = opts.practice === true;
+    const taskName = practice ? "practice_observe" : "observe";
     const buttonOrder = opts.buttonOrder || BUTTON_ORDER;
-    const preset = roomPreset(room_num);
+    const preset = opts.preset || roomPreset(room_num);
     const seq = preset.sequence;
 
     return {
@@ -249,7 +255,7 @@ function make_room_demo(room_num, opts) {
                     </div>`
             });
         },
-        data: { task: "room_demo", room_num: room_num },
+        data: { task: "room_demo", room_num: room_num, practice: practice },
         on_start: function () {
             agent_topPos = topPos0;
             agent_leftPos = leftPos0;
@@ -280,6 +286,7 @@ function make_room_demo(room_num, opts) {
                     jsPsych.finishTrial({
                         task: "room_demo",
                         room_num: room_num,
+                        practice: practice,
                         n_observed: seq.length
                     });
                     return;
@@ -310,7 +317,7 @@ function make_room_demo(room_num, opts) {
                         refreshBeliefs({ button: button, outcome: outcome }, buttonOrder);
 
                         jsPsych.data.get().push(stampSession({
-                            task: "observe",
+                            task: taskName,
                             room_num: room_num,
                             trial_num: i + 1,
                             observed_button: button,
@@ -351,6 +358,11 @@ function make_room_demo(room_num, opts) {
 //
 // `opts.nTrials` is the press budget: N_REMAINING_TRIALS in the preset design,
 // N_TRIALS for the instruction demos that still play a whole room.
+//
+// `opts.tick: false` renders the tick as an invisible placeholder and leaves it
+// unwired -- for the instruction practice that runs BEFORE the tick has been
+// explained. It keeps its layout footprint, so the room does not shift when the
+// tick appears on a later screen.
 //----------------------------------------------------------------------------//
 function make_room_sampling(room_num, opts) {
     opts = opts || {};
@@ -358,6 +370,7 @@ function make_room_sampling(room_num, opts) {
     const taskName = practice ? "practice_sample" : "sample";
     const buttonOrder = opts.buttonOrder || BUTTON_ORDER;
     const nTrials = opts.nTrials != null ? opts.nTrials : N_TRIALS;
+    const withTick = opts.tick !== false;
     // the coin carries over from the observation phase unless told to reset it
     const resetGold = opts.resetGold === true;
 
@@ -373,12 +386,14 @@ function make_room_sampling(room_num, opts) {
             return screenHTML({
                 lines: [
                     `<span class="trial-counter">${choicesRemainingText(nTrials)}</span>`,
-                    `Now it is your turn. Click a button to move, or the tick to finish testing.`
+                    withTick
+                        ? `Now it is your turn. Click a button to move, or the tick to finish testing.`
+                        : `Now it is your turn. Click a button to move.`
                 ],
                 gap: goldCostCoinHTML(),
                 stage: `
                     <div class="task-row">
-                        ${checkButtonHTML()}
+                        ${checkButtonHTML({ placeholder: !withTick })}
                         ${initialize_agent()}
                         ${buttonStackHTML({ buttonOrder: buttonOrder })}
                         ${beliefPanelHTML()}
@@ -417,10 +432,10 @@ function make_room_sampling(room_num, opts) {
                 const bs = row.querySelector(".button-triangle");
                 if (bs) bs.outerHTML = buttonStackHTML({ buttonOrder: buttonOrder });
                 const cs = row.querySelector(".check-stack");
-                if (cs) cs.outerHTML = checkButtonHTML();
+                if (cs) cs.outerHTML = checkButtonHTML({ placeholder: !withTick });
                 const counter = document.querySelector(".trial-counter");
                 if (counter) counter.textContent = choicesRemainingText(nTrials - trial_num + 1);
-                wireButtons(onPress, onCheck);
+                wireButtons(onPress, withTick ? onCheck : null);
             }
 
             function onPress(button, rt) {
@@ -487,7 +502,7 @@ function make_room_sampling(room_num, opts) {
             }
 
             // arm the first press (controls are already fresh from the stimulus)
-            wireButtons(onPress, onCheck);
+            wireButtons(onPress, withTick ? onCheck : null);
         }
     };
 }
