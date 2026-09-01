@@ -634,7 +634,7 @@ function make_instructions_timeline() {
                 `Each room has <strong>${N_BUTTONS} buttons</strong> to press, shown below in <strong>${BUTTONS[0]}</strong>, <strong>${BUTTONS[1]}</strong> and <strong>${BUTTONS[2]}</strong>.`,
                 `Pressing a button takes you to one of these ${K_OUTCOMES} locations <strong>with some probability</strong>.`,
                 ],
-                stage: taskDisplayStaticHTML(null, { label_on: true })
+                stage: taskDisplayStaticHTML(null, { label_on: false })
             }),
             screenHTML({
                 title: `Gold coins`,
