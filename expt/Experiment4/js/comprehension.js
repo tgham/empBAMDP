@@ -10,7 +10,7 @@
 //----------------------------------------------------------------------------//
 
 // Each question: prompt, the correct option, and the distractors.
-const QUIZ_QUESTIONS = [
+const ALL_QUIZ_QUESTIONS = [
     {
         name: "buttons",
         prompt: "In each room, what do the buttons let you do?",
@@ -67,6 +67,7 @@ const QUIZ_QUESTIONS = [
     },
     {
         name: "cost",
+        costOnly: true,
         prompt: "What is the cost of testing a button?",
         correct: "Testing a button reduces the size, and therefore value, of the gold coin that I can possibly collect in the current room.",
         distractors: [
@@ -76,6 +77,7 @@ const QUIZ_QUESTIONS = [
     },
     {
         name: "tick",
+        tickOnly: true,
         prompt: "What happens if you press the orange tick button?",
         correct: "I stop testing early and move straight on to the gold collection phase.",
         distractors: [
@@ -85,6 +87,7 @@ const QUIZ_QUESTIONS = [
     },
     {
         name: "coin_size",
+        costOnly: true,
         prompt: "In the gold collection phase, what is the value of the gold coin that can possibly be collected?",
         correct: "The value depends on the size of the coin, which is determined by the number of buttons pressed.",
         distractors: [
@@ -111,6 +114,14 @@ const QUIZ_QUESTIONS = [
         ]
     },
 ];
+
+// With SAMPLE_COST = 0 nothing depletes the coin, so the two cost questions have
+// no right answer for a participant who understood the task. Same for the tick
+// question when TERMINATE is off and there is no tick to press. Drop them rather
+// than grade people on a rule the instructions (correctly) never taught.
+const QUIZ_QUESTIONS = ALL_QUIZ_QUESTIONS.filter(
+    q => (SAMPLE_COST > 0 || !q.costOnly) && (TERMINATE || !q.tickOnly)
+);
 
 const QUIZ_PASS_FRACTION = 2/3;
 const QUIZ_MAX_ATTEMPTS = 2;

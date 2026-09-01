@@ -384,8 +384,7 @@ function make_testing_cost_demo_trial() {
                 counts[button][outcome] += 1;
                 moveAgent(outcome);
 
-                GOLD_FRACTION = Math.max(0, GOLD_FRACTION - 1 / (N_TRIALS + 1));
-                updateGoldCostCoin();
+                chargeForPress();
 
                 setTimeout(function () {
                     refreshBeliefs({ button: button, outcome: outcome });
@@ -416,13 +415,18 @@ function make_testing_cost_demo_trial() {
     };
 }
 
-function make_finish_testing_early_demo_trial() {
+// The tick is introduced at a different point depending on whether testing costs
+// anything (see make_instructions_timeline), so the slide takes its own lines:
+// after the cost demo it is the escape from a depleting coin, otherwise it is
+// simply the alternative to spending the rest of the press budget.
+function make_finish_testing_early_demo_trial(opts) {
+    opts = opts || {};
     return {
         type: jsPsychHtmlKeyboardResponse,
         choices: "NO_KEYS",
         stimulus: screenHTML({
-            title: `Finishing testing early`,
-            lines: [
+            title: opts.title || `Finishing testing early`,
+            lines: opts.lines || [
                 `Although you have up to ${N_TRIALS} tests, you have the option to <strong>finish testing early</strong>.`,
             ],
             gap: goldCostCoinHTML(),
@@ -442,7 +446,8 @@ function make_finish_testing_early_demo_trial() {
         },
         on_load: function () {
             // this slide deliberately keeps the tokens + coin exactly as left by
-            // the previous (testing cost) trial -- counts and GOLD_FRACTION are
+            // whatever ran before it -- the cost demo when testing costs something,
+            // the preceding demos when it doesn't. counts and GOLD_FRACTION are
             // module-level state, so simply not resetting them here reuses it.
             refreshBeliefs();
             updateGoldCostCoin();
@@ -735,16 +740,36 @@ function make_instructions_timeline() {
             screenHTML({
                 title: `How much can I test the buttons?`,
                 lines: [
-                    `You can test the buttons up to <strong>${N_TRIALS} times</strong> in total, splitting your presses between the ${BUTTONS.length} buttons however you like.`,
+                    `You can test the buttons up to <strong>${N_TRIALS} times</strong> in total, splitting your presses between the ${BUTTONS.length} buttons however you like.`
+                ].concat(SAMPLE_COST > 0 ? [
                     `However, testing <strong>comes at a price...</strong>`
-                ],
+                ] : []),
                 stage: taskDisplayStaticHTML()
             })
         ];
     }));
 
-    tl.push(make_testing_cost_demo_trial());
-    tl.push(make_finish_testing_early_demo_trial());
+    // ---- The cost of testing, only when there is one. With SAMPLE_COST = 0 nothing
+    //      depletes, so this slide would teach a rule the task does not have -- and
+    //      its coin (goldCostCoinHTML) would render as nothing at all. ----
+    if (SAMPLE_COST > 0) {
+        tl.push(make_testing_cost_demo_trial());
+        // straight on, keeping that demo's tokens and part-spent coin on screen:
+        // the tick is the way out of the depletion just demonstrated. Without a
+        // termination arm there is no way out, and the cost demo stands alone.
+        if (TERMINATE) {
+            tl.push(make_finish_testing_early_demo_trial({
+                lines: [
+                    `Luckily, you also have the option to <strong>finish testing early</strong>, by clicking the tick button.`,
+                    `Clicking the tick moves you straight on, so no more of the room's gold coin is lost.`
+                ]
+            }));
+        }
+    } else if (TERMINATE) {
+        // no cost demo to hang it off, but the tick still has to be introduced
+        // before the practice room offers it
+        tl.push(make_finish_testing_early_demo_trial());
+    }
 
     // ---- The gold-collection phase. A fresh illustrative room (unrelated to the
     //      practice): red reaches "up" reliably, blue tends "right", and "down" is
@@ -753,17 +778,24 @@ function make_instructions_timeline() {
         red:  { up: 2, right: 0, down: 0, left: 0 },
         blue: { up: 0, right: 1, down: 1, left: 0 }
     };
+    // a representative four-press depletion, so these slides show the coin as a
+    // tested room leaves it. Whole when testing is free.
+    const demoCoinFraction = Math.max(0, 1 - 4 * SAMPLE_COST);
     tl.push(instructionBlock([
         screenHTML({
             useCurrentBeliefs: true,
             title: `Collecting the gold`,
             lines: [
-                `Once you've finished testing the buttons, whatever is left of the room's <strong>gold coin</strong> will appear at one of the ${K_OUTCOMES} locations.`,
-                `You must then choose the button you think is <strong>most likely to take you to the gold</strong>, based on what you have learned about each button.`,
-                `Note that the size of the gold coin, and therefore its value, is determined by how many times you just tested the buttons.`,
+                SAMPLE_COST > 0
+                    ? `Once you've finished testing the buttons, whatever is left of the room's <strong>gold coin</strong> will appear at one of the ${K_OUTCOMES} locations.`
+                    : `Once you've finished testing the buttons, the room's <strong>gold coin</strong> will appear at one of the ${K_OUTCOMES} locations.`,
+                `You must then choose the button you think is <strong>most likely to take you to the gold</strong>, based on what you have learned about each button.`
+            ].concat(SAMPLE_COST > 0 ? [
+                `Note that the size of the gold coin, and therefore its value, is determined by how many times you just tested the buttons.`
+            ] : []).concat([
                 `Here's a fresh room. Let's try a couple of examples.`
-            ],
-            stage: goldCoinStaticHTML(1-4/(N_TRIALS + 1))
+            ]),
+            stage: goldCoinStaticHTML(demoCoinFraction)
         })
     ]));
 
@@ -798,19 +830,24 @@ function make_instructions_timeline() {
         ]
     }));
 
-    tl.push(instructionBlock([
-        screenHTML({
-            useCurrentBeliefs: true,
-            title: `Balancing testing vs gold collection`,
-            lines: [
-                `Remember: if you manage to reach the gold coin, its value is determined by its size.`,
-                `Therefore, you are faced with a trade-off:`,
-                `<strong>- Testing the buttons in order to learn enough about how they work...</strong>`,
-                `<strong>- ...while also balancing this against the cost of testing.</strong>`
-            ],
-            stage: goldCoinStaticHTML(1-4/(N_TRIALS + 1))
-        })
-    ]));    
+    // ---- The trade-off only exists when testing costs something AND the
+    //      participant can choose to stop paying for it. With no tick every room
+    //      spends the full budget, so there is nothing to balance. ----
+    if (SAMPLE_COST > 0 && TERMINATE) {
+        tl.push(instructionBlock([
+            screenHTML({
+                useCurrentBeliefs: true,
+                title: `Balancing testing vs gold collection`,
+                lines: [
+                    `Remember: if you manage to reach the gold coin, its value is determined by its size.`,
+                    `Therefore, you are faced with a trade-off:`,
+                    `<strong>- Testing the buttons in order to learn enough about how they work...</strong>`,
+                    `<strong>- ...while also balancing this against the cost of testing.</strong>`
+                ],
+                stage: goldCoinStaticHTML(demoCoinFraction)
+            })
+        ]));
+    }
 
     // merge: finishing the testing phase + practice, on_start stays attached here
     tl.push(instructionBlock([
@@ -819,7 +856,9 @@ function make_instructions_timeline() {
             lines: [
                 `The next part works exactly like a real room.`,
                 `Press the buttons to test them, and then try the gold collection phase.`,
-                `Feel free to use all ${N_TRIALS} presses, or to click the tick button when you feel you've learned enough.`
+                TERMINATE
+                    ? `Feel free to use all ${N_TRIALS} presses, or to click the tick button when you feel you've learned enough.`
+                    : `You have all ${N_TRIALS} presses to use, and then the gold collection phase begins.`
             ]
         })
     ], {
@@ -842,11 +881,19 @@ function make_instructions_timeline() {
     tl.push(instructionBlock([
         screenHTML({
             title: `The aim of the task`,
-            lines: [
+            lines: SAMPLE_COST > 0 ? [
                 `The aim of the task is to maximise the <strong>combined value of the gold coins</strong> that you collect.`,
                 `The more gold coins you collect, and the more valuable they are, the <strong>bigger the bonus</strong> you will receive on Prolific.`,
                 `<strong>Remember:</strong> the more times you test the buttons in a room, the smaller and less valuable the gold coin that will appear in that room.`,
-                `So in each room, test out the buttons until you feel you've learned enough to continue to the gold collection phase.`,
+                TERMINATE
+                    ? `So in each room, test out the buttons until you feel you've learned enough to continue to the gold collection phase.`
+                    : `So in each room, use your ${N_TRIALS} presses to work out which button is most likely to reach the gold.`,
+            ] : [
+                `The aim of the task is to collect <strong>as many gold coins as possible</strong>.`,
+                `The more gold coins you collect, the <strong>bigger the bonus</strong> you will receive on Prolific.`,
+                TERMINATE
+                    ? `So in each room, test out the buttons until you feel you've learned enough to continue to the gold collection phase.`
+                    : `So in each room, use your ${N_TRIALS} presses to work out which button is most likely to reach the gold.`,
             ]
         })
     ]));

@@ -11,7 +11,8 @@ let agent_topPos = topPos0;
 let agent_leftPos = leftPos0;
 
 // Fraction (1..0) of the gold coin remaining in this room's sampling phase.
-// Depleted by 1/N_TRIALS on every button click (not on tick clicks).
+// Depleted by SAMPLE_COST on every button click (not on tick clicks), so it stays
+// at 1 all the way through when SAMPLE_COST is 0.
 let GOLD_FRACTION = 1;
 
 function goldMaskStyle(fraction) {
@@ -23,8 +24,13 @@ function goldMaskStyle(fraction) {
     return `-webkit-mask-image:${mask}; mask-image:${mask}; -webkit-mask-size:100% 100%; mask-size:100% 100%;`;
 }
 
-// The depleting coin shown top-centre during sampling.
+// The depleting coin shown top-centre during sampling. With SAMPLE_COST = 0
+// nothing ever depletes, so there is nothing for it to show: return nothing and
+// screenHTML drops the whole .screen-gap block. (The gap is absolutely positioned,
+// so its absence does not move the room or the text.) The coin still appears in
+// the gold phase itself, always whole.
 function goldCostCoinHTML() {
+    if (SAMPLE_COST <= 0) return ``;
     return `
         <div class="gold-cost-wrap">
             <img id="gold-cost-coin" src="img/Goal.png" alt="Gold coin remaining"

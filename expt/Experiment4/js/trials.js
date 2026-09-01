@@ -31,7 +31,11 @@ function buttonStackHTML(opts) {
 // The "done sampling" tick button, shown to the left of the room. With
 // { placeholder: true } it renders the same element but invisible (keeping its
 // layout footprint) so grids without a tick don't shift horizontally.
+// With TERMINATE off there is no tick in this version of the task at all, so it
+// renders nothing and the room keeps the space -- no screen has one, so nothing
+// shifts relative to anything else.
 function checkButtonHTML(opts) {
+    if (!TERMINATE) return ``;
     const placeholder = opts && opts.placeholder;
     const tick_label = opts && opts.tick_label;
     return `
@@ -67,6 +71,14 @@ function refreshBeliefs(highlight, buttonOrder) {
         }
     }
     updateBeliefLabels();
+}
+
+// Spend one press worth of the room's gold coin and redraw it. No-op when
+// SAMPLE_COST is 0 (the cost-free version of the design).
+function chargeForPress() {
+    if (SAMPLE_COST <= 0) return;
+    GOLD_FRACTION = Math.max(0, GOLD_FRACTION - SAMPLE_COST);
+    updateGoldCostCoin();
 }
 
 // Wire click handlers onto the buttons; `onPress(button, rt)` handles a colour
@@ -146,7 +158,8 @@ function make_room_intro(room_num) {
 // unchanged from the old one-trial-per-press version.
 //
 // The tick ("done testing") ends the phase early. The trial ends when the
-// participant has used all N_TRIALS presses or clicks the tick.
+// participant has used all N_TRIALS presses or clicks the tick. With TERMINATE
+// off there is no tick, and the trial can only end by using up the press budget.
 //----------------------------------------------------------------------------//
 function make_room_sampling(room_num, opts) {
     opts = opts || {};
@@ -161,6 +174,8 @@ function make_room_sampling(room_num, opts) {
         row.study_id = study_id;
         row.session_id = session_id;
         row.belief_display = BELIEF_DISPLAY;
+        row.sample_cost = SAMPLE_COST;
+        row.terminate = TERMINATE;
         row.alpha = ALPHA;
         row.contextual = CONTEXTUAL;
         row.alpha_ctx1 = ALPHA_CTX1;
@@ -179,7 +194,9 @@ function make_room_sampling(room_num, opts) {
         stimulus: screenHTML({
             lines: [
                 `<span class="trial-counter">${choicesRemainingText(N_TRIALS)}</span>`,
-                `Click a button to move, or the tick to finish testing.`
+                TERMINATE
+                    ? `Click a button to move, or the tick to finish testing.`
+                    : `Click a button to move.`
             ],
             gap: goldCostCoinHTML(),
             stage: `
@@ -224,7 +241,7 @@ function make_room_sampling(room_num, opts) {
                 if (cs) cs.outerHTML = checkButtonHTML();
                 const counter = document.querySelector(".trial-counter");
                 if (counter) counter.textContent = choicesRemainingText(N_TRIALS - trial_num + 1);
-                wireButtons(onPress, onCheck);
+                wireButtons(onPress, TERMINATE ? onCheck : null);
             }
 
             function onPress(button, rt) {
@@ -232,9 +249,9 @@ function make_room_sampling(room_num, opts) {
                 const posteriors_pre = posteriorSnapshot();
                 const gold_fraction_pre = GOLD_FRACTION;
 
-                // sampling cost: each click removes a 1/(T+1) slice of the coin
-                GOLD_FRACTION = Math.max(0, GOLD_FRACTION - 1 / (N_TRIALS+1));
-                updateGoldCostCoin();
+                // sampling cost: each click removes a SAMPLE_COST slice of the coin
+                // (no-op when SAMPLE_COST is 0)
+                chargeForPress();
 
                 const outcome = sampleCategorical(TRUE_T[button]);
                 counts[button][outcome] += 1;
@@ -291,7 +308,7 @@ function make_room_sampling(room_num, opts) {
             }
 
             // arm the first press (controls are already fresh from the stimulus)
-            wireButtons(onPress, onCheck);
+            wireButtons(onPress, TERMINATE ? onCheck : null);
         }
     };
 }

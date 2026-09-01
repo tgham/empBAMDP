@@ -6,7 +6,7 @@
 // conditional on it), and the Prolific redirect at the end is suppressed.
 // MUST be false for any real run: it bypasses the comprehension gate.
 //----------------------------------------------------------------------------//
-const DEBUGGING = false;
+const DEBUGGING = true;
 
 //----------------------------------------------------------------------------//
 // Experiment parameters
@@ -16,6 +16,21 @@ const N_BUTTONS = 3;
 const K_OUTCOMES = 4;
 const N_TRIALS = 8;   // sampling trials per room
 const N_ROOMS = 30;    // number of rooms (fresh transition functions each)
+
+// const SAMPLE_COST = 1 / (N_TRIALS + 1);
+const SAMPLE_COST = 0;
+
+// TERMINATE: does this version of the design include the termination arm -- the
+// orange tick that ends testing early and moves straight on to the gold?
+//   true  -> the tick is drawn beside the room, explained in the instructions and
+//            quizzed in the comprehension check.
+//   false -> there is no tick anywhere: not in the task, not on any instruction
+//            slide, and the tick question is dropped from the quiz. Every room
+//            then runs the full N_TRIALS presses. The room is drawn without the
+//            tick (rather than behind an invisible placeholder), so it sits
+//            centred -- consistent across every screen, since TERMINATE is fixed
+//            for the whole session.
+const TERMINATE = false;
 
 // CONTEXTUAL controls which prior each button's hidden transition function is
 // drawn from at the start of a room:

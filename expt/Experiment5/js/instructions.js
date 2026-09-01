@@ -759,13 +759,16 @@ function make_instructions_timeline() {
     if (SAMPLE_COST > 0) {
         tl.push(make_testing_cost_demo_trial());
         // straight on, keeping that demo's tokens and part-spent coin on screen:
-        // the tick is the way out of the depletion just demonstrated
-        tl.push(make_finish_testing_early_demo_trial({
-            lines: [
-                `Luckily, you also have the option to <strong>finish testing early</strong>, by clicking the tick button.`,
-                `Clicking the tick moves you straight on, so no more of the room's gold coin is lost.`
-            ]
-        }));
+        // the tick is the way out of the depletion just demonstrated. Without a
+        // termination arm there is no way out, and the cost demo stands alone.
+        if (TERMINATE) {
+            tl.push(make_finish_testing_early_demo_trial({
+                lines: [
+                    `Luckily, you also have the option to <strong>finish testing early</strong>, by clicking the tick button.`,
+                    `Clicking the tick moves you straight on, so no more of the room's gold coin is lost.`
+                ]
+            }));
+        }
     }
 
     // ---- The press budget: a history watched, then N_REMAINING_TRIALS presses of
@@ -790,11 +793,12 @@ function make_instructions_timeline() {
     tl.push(make_room_demo(-1, { preset: practicePresets[0], practice: true }));
     // the tick is only offered here if it has already been explained (which it has,
     // above, when testing costs something); otherwise it appears for the first time
-    // on the slide that introduces it, just below
+    // on the slide that introduces it, just below. With TERMINATE off there is no
+    // tick to explain and make_room_sampling drops it regardless.
     tl.push(make_room_sampling(-1, {
         practice: true,
         nTrials: N_REMAINING_TRIALS,
-        tick: SAMPLE_COST > 0
+        tick: TERMINATE && SAMPLE_COST > 0
     }));
     
     // ---- The point of the observation phase, on the room they have just left. ----
@@ -811,7 +815,9 @@ function make_instructions_timeline() {
         ];
     }));
 
-    if (SAMPLE_COST === 0) {
+    // when testing is free the tick has not been introduced yet -- this is where it
+    // first appears (and only if this version of the task has one at all)
+    if (TERMINATE && SAMPLE_COST === 0) {
         tl.push(make_finish_testing_early_demo_trial());
     }
 
@@ -873,8 +879,10 @@ function make_instructions_timeline() {
         ]
     }));
 
-    // ---- The trade-off only exists when testing costs something. ----
-    if (SAMPLE_COST > 0) {
+    // ---- The trade-off only exists when testing costs something AND the
+    //      participant can choose to stop paying for it. With no tick the presses
+    //      are spent for them, so there is nothing to balance. ----
+    if (SAMPLE_COST > 0 && TERMINATE) {
         tl.push(instructionBlock([
             screenHTML({
                 title: `Balancing testing vs gold collection`,
@@ -896,7 +904,9 @@ function make_instructions_timeline() {
             lines: [
                 `The next part works exactly like a real room.`,
                 `The buttons will be pressed for you first, and then you have the chance to test <strong>${nOwn} more time${sOwn}</strong>.`,
-                `Feel free to use your ${nOwn} extra choice${sOwn}, or click the tick button when you feel you've learned enough.`
+                TERMINATE
+                    ? `Feel free to use your ${nOwn} extra choice${sOwn}, or click the tick button when you feel you've learned enough.`
+                    : `Then the gold collection phase begins.`
             ]
         })
     ], {
@@ -916,7 +926,9 @@ function make_instructions_timeline() {
                 `The aim of the task is to maximise the <strong>combined value of the gold coins</strong> that you collect.`,
                 `The more gold coins you collect, and the more valuable they are, the <strong>bigger the bonus</strong> you will receive on Prolific.`,
                 `<strong>Remember:</strong> the more times you test the buttons in a room, the smaller and less valuable the gold coin that will appear in that room.`,
-                `So in each room, test out the buttons until you feel you've learned enough to continue to the gold collection phase.`,
+                TERMINATE
+                    ? `So in each room, test out the buttons until you feel you've learned enough to continue to the gold collection phase.`
+                    : `So in each room, use what you have watched &mdash; and your own ${nOwn} choice${sOwn} &mdash; to work out which button is most likely to reach the gold.`,
             ] : [
                 `The aim of the task is to collect <strong>as many gold coins as possible</strong>.`,
                 `The more gold coins you collect, the <strong>bigger the bonus</strong> you will receive on Prolific.`,

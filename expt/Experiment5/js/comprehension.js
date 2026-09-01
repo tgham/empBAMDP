@@ -88,6 +88,7 @@ const ALL_QUIZ_QUESTIONS = [
     },
     {
         name: "tick",
+        tickOnly: true,
         prompt: "What happens if you press the orange tick button?",
         correct: "I stop testing early and move straight on to the gold collection phase.",
         distractors: [
@@ -126,9 +127,12 @@ const ALL_QUIZ_QUESTIONS = [
 ];
 
 // With SAMPLE_COST = 0 nothing depletes the coin, so the two cost questions have
-// no right answer for a participant who understood the task. Drop them rather than
-// grade people on a rule the instructions (correctly) never taught.
-const QUIZ_QUESTIONS = ALL_QUIZ_QUESTIONS.filter(q => SAMPLE_COST > 0 || !q.costOnly);
+// no right answer for a participant who understood the task. Same for the tick
+// question when TERMINATE is off and there is no tick to press. Drop them rather
+// than grade people on a rule the instructions (correctly) never taught.
+const QUIZ_QUESTIONS = ALL_QUIZ_QUESTIONS.filter(
+    q => (SAMPLE_COST > 0 || !q.costOnly) && (TERMINATE || !q.tickOnly)
+);
 
 const QUIZ_PASS_FRACTION = 2/3;
 const QUIZ_MAX_ATTEMPTS = 2;
