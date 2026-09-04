@@ -47,7 +47,7 @@ def load_diag_histories(args, term):
         )
 
     ## or: just keep the n_rooms/2 best, and then repeat each 2 times
-    n_repeats = 2
+    n_repeats = 4
     sel = sel.head(args.n_rooms // n_repeats)
     sel = pd.concat([sel] * n_repeats, ignore_index=True)
 
@@ -93,7 +93,7 @@ def main():
             f'{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_'
             f'{args.alpha}alpha_{args.cost}_cost_{term}')
     if args.preset_histories:
-        stem += f'_preset_{args.n_rooms}rooms'
+        stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq'
 
     if args.gen_data:
         print('EMP RECOVERY')
