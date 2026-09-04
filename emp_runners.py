@@ -46,20 +46,20 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
         Q_func = _emp_bellman_Q
 
         ## current empowerment for one belief context at one ell
-        def _leaf_emp(ctx, e, canon_C):
+        def _leaf_emp(ctx, e, counts):
             agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e,
                                         termination_arm=termination_arm, cost=cost
                                         )
-            return agent.leaf_value(canon_C)
+            return agent.leaf_value(counts)
         
     else:
         agent_type = 'info'
         Q_func = _info_bellman_Q
-        def _leaf_emp(ctx, e, canon_C):
+        def _leaf_emp(ctx, e, counts):
             agent = InfoSeekingAgent(n_arms, n_outcomes, ctx,
                                         termination_arm=termination_arm, cost=cost
                                         )
-            return agent.leaf_value(canon_C)
+            return agent.leaf_value(counts)
 
     # for pid in df_ppt['subject_id'].unique():
     if verbose:
@@ -71,15 +71,15 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
 
         for r in range(n_rooms):
             df_pr = df_p.loc[df_p['room'] == r]
-            canon_C = np.zeros((n_arms, n_outcomes), dtype=int)
+            counts = np.zeros((n_arms, n_outcomes), dtype=int)
 
-            ## fill in canon_C with the actual counts from the participant's history up to init_t
+            ## fill in counts with the actual counts from the participant's history up to init_t
             for t in range(init_t):
                 row_df = df_pr.loc[df_pr['trial'] == t]
                 if not row_df['terminated'].values[0]:
                     actual_action = row_df['action'].values[0]
                     actual_outcome =row_df['outcome'].values[0]
-                    canon_C[actual_action, actual_outcome] += 1
+                    counts[actual_action, actual_outcome] += 1
                 
                     ## since we're not simulating the agent for these trials, fill with nans
                     actual_action = n_arms
@@ -112,13 +112,14 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
                 else:
                     break
 
+            last_action = np.nan
             for t in range(init_t, n_trials):
                 row_df = df_pr.loc[df_pr['trial'] == t]
                 if not row_df.empty:
                     h = (n_trials - t) if horizon is None else min(horizon, n_trials - t)
 
                     Q = Q_func(n_arms, n_outcomes, contexts, ell,
-                                        termination_arm, canon_C, h, cost = cost,
+                                        termination_arm, counts, h, cost = cost,
                                         )
 
                     max_Q = np.nanmax(Q)
@@ -127,7 +128,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
                     probs = _softmax(Q/temp)
 
                     ## calculate current emp
-                    current_emp = _leaf_emp(contexts, ell, canon_C)
+                    current_emp = _leaf_emp(contexts, ell, counts)
 
                     if row_df['terminated'].values[0]:
                         terminated = True
@@ -145,11 +146,36 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
                             chose_a2 = np.nan
                     else:
                         terminated=False
-                        actual_action = row_df['action'].values[0]
-                        actual_outcome = row_df['outcome'].values[0]
 
-                        ## update canon_C for next trial
-                        canon_C[actual_action, actual_outcome] += 1
+                        ## yoked
+                        # actual_action = row_df['action'].values[0]
+                        # actual_outcome = row_df['outcome'].values[0]
+
+                        ## unyoked
+                        actual_action = action
+                        trueT = row_df['trueT'].values[0]
+                        actual_outcome = int(np.random.choice(n_outcomes, p=trueT[action]))
+
+
+                        ## some useful measures for comparing with humans
+                        least_sampled_counts = np.min(counts.sum(axis=1))
+                        most_sampled_counts = np.max(counts.sum(axis=1))
+                        chose_least_sampled = action in np.where(counts.sum(axis=1) == least_sampled_counts)[0]
+                        p_chose_least_sampled = probs[np.where(counts.sum(axis=1) == least_sampled_counts)[0]].max()
+                        if t>0:
+                            repeat_choice = action == last_action
+                            p_repeat_choice = probs[last_action] if not np.isnan(last_action) else np.nan
+                        else:
+                            repeat_choice = np.nan
+                            p_repeat_choice = np.nan
+                        last_action = actual_action ## i.e. see if the agent repeats what the participant did
+
+                        ## update counts for next trial
+                        counts[actual_action, actual_outcome] += 1
+
+                        ## counts post diff - i.e. diff between the two arms
+                        if n_arms == 2:
+                            counts_post_diff = np.abs(counts[0].sum() - counts[1].sum())
 
                         ### map onto each of a0, a1 etc.
 
@@ -208,6 +234,11 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
                         'chose_a2': chose_a2 if n_arms > 2 else np.nan,
                         'p_choice_a2': p_a2 if n_arms > 2 else np.nan,
                         'Q_a2': Q_a2 if n_arms > 2 else np.nan,
+                        'chose_least_sampled': chose_least_sampled,
+                        'p_chose_least_sampled': p_chose_least_sampled,
+                        'repeat_choice': repeat_choice,
+                        'p_repeat_choice': p_repeat_choice,
+                        'emp_counts_post_diff': counts_post_diff if n_arms == 2 else np.nan,
                     }
                     if termination_arm:
                         row['Q_terminate'] = Q[-1]
@@ -220,6 +251,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
                     break
         pbar.update(1) if verbose else None
 
+    df_ell = pd.DataFrame.from_records(records)
 
 
     ## merge
@@ -227,21 +259,34 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
         # ### concat
 
     # ## ensure all columns are present
-    # for col in df_ell.columns:
-    #     if col not in df_ppt.columns:
-    #         df_ppt[col] = np.nan
-    # df_ppt['ell'] = 'human'
-    # df_full = pd.concat([df_ppt, df_ell], ignore_index=True, sort=False)
-    df_ell = pd.DataFrame.from_records(records)
-    df_ell = df_ell.rename(columns={'chose_a0': 'ell'+str(ell)+'_chose_a0', 'chose_a1': 'ell'+str(ell)+'_chose_a1', 
-                                    'chose_a2': 'ell'+str(ell)+'_chose_a2' if n_arms > 2 else np.nan,
-                                    'p_choice_a0': 'ell'+str(ell)+'_p_choice_a0', 'p_choice_a1': 'ell'+str(ell)+'_p_choice_a1',
-                                    'p_choice_a2': 'ell'+str(ell)+'_p_choice_a2' if n_arms > 2 else np.nan,
-                                    'Q_a0': 'ell'+str(ell)+'_Q_a0', 'Q_a1': 'ell'+str(ell)+'_Q_a1', 
-                                    'Q_a2': 'ell'+str(ell)+'_Q_a2' if n_arms > 2 else np.nan,
-                                    'current_emp': 'ell'+str(ell)+'_current_emp',
-                                    'Q_terminate': 'ell'+str(ell)+'_Q_terminate', 'p_terminate': 'ell'+str(ell)+'_p_terminate'})
-    df_full = df_ppt.merge(df_ell, on=['subject_id', 'room', 'trial'], how='left')
+    for col in df_ell.columns:
+        if col not in df_ppt.columns:
+            df_ppt[col] = np.nan
+    df_ppt['ell'] = 'human'
+    df_ppt['agent'] = 'human'
+    df_ell.loc[df_ell['ell'].isnull(), 'agent'] = 'info'
+    df_ell.loc[~df_ell['ell'].isnull(), 'agent'] = 'emp'
+    df_full = pd.concat([df_ppt, df_ell], ignore_index=True, sort=False)
+
+
+    
+    # df_ell = df_ell.rename(columns={'chose_a0': 'ell'+str(ell)+'_chose_a0', 'chose_a1': 'ell'+str(ell)+'_chose_a1', 
+    #                                 'chose_a2': 'ell'+str(ell)+'_chose_a2' if n_arms > 2 else np.nan,
+    #                                 'p_choice_a0': 'ell'+str(ell)+'_p_choice_a0', 'p_choice_a1': 'ell'+str(ell)+'_p_choice_a1',
+    #                                 'p_choice_a2': 'ell'+str(ell)+'_p_choice_a2' if n_arms > 2 else np.nan,
+    #                                 'Q_a0': 'ell'+str(ell)+'_Q_a0', 'Q_a1': 'ell'+str(ell)+'_Q_a1', 
+    #                                 'Q_a2': 'ell'+str(ell)+'_Q_a2' if n_arms > 2 else np.nan,
+    #                                 'current_emp': 'ell'+str(ell)+'_current_emp',
+    #                                 'Q_terminate': 'ell'+str(ell)+'_Q_terminate', 'p_terminate': 'ell'+str(ell)+'_p_terminate'})
+    # df_ell = df_ell.rename(columns={'chose_a0': 'ell_chose_a0', 'chose_a1': 'ell_chose_a1', 
+    #                                 'chose_a2': 'ell_chose_a2' if n_arms > 2 else np.nan,
+    #                                 'p_choice_a0': 'ell_p_choice_a0', 'p_choice_a1': 'ell_p_choice_a1',
+    #                                 'p_choice_a2': 'ell_p_choice_a2' if n_arms > 2 else np.nan,
+    #                                 'Q_a0': 'ell_Q_a0', 'Q_a1': 'ell_Q_a1', 
+    #                                 'Q_a2': 'ell_Q_a2' if n_arms > 2 else np.nan,
+    #                                 'current_emp': 'ell_current_emp',
+    #                                 'Q_terminate': 'ell_Q_terminate', 'p_terminate': 'ell_p_terminate'})
+    # df_full = df_ppt.merge(df_ell, on=['subject_id', 'room', 'trial'], how='left')
     return df_full
     
 
@@ -1270,13 +1315,47 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
 
 ### fitting functions
 
-## parallelised fitting 
-def fit_emp(df_ppt, 
+## the empowerment agent, optionally split by where ell sits relative to 1
+EMP_AGENT_TYPES = ('emp', 'emp_lo', 'emp_1', 'emp_hi')
+
+
+def emp_ell_bounds(agent_type, ell_bounds, eps=1e-3):
+    """Restrict `ell_bounds` to the slice of ell that `agent_type` occupies.
+
+    'emp' keeps the full range, as before. The split types carve it at ell=1:
+    'emp_lo' takes the compressive region (ell<1, breadth of reachable
+    outcomes), 'emp_hi' the expansive one (ell>1, control over individual
+    outcomes), and 'emp_1' pins ell=1 so only temp is free. `eps` keeps the two
+    open types strictly off 1, so a fit that runs to the boundary stays
+    distinguishable from 'emp_1'.
+
+    Returns (lo, hi); lo == hi for the pinned type.
+    """
+    lo, hi = float(ell_bounds[0]), float(ell_bounds[1])
+    if agent_type == 'emp':
+        return (lo, hi)
+    if agent_type == 'emp_1':
+        return (1.0, 1.0)
+    if agent_type == 'emp_lo':
+        bounds = (lo, min(hi, 1.0 - eps))
+    elif agent_type == 'emp_hi':
+        bounds = (max(lo, 1.0 + eps), hi)
+    else:
+        raise ValueError(f"unknown empowerment agent type {agent_type!r}; "
+                         f"expected one of {EMP_AGENT_TYPES}")
+    if bounds[0] >= bounds[1]:
+        raise ValueError(f"ell_bounds {tuple(ell_bounds)} leave no room for "
+                         f"'{agent_type}'")
+    return bounds
+
+
+## parallelised fitting
+def fit_emp(df_ppt,
             # ell_bounds=(0.1, 5.0), temp_bounds=(0.1, 10.0),
             param_bounds, agent_types=['emp', 'info'],
                            horizon=None, init_t=0,
-                           maxiter=200, tol=1e-6, n_jobs=-1, 
-                           verbose=True):
+                           maxiter=200, tol=1e-6, n_jobs=-1,
+                           ell_eps=1e-3, verbose=True):
     """
     Parallelized version of fit_emp_model using joblib.
 
@@ -1284,8 +1363,14 @@ def fit_emp(df_ppt,
     -----------
     df_ppt : pd.DataFrame
         Participant data
-    ell_bounds, temp_bounds : tuples
-        Parameter bounds
+    param_bounds : (ell_bounds, temp_bounds)
+        Parameter bounds, each a (lo, hi) tuple.
+    agent_types : list of str
+        Models to fit, one row per subject each. 'info' is the info-seeking
+        agent (temp only); 'emp' the empowerment agent over the full ell range.
+        Passing 'emp_lo' / 'emp_1' / 'emp_hi' instead of 'emp' splits it into
+        three types by ell<1, ell=1 (a one-parameter model) and ell>1; see
+        `emp_ell_bounds`.
     horizon : int or None
     k : float
     init_t : int
@@ -1296,6 +1381,8 @@ def fit_emp(df_ppt,
     tol : float
     n_jobs : int
         Number of parallel jobs (-1 = all cores)
+    ell_eps : float
+        Margin keeping 'emp_lo'/'emp_hi' off ell=1.
     verbose : bool
 
     Returns:
@@ -1305,11 +1392,13 @@ def fit_emp(df_ppt,
     pids = df_ppt['subject_id'].unique()
     df_fits = pd.DataFrame()
     for agent_type in agent_types:
-        if agent_type == 'emp':
-            ell_bounds, temp_bounds = param_bounds
-        elif agent_type == 'info':
+        if agent_type == 'info':
             ell_bounds, temp_bounds = (None, None), param_bounds[1]
-        with tqdm_joblib(tqdm(total=len(pids), desc="Fitting", disable=not verbose)):
+        else:
+            ell_bounds = emp_ell_bounds(agent_type, param_bounds[0], eps=ell_eps)
+            temp_bounds = param_bounds[1]
+        with tqdm_joblib(tqdm(total=len(pids), desc=f"Fitting {agent_type}",
+                              disable=not verbose)):
             results = Parallel(n_jobs=n_jobs)(
                 delayed(_fit_ppt)(
                     pid=pid,
@@ -1320,7 +1409,8 @@ def fit_emp(df_ppt,
                     init_t=init_t,
                     maxiter=maxiter,
                     tol=tol,
-                    verbose=False  # avoid duplicate/interleaved worker prints
+                    verbose=False,
+                    agent_type=agent_type
                 )
                 for pid in pids
             )
@@ -1330,7 +1420,7 @@ def fit_emp(df_ppt,
             df_fits = pd.concat([df_fits, pd.DataFrame(results)], ignore_index=True)
     return df_fits
 def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
-             init_t, maxiter, tol, verbose,
+             init_t, maxiter, tol, verbose, agent_type=None,
              popsize=15, mutation=(0.5, 1), recombination=0.7, seed=None):
     """
     Fit model for a single subject using differential evolution.
@@ -1340,22 +1430,27 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
     design = _design_from_df(df_ppt)
     rooms = _rooms_from_df(df_ppt)
 
+    ## emp vs info agent, and which parameters the optimiser actually searches
+    if agent_type is None:
+        agent_type = 'info' if ell_bounds[0] is None else 'emp'
+    fixed_ell = None
+    if agent_type == 'info':
+        bounds = [temp_bounds]
+    elif ell_bounds[0] == ell_bounds[1]: ## ell pinned, e.g. 'emp_1'
+        fixed_ell = float(ell_bounds[0])
+        bounds = [temp_bounds]
+    else:
+        bounds = [ell_bounds, temp_bounds]
+
     def compute_nll(params):
-        if len(params) == 1: ## info-seeking agent
-            ell = None
+        if len(params) == 1: ## info-seeking agent, or emp with ell pinned
+            ell = fixed_ell
             temp = params[0]
         else: ## empowerment agent
             ell, temp = params
 
         return _nll_from_rooms(rooms, design, ell, temp, horizon, init_t)
 
-    ## emp vs info agent
-    if ell_bounds[0] is not None:
-        agent_type = 'emp'
-        bounds = [ell_bounds, temp_bounds]
-    elif ell_bounds[0] is None:
-        agent_type = 'info'
-        bounds = [temp_bounds]
     res = differential_evolution(
         func=compute_nll,
         bounds=bounds,
@@ -1371,7 +1466,7 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
         disp=False
     )
     if len(res.x) == 1:
-        ell_hat = None
+        ell_hat = fixed_ell
         temp_hat = res.x[0]
     else:
         ell_hat, temp_hat = res.x
@@ -1380,12 +1475,15 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
 
     ## calculate n_trials from the scored count
     n_fit_trials = len(df_ppt.loc[df_ppt['trial'] >= init_t])
+    n_free_params = len(bounds) ## temp, plus ell wherever it is free
+    BIC = n_free_params*np.log(n_fit_trials) + 2*nll
 
     return {
         'subject_id': pid,
         'ell': ell_hat,
         'temp': temp_hat,
         'nll': nll,
+        'BIC': BIC,
         'success': success,
         'n_trials': n_fit_trials,
         'agent_type': agent_type
