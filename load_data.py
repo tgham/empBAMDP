@@ -221,17 +221,19 @@ def _sample_df(trials, session):
     df['counts_post_red'] = df['counts_post_red_up'] + df['counts_post_red_down'] + df['counts_post_red_left'] + df['counts_post_red_right']
     df['counts_post_blue'] = df['counts_post_blue_up'] + df['counts_post_blue_down'] + df['counts_post_blue_left'] + df['counts_post_blue_right']
     df['counts_post_green'] = df['counts_post_green_up'] + df['counts_post_green_down'] + df['counts_post_green_left'] + df['counts_post_green_right']
-    # df['counts_diff'] = np.abs(df['counts_red'] - df['counts_blue'])
-    # df['counts_post_diff'] = np.abs(df['counts_post_red'] - df['counts_post_blue'])
+    if n_arms == 2:
+        df['counts_diff'] = np.abs(df['counts_red'] - df['counts_blue'])
+        df['counts_post_diff'] = np.abs(df['counts_post_red'] - df['counts_post_blue'])
 
     df['chosen_counts'] = np.nan
     df['unchosen_counts'] = np.nan
     df.loc[df['chosen_button'] == 'red', 'chosen_counts'] = df['counts_red']
     df.loc[df['chosen_button'] == 'blue', 'chosen_counts'] = df['counts_blue']
     df.loc[df['chosen_button'] == 'green', 'chosen_counts'] = df['counts_green']
-    # df.loc[df['chosen_button'] == 'red', 'unchosen_counts'] = df['counts_blue']
-    # df.loc[df['chosen_button'] == 'blue', 'unchosen_counts'] = df['counts_red']
-    # df['chosen_counts_diff'] = df['chosen_counts'] - df['unchosen_counts']
+    if n_arms == 2:
+        df.loc[df['chosen_button'] == 'red', 'unchosen_counts'] = df['counts_blue']
+        df.loc[df['chosen_button'] == 'blue', 'unchosen_counts'] = df['counts_red']
+        df['chosen_counts_diff'] = df['chosen_counts'] - df['unchosen_counts']
     df['chosen_counts_fraction'] = df['chosen_counts'] / (df['counts_red'] + df['counts_blue'] + df['counts_green'])
     df['max_counts'] = df[['counts_red', 'counts_blue', 'counts_green']].max(axis=1)
     df['max_counts_fraction'] = df[['counts_red', 'counts_blue', 'counts_green']].max(axis=1) / (df['counts_red'] + df['counts_blue'] + df['counts_green'])
@@ -279,10 +281,12 @@ def _sample_df(trials, session):
     df.loc[df['chosen_button'] == 'red', 'entropy_chosen'] = df['entropy_red']
     df.loc[df['chosen_button'] == 'blue', 'entropy_chosen'] = df['entropy_blue']
     df.loc[df['chosen_button'] == 'green', 'entropy_chosen'] = df['entropy_green']
-    # df['entropy_unchosen'] = np.nan
-    # df.loc[df['chosen_button'] == 'red', 'entropy_unchosen'] = df['entropy_blue']
-    # df.loc[df['chosen_button'] == 'blue', 'entropy_unchosen'] = df['entropy_red']
-    # df.loc[df['chosen_button'] == 'green', 'entropy_unchosen'] = df['entropy_blue']
+
+    if n_arms == 2:
+        df['entropy_unchosen'] = np.nan
+        df.loc[df['chosen_button'] == 'red', 'entropy_unchosen'] = df['entropy_blue']
+        df.loc[df['chosen_button'] == 'blue', 'entropy_unchosen'] = df['entropy_red']
+        df.loc[df['chosen_button'] == 'green', 'entropy_unchosen'] = df['entropy_blue']
 
     ## info on number of different outcomes observed for each button
     df['n_diff_outcomes_red'] = df[['counts_red_up', 'counts_red_down', 'counts_red_left', 'counts_red_right']].gt(0).sum(axis=1)

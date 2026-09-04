@@ -25,6 +25,20 @@ const N_REMAINING_TRIALS = 1;
 // Set to 0 for a cost-free version: nothing depletes, in the demo or the choice.
 // const SAMPLE_COST = 1 / (N_TRIALS + 1);
 const SAMPLE_COST = 0;
+// const SAMPLE_COST = 1/64;
+
+// TERMINATE: does this version of the design include the termination arm -- the
+// orange tick that ends testing early and moves straight on to the gold?
+//   true  -> the tick is drawn beside the room, explained in the instructions and
+//            quizzed in the comprehension check, exactly as before.
+//   false -> there is no tick anywhere: not in the task, not on any instruction
+//            slide, and the tick question is dropped from the quiz. The room is
+//            drawn without it (rather than behind an invisible placeholder), so
+//            it sits centred -- consistent across every screen, since TERMINATE
+//            is fixed for the whole session.
+// It must match the model the presets were generated under -- see PRESETS_FILE,
+// which picks the Termination / noTermination file off this flag.
+const TERMINATE = false;
 
 // Do the presses the participant WATCHES also spend the coin? true is the faithful
 // version (the model charges for every trial in the history); false gives the
@@ -160,11 +174,13 @@ function buildRoomPreset(history) {
 }
 
 // The presets file carries the arity it was generated for in its NAME -- the
-// notebook writes `expt/Experiment5/{n_arms}arms_{n_outcomes}outcomes_presets.json`.
+// notebook writes `expt/Experiment5/{n_arms}arms_{n_outcomes}outcomes_{term}_presets.json`.
 // We build the same name from the configured design, so N_BUTTONS/K_OUTCOMES pick
 // the matching file and a mismatch shows up as a 404 rather than as histories
 // silently mapped onto the wrong number of buttons or locations.
-const PRESETS_FILE = `${N_BUTTONS}arms_${K_OUTCOMES}outcomes_presets.json`;
+// TERMINATE picks the arm of the model the histories were generated under, using
+// the same "Termination"/"noTermination" tag the notebook writes into the name.
+const PRESETS_FILE = `rooms/${N_BUTTONS}arms_${K_OUTCOMES}outcomes_${TERMINATE ? "Termination" : "noTermination"}_presets.json`;
 
 // Reject anything the display could not honestly show: a history referring to a
 // button or a location this design does not have. `BUTTONS` and `OUTCOMES` are what

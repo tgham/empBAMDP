@@ -445,6 +445,7 @@ def plot_curves(
     eps_tie=1e-8,
     suptitle=None,
     info_seeker=False,
+    ML=False,
     save = True
 ):
     """Plot Q-value (or softmax-prob) curves across ell for each (history, t)
@@ -538,7 +539,10 @@ def plot_curves(
                     ax.set_title(f'{history_str}\np_ctx_0 = {sub["p_ctx_0"].iloc[0]:.3f}',
                                 fontsize=8)
             else:
-                ax.set_title(history_str, fontsize=8)
+                if ML:
+                    ax.set_title(f'{history_str}\nML = {sub["ML"].iloc[0]:.3f}', fontsize=8)
+                else:
+                    ax.set_title(history_str, fontsize=8)
             ax.grid(alpha=0.25, which='both')
             if i % ncols == 0:
                 ax.set_ylabel(y)
