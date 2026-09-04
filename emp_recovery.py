@@ -1,4 +1,4 @@
-from emp_runners import gen_emp, fit_emp
+from emp_runners import gen_emp, fit_emp, emp_ell_bounds
 from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canonicalise_histories
 import pandas as pd
 import numpy as np
@@ -73,7 +73,11 @@ def main():
     parser.add_argument('--agent_types', nargs='+', default=[
         'emp',
         'info'
-                                                              ])
+                                                              ],
+                        choices=['emp', 'emp_lo', 'emp_1', 'emp_hi', 'info'],
+                        help="Models to generate from and fit. Pass "
+                             "'emp_lo emp_1 emp_hi' in place of 'emp' to split "
+                             "the empowerment agent by ell<1, ell=1 and ell>1.")
     parser.add_argument('--gen_data', action='store_true')
     parser.add_argument('--termination_arm', action='store_true')
 
@@ -124,11 +128,13 @@ def main():
         def _gen_single_sim(sim_id, args, agent_type):
             
             ## Sample parameters 
-            if agent_type == 'emp':
-                # ell = np.random.uniform(*args.ell_bounds)
-                ell = np.exp(np.random.uniform(np.log(args.ell_bounds[0]), np.log(args.ell_bounds[1]))) ## sample ell from a log-uniform distribution
-            elif agent_type == 'info':
+            if agent_type == 'info':
                 ell = None
+            else:
+                ## ell from a log-uniform distribution over this type's slice
+                ## of the bounds (the whole range for 'emp', ell=1 for 'emp_1')
+                lo, hi = emp_ell_bounds(agent_type, args.ell_bounds)
+                ell = lo if lo == hi else float(np.exp(np.random.uniform(np.log(lo), np.log(hi))))
             temp = np.random.uniform(*args.temp_bounds)
 
             # Generate data
