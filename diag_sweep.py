@@ -13,7 +13,7 @@ def main():
     parser.add_argument('--n_trials', type=int, default=6)
     parser.add_argument('--n_jobs', type=int, default=-1)
     parser.add_argument('--horizons', type=int, nargs='+', default=None)
-    parser.add_argument('--alphas', type=float, nargs='+', default=[0.1, 0.5, 1])
+    parser.add_argument('--alphas', type=float, nargs='+', default=[0.25])
     parser.add_argument('--termination_arm', action='store_true')
     parser.add_argument('--contexts', type=float, nargs='+', default=None)
     parser.add_argument('--context_prior', type=float, nargs='+', default=None)
@@ -22,7 +22,8 @@ def main():
     parser.add_argument('--costs', type=float, nargs='+', default=[0])
 
     ## diagnosticity-specific: the ell prior and the choice policy
-    parser.add_argument('--n_samples', type=int, default=200)
+    parser.add_argument('--n_ell_samples', type=int, default=200)
+    parser.add_argument('--n_seq_samples', type=int, default=0)
     parser.add_argument('--temp_emp', type=float, default=1.0)
     parser.add_argument('--temp_info', type=float, default=1.0)
     parser.add_argument('--prior_mu', type=float, default=0.0)
@@ -56,8 +57,8 @@ def main():
         independent_contexts=args.independent_contexts,
         termination_arm=args.termination_arm, temp_emp=args.temp_emp,
         horizons=args.horizons, costs=args.costs,
-        n_samples=args.n_samples, prior_mu=args.prior_mu,
-        prior_sigma=args.prior_sigma, sampling=args.sampling, seed=args.seed,
+        n_ell_samples=args.n_ell_samples, n_seq_samples=args.n_seq_samples,
+        prior_mu=args.prior_mu, prior_sigma=args.prior_sigma, sampling=args.sampling, seed=args.seed,
         init_t=args.init_t, n_jobs=args.n_jobs,
         target=args.target, temp_info=args.temp_info,
         p_model=tuple(args.p_model),
