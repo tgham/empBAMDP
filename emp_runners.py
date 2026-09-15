@@ -380,12 +380,6 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
                 action = int(np.random.choice(len(probs), p=probs))
             (_, outcome), _, terminated, truncated, _ = env.step(action)
 
-
-            ## convert termination idx
-            if termination_arm and action == n_arms:
-                action = -1
-
-
             ## calculate max counts fraction - i.e. the action that has been sampled the most, divided by total samples
             max_counts_fraction = np.max(counts.sum(axis=1)) / np.sum(counts) if np.sum(counts) > 0 else 0.0
 
@@ -396,7 +390,7 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
             sim_out['history_0'].append(repr(history_0))
             sim_out['action'].append(action)
             sim_out['outcome'].append(outcome)
-            sim_out['terminated'].append(action == -1 if termination_arm else False)
+            sim_out['terminated'].append(action == n_arms if termination_arm else False)
             sim_out['counts_array'].append(counts.copy())
             sim_out['max_counts_fraction'].append(max_counts_fraction)
             for a in range(n_arms):
@@ -406,8 +400,9 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
                 sim_out['Q_terminate'].append(Q[-1])
                 sim_out['p_terminate'].append(probs[-1])
 
-            ## update counts
-            counts[action, outcome] += 1
+            ## update counts if no termination
+            if action != n_arms:
+                counts[action, outcome] += 1
 
             ## score on current probability of reward - i.e. emp_1
             ell_1 = ell_1_agent.leaf_value(counts)
@@ -426,11 +421,11 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
     return sim_out
 
 
-def _emp_rows_for_history(t, canon_C, canon_counts, history_str, orbit_size, horizon,
+def _emp_rows_for_history(t, counts_array, canon_counts, history_str, orbit_size, horizon,
                           n_arms, n_outcomes, n_trials, alpha, termination_arm, ells, temp):
     """Per-(canonical history, ell) empowerment / Q / probs / deltas rows."""
     init_alphas = np.full((n_arms, n_outcomes), float(alpha))
-    alphas = init_alphas + canon_C
+    alphas = init_alphas + counts_array
     h_remaining = np.min([horizon, n_trials - t])
 
     ## info-seeking agent: Bayes-adaptive minimisation of end-state posterior variance (ell-free)
@@ -686,16 +681,16 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     sweep_tasks = [task for task in sweep_tasks if task[0] >= init_t] ## skip first init_t trials (uninteresting + costly)
 
     ## function for quickly getting current empowerment for one belief state at one ell
-    def _leaf_emp(ctx, e, canon_C, cost):
+    def _leaf_emp(ctx, e, counts_array, cost):
         agent = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=e, 
                                  termination_arm=termination_arm, cost=cost,
                                  independent_contexts=independent_contexts)
-        return agent.leaf_value(canon_C)
+        return agent.leaf_value(counts_array)
     
     ## function for quickly getting current MSE for one belief state
-    def _leaf_mse(ctx, canon_C, cost):
+    def _leaf_mse(ctx, counts_array, cost):
         agent = InfoSeekingAgent(n_arms, n_outcomes, ctx, termination_arm=termination_arm, cost=cost)
-        return agent.leaf_value(canon_C)
+        return agent.leaf_value(counts_array)
 
     
     ### cost info
@@ -710,53 +705,53 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
         for horizon in horizons:
             for i in tqdm(range(len(sweep_tasks)), desc=f"Enumerating curves (alpha={alpha_label})"):
                 t, history_str, e_lo, e_hi = sweep_tasks[i]
-                canon_C = states_by_t_and_h[(t, history_str)]
+                counts_array = states_by_t_and_h[(t, history_str)]
                 h_remaining = int(np.min([horizon, n_trials - t]))
                 sample_ells = np.logspace(np.log10(e_lo), np.log10(e_hi), n_ell_samples)
 
                 ## get LML of history
-                LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining, cost=0.0, independent_contexts=independent_contexts)
+                LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, counts_array, h_remaining, cost=0.0, independent_contexts=independent_contexts)
 
                 ## posterior prob of context if unknown
                 if context_set.startswith('ctx'):
                     agent_tmp = EmpowermentAgent(n_arms, n_outcomes, ctx, ell=sample_ells[0],
                                                  termination_arm=termination_arm,
                                                  independent_contexts=independent_contexts)
-                    p_ctx = agent_tmp.context_posterior(canon_C)
+                    p_ctx = agent_tmp.context_posterior(counts_array)
                 else: # known context, so no posterior needed
                     p_ctx = np.array([1.0])
 
                 ## get info-seeker's current MSE (no cost)
-                current_info_cost_free = _leaf_mse(ctx, canon_C, cost=0.0)
+                current_info_cost_free = _leaf_mse(ctx, counts_array, cost=0.0)
 
                 ## loop through costs
                 for cost in costs:
 
                     ## get info-seeker's current MSE
-                    current_info = _leaf_mse(ctx, canon_C, cost=cost)
+                    current_info = _leaf_mse(ctx, counts_array, cost=cost)
 
                     ## emp of current belief state for each ell agent, with and without cost
-                    current_emps = [_leaf_emp(ctx, e, canon_C, cost=cost) for e in sample_ells]
-                    current_emps_cost_free = [_leaf_emp(ctx, e, canon_C, cost=0.0) for e in sample_ells]
+                    current_emps = [_leaf_emp(ctx, e, counts_array, cost=cost) for e in sample_ells]
+                    current_emps_cost_free = [_leaf_emp(ctx, e, counts_array, cost=0.0) for e in sample_ells]
 
 
                     ### Q values
 
                     ## info-seeking agent (not parameterised by ell)
-                    info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining, cost=cost)
+                    info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, None, termination_arm, counts_array, h_remaining, cost=cost)
                     info_best_a = int(np.argmax(info_Q))
                     info_probs = _softmax(info_Q / temp)
 
                     ## empowerment agents (for each ell)
                     if n_jobs == 1:
                         Qs = [_emp_bellman_Q(n_arms, n_outcomes, ctx, e,
-                                             termination_arm, canon_C, h_remaining, cost=cost, 
+                                             termination_arm, counts_array, h_remaining, cost=cost, 
                                              independent_contexts=independent_contexts)
                             for e in sample_ells]
                     else:
                         Qs = Parallel(n_jobs=n_jobs)(
                             delayed(_emp_bellman_Q)(n_arms, n_outcomes, ctx, e,
-                                                    termination_arm, canon_C, h_remaining, cost=cost,
+                                                    termination_arm, counts_array, h_remaining, cost=cost,
                                                     independent_contexts=independent_contexts)
                             for e in sample_ells
                         )
@@ -919,10 +914,12 @@ def _mi_from_policies(P, check=True):
     return H_marg, H_cond, mi
 
 
-def _diag_emp_row(t, canon_C, canon_counts, history_str,
+def _diag_emp_row(t, counts_array, canon_counts, history_str,
                           ell_samples, n_arms, n_outcomes, n_trials, ctx,
                           alpha_label, context_set, independent_contexts,
-                          termination_arm, horizon, cost, temp, tie_tol=None):
+                          termination_arm, horizon, cost, temp, n_seq_samples = 0,
+                          tie_tol=None,
+                          ):
     """Per-canonical-history diagnosticity row. Module-level so joblib can pickle it.
 
     TIES: a hard argmax makes an ell whose top two Q's differ by 1e-9 look fully
@@ -964,6 +961,7 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
     ## init
     h_remaining = int(np.min([horizon, n_trials - t]))
     n_actions = n_arms + int(termination_arm)
+    alpha = float(ctx[0][0])
     tie_tol = float(np.log(3.0)) if tie_tol is None else float(tie_tol)
 
     ## grid sampling of ells
@@ -979,7 +977,7 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
         Qs = np.empty((n_ell, n_actions))
         for e, ell in enumerate(ell_samples):
             Q = _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm,
-                            canon_C, h_remaining, cost=cost,
+                            counts_array, h_remaining, cost=cost,
                             independent_contexts=independent_contexts)
             Qs[e] = Q
             P[e] = _softmax(Q / temp)
@@ -993,10 +991,38 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
     ## else, need to marginalise over sequences resulting from h
     else:
 
-        ## get all lists of (action, outcome) tuples for the remaining horizon
-        seqs = ao_sequences(n_arms, n_outcomes, h_remaining, termination_arm=termination_arm)
+        ## sample seqs to approximate expectation
+        if n_seq_samples > 0:
+            seqs = []
+
+            ## sample another ell from grid
+            for s in range(n_seq_samples):
+                ell_s = np.random.choice(ell_samples, p=ell_w0s)                
+
+                ## generate a sequence of (action, outcome) tuples from the current belief state
+                sim_tmp = gen_emp(
+                    n_arms=n_arms,
+                    n_outcomes=n_outcomes,
+                    n_trials=n_trials,
+                    n_rooms=1,
+                    alpha=alpha,
+                    ell=ell_s,
+                    horizon=h_remaining,
+                    cost = cost,
+                    temp=temp,
+                    termination_arm=termination_arm,
+
+                    ## horizons task
+                    diag_histories=[canon_counts],
+                    n_subseq_trials=h_remaining
+                )
+                seq = [(a, o) for a, o in zip(sim_tmp['action'], sim_tmp['outcome'])]
+                seqs.append(seq)
+         
+        ## else calculate expectation directly over all sequences
+        else:
+            seqs = ao_sequences(n_arms, n_outcomes, h_remaining, termination_arm=termination_arm)
         n_seqs = len(seqs)
-        alpha = float(ctx[0][0])
         log_seq_Ps = np.zeros((n_seqs, n_ell))
         Qs = np.empty((n_ell, n_actions))
 
@@ -1005,7 +1031,7 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
             for s, seq in enumerate(seqs):
 
                 ## start from current history counts
-                seq_counts = canon_C.copy()
+                seq_counts = counts_array.copy()
                 log_seq_P = 0.0
 
                 ## get choice probs for the rest of the sequence
@@ -1024,7 +1050,7 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
                         Qs[e] = Q
 
                     ## outcome only relevant if no termination
-                    if at < n_arms:
+                    if (at < n_arms):
                         
                         ## get probability of outcome under this arm
                         aa = alpha + seq_counts[at]
@@ -1047,18 +1073,25 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
         # seq_marg = np.sum(seq_Ps * ell_w0s[None, :], axis=1)
         log_seq_marg = logsumexp(log_seq_Ps + ell_log_w0s[None, :], axis=1)
 
-        ## posterior weights: p(ell|h,seq) = w_0^g p(seq|h,ell_g) / p(seq|h)
-        # w_post = np.divide(seq_Ps * ell_w0s[None, :], seq_marg[:, None], out=np.zeros_like(seq_Ps), where=seq_marg[:, None] > 0)
-        w_post_log = log_seq_Ps + ell_log_w0s[None, :] - log_seq_marg[:, None]
+        ## posterior weights: p(ell|h,seq) \propto w_0^g p(seq|h,ell_g) 
+        w_post_log = log_seq_Ps + ell_log_w0s[None, :] 
+        w_post_log -= log_seq_marg[:, None]  #normalised
         w_post = np.exp(w_post_log)
 
         ## entropy of posterior weights: H(ell|h,seq) = -sum_g p(ell_g|h,seq) log p(ell_g|h,seq)
         H_ell_cond = _neg_p_log_p(w_post)
 
-        ## expected posterior entropy: E_seq[H(ell|h,seq)] = sum_seq p(seq|h) H(ell|h,seq)
-        H_ell_cond = float(np.exp(log_seq_marg) @ H_ell_cond)
+        ## expected posterior entropy: 
+        if n_seq_samples == 0:
+            # E_seq[H(ell|h,seq)] = sum_seq p(seq|h) H(ell|h,seq) (i.e. direct expectation)
+            H_ell_cond = float(np.exp(log_seq_marg) @ H_ell_cond)
+
+        else:
+            # E_seq[H(ell|h,seq)] = 1/S sum_seq H(ell|h,seq) (i.e. approx)
+            H_ell_cond = float(np.mean(H_ell_cond))
+
         mi = max(H_ell - H_ell_cond, 0.0)
-        # print('H_ell', H_ell, 'E_H_ell_cond', E_H_ell_cond, 'mi', mi)
+        print('H_ell', H_ell, 'E_H_ell_cond', H_ell_cond, 'mi', mi)
 
     ## which action(s) the diagnosticity comes from. `near_best[m, a]` is "a is
     ## among the best actions at ell_m"; an ell is decisive when that set is a
@@ -1073,7 +1106,7 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
     gap_temp = gap / temp
 
     ## get LML
-    LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining, cost=cost,
+    LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, counts_array, h_remaining, cost=cost,
                    independent_contexts=independent_contexts)
 
     row = {
@@ -1087,6 +1120,7 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
         'mi_norm': mi / np.log(n_actions),
         'n_ell_samples': n_ell,
         'LML': LML,
+        
         ## tie diagnostics
         'tie_tol': tie_tol,
         'tie_frac': float(1.0 - decisive.mean()),
@@ -1097,16 +1131,16 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
         'gap_median_temp': float(np.median(gap_temp)),
     }
     for a in range(n_arms):
-        row[f'p_marg_{a}'] = p_marg[a]
+        # row[f'p_marg_{a}'] = p_marg[a]
         row[f'best_a_frac_{a}'] = frac[a]
         row[f'best_a_frac_dec_{a}'] = frac_dec[a]
     if termination_arm:
-        row['p_marg_terminate'] = p_marg[-1]
+        # row['p_marg_terminate'] = p_marg[-1]
         row['best_a_frac_terminate'] = frac[-1]
         row['best_a_frac_dec_terminate'] = frac_dec[-1]
     return row
 
-def _diag_model_row(t, canon_C, canon_counts, history_str,
+def _diag_model_row(t, counts_array, canon_counts, history_str,
                     ell_samples, n_arms, n_outcomes, n_trials, ctx,
                     alpha_label, context_set, independent_contexts,
                     termination_arm, horizon, cost, temp_emp,
@@ -1170,7 +1204,7 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
     Qs_emp = np.empty((n_ell, n_actions))
     for m, ell in enumerate(ell_samples):
         Q = _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm,
-                           canon_C, h_remaining, cost=cost,
+                           counts_array, h_remaining, cost=cost,
                            independent_contexts=independent_contexts)
         Qs_emp[m] = Q
         P_emp[m] = _softmax(Q / temp_emp)
@@ -1179,7 +1213,7 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
 
     ## info-seeking agent: not parameterised by ell, so a single policy.
     info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, None, termination_arm,
-                             canon_C, h_remaining, cost=cost)
+                             counts_array, h_remaining, cost=cost)
     p_marg_info = _softmax(info_Q / temp_info)
     H_cond_info = float(_neg_p_log_p(p_marg_info)) # E_ell[H(A|h,info)] = H(A|h,info) because no ell-dependence
 
@@ -1235,7 +1269,7 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
     mi_norm = mi_model / H_M if H_M > 0 else 0.0
 
     ## get LML (belief-model property, shared by both agents)
-    LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, canon_C, h_remaining,
+    LML = _get_LML(n_arms, n_outcomes, ctx, None, termination_arm, counts_array, h_remaining,
                    cost=cost, independent_contexts=independent_contexts)
 
     row = {
@@ -1294,7 +1328,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             independent_contexts=False,
                             termination_arm=True, temp_emp=1.0, temp_info=1.0,
                             horizons=None, costs=(0.0,),
-                            n_samples=200, prior_mu=0.0, prior_sigma=1.0,
+                            n_ell_samples=200, n_seq_samples=100, prior_mu=0.0, prior_sigma=1.0,
                             sampling='grid', seed=None,
                             init_t=0, n_jobs=1,
                             target='ell', p_model=(0.5, 0.5), tie_tol=None):
@@ -1343,7 +1377,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     row_fn = _diag_emp_row if target == 'ell' else _diag_model_row
 
     ## shared ell sample from the truncated-normal prior
-    ell_samples = ell_prior_samples(n_samples, mu=prior_mu, sigma=prior_sigma,
+    ell_samples = ell_prior_samples(n_ell_samples, mu=prior_mu, sigma=prior_sigma,
                                     sampling=sampling, seed=seed)
 
     ## canonical histories, optionally skipping the first init_t trials
@@ -1374,7 +1408,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                         f"h={horizon}, cost={cost})")
                 args = (ell_samples, n_arms, n_outcomes, n_trials, ctx,
                         alpha_label, context_set, independent_contexts,
-                        termination_arm, horizon, cost, temp_emp)
+                        termination_arm, horizon, cost, temp_emp, n_seq_samples)
                 args = args + ((temp_info, p_model, tie_tol) if target == 'model'
                                else (tie_tol,))
                 if n_jobs == 1:
@@ -1424,9 +1458,9 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
     C = np.asarray(C, dtype=int)
     if n_arms is None or n_outcomes is None:
         n_arms, n_outcomes = C.shape
-    canon_C, _ = canonical_count_matrix(C)
-    canon_counts, history_str = array_to_hist(canon_C, n_arms, n_outcomes)
-    t = int(canon_C.sum())
+    counts_array, _ = canonical_count_matrix(C)
+    canon_counts, history_str = array_to_hist(counts_array, n_arms, n_outcomes)
+    t = int(counts_array.sum())
     if n_trials is None:
         n_trials = t + (t if horizon is None else horizon)
     if horizon is None:
@@ -1448,14 +1482,14 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
             alpha_label, context_set, independent_contexts,
             termination_arm, horizon, cost, temp_emp)
     if target == 'ell':
-        row = _diag_emp_row(t, canon_C, canon_counts, history_str, *args,
+        row = _diag_emp_row(t, counts_array, canon_counts, history_str, *args,
                             tie_tol=tie_tol)
     else:
-        row = _diag_model_row(t, canon_C, canon_counts, history_str, *args,
+        row = _diag_model_row(t, counts_array, canon_counts, history_str, *args,
                               temp_info=temp_info, p_model=p_model,
                               tie_tol=tie_tol)
     row['target'] = target
-    row['orbit_size'] = orbit_sequence_count(canon_C)
+    row['orbit_size'] = orbit_sequence_count(counts_array)
     row['prior_mu'] = prior_mu
     row['prior_sigma'] = prior_sigma
     return row
