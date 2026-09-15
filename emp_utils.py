@@ -769,3 +769,19 @@ def ell_tip(agent, env, a1, a2):
 
     return ell_switch
 
+
+## get all lists of (action, outcome) tuples for the remaining horizon (if termination_arm, keep sequences only until the termination action is chosen)
+def ao_sequences(n_arms, n_outcomes, n_trials, termination_arm=False):
+    if not termination_arm:
+        steps = [(a, o) for a in range(n_arms) for o in range(n_outcomes)]
+        return [list(s) for s in itertools.product(steps, repeat=n_trials)]
+
+    term = n_arms
+    steps = [(a, o) for a in range(term) for o in range(n_outcomes)]
+    seqs = []
+    for k in range(n_trials):                      # terminate after k real steps
+        for prefix in itertools.product(steps, repeat=k):
+            seqs.append([*prefix, (term, -1)])
+    seqs.extend(list(s) for s in                      # never terminate
+                itertools.product(steps, repeat=n_trials))
+    return seqs
