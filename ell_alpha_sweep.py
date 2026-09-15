@@ -46,7 +46,7 @@ def main():
                                  ell_hi=args.ell_hi, ell_lo=args.ell_lo,
                                  horizons=args.horizons,
                                  termination_arm=args.termination_arm,
-                                 n_jobs=args.n_jobs, n_ell_samples=args.n_ell_samples,
+                                 n_ell_samples=args.n_ell_samples,
                                  costs=args.costs,
                                     init_t=args.init_t
                                  )

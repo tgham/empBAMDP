@@ -293,7 +293,7 @@ def _(mo):
 @app.cell
 def _(np):
     ## runtime checks: for a given set of task params, how long does the computation of a single history take?
-    from emp_utils import EmpowermentAgent
+    from emp_models import EmpowermentAgent
     import time
 
     na = 2
@@ -305,7 +305,7 @@ def _(np):
 
     ## runtime for single trial
     start = time.perf_counter()
-    result = agent.bellman_Q(init_counts, nt)
+    result = agent.Q(init_counts, nt)
     elapsed = time.perf_counter() - start
     print(f"Elapsed: {elapsed:.6f} s")
 
@@ -315,7 +315,7 @@ def _(np):
     # for t in range(nt, 0, -1):
     for t in range(1,nt+1):
         print(t)
-        result = agent.bellman_Q(init_counts, t)
+        result = agent.Q(init_counts, t)
         elapsed_tmp = time.perf_counter() - start
         times.append(elapsed_tmp)
     elapsed = time.perf_counter() - start
