@@ -27,8 +27,8 @@ def main():
     parser.add_argument('--temp_info', type=float, default=1.0)
     parser.add_argument('--prior_mu', type=float, default=0.0)
     parser.add_argument('--prior_sigma', type=float, default=1.0)
-    parser.add_argument('--sampling', type=str, default='quantile',
-                        choices=['quantile', 'random'])
+    parser.add_argument('--sampling', type=str, default='grid',
+                        choices=['quantile', 'random','grid'])
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--target', type=str, default='ell',
                         choices=['ell', 'model'])
