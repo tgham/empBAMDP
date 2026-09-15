@@ -5,6 +5,7 @@ import pandas as pd
 from emp_utils import *
 from scipy.optimize import bisect, brentq, minimize, differential_evolution
 from scipy.special import softmax as _softmax
+from scipy.special import logsumexp
 from joblib import Parallel, delayed
 import warnings
 from tqdm_joblib import tqdm_joblib
@@ -140,6 +141,10 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
                         Q_a1 = np.nan
                         p_a1 = np.nan
                         chose_a1 = np.nan
+                        chose_least_sampled = np.nan
+                        p_chose_least_sampled = np.nan
+                        repeat_choice = np.nan
+                        p_repeat_choice = np.nan
                         if n_arms > 2:
                             Q_a2 = np.nan
                             p_a2 = np.nan
@@ -154,7 +159,10 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
                         ## unyoked
                         actual_action = action
                         trueT = row_df['trueT'].values[0]
-                        actual_outcome = int(np.random.choice(n_outcomes, p=trueT[action]))
+                        if actual_action < n_arms:
+                            actual_outcome = int(np.random.choice(n_outcomes, p=trueT[action]))
+                        else:
+                            actual_outcome = np.nan ## terminated
 
 
                         ## some useful measures for comparing with humans
@@ -171,7 +179,8 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
                         last_action = actual_action ## i.e. see if the agent repeats what the participant did
 
                         ## update counts for next trial
-                        counts[actual_action, actual_outcome] += 1
+                        if actual_outcome is not np.nan:
+                            counts[actual_action, actual_outcome] += 1
 
                         ## counts post diff - i.e. diff between the two arms
                         if n_arms == 2:
@@ -814,7 +823,17 @@ def ell_prior_samples(n_samples=200, mu=0.0, sigma=1.0, sampling='quantile', see
     elif sampling == 'random':
         return lognorm.rvs(sigma, scale=np.exp(mu), size=n_samples,
                            random_state=seed)
+    elif sampling =='grid':
+        z = np.linspace(-4, 4, n_samples)
+        ells = np.exp(z)
+        return ells
 
+def ell_weights(ells):
+    """Return the (normalised) lognormal prior weights for a given array of ells."""
+    z = np.log(ells)
+    log_pi = scipy.stats.norm.logpdf(z)
+    log_pi -= scipy.special.logsumexp(log_pi)
+    return np.exp(log_pi)
 
 def _neg_p_log_p(p):
     """-sum p log p along the last axis, treating 0 log 0 as 0 (nats)."""
@@ -836,17 +855,68 @@ def _top2_gap(V):
     return S[..., -1] - S[..., -2]
 
 
-def _mi_from_policies(P):
+
+def _mi_from_policies_reverse(P, ell_w0s=None):
+    P = np.asarray(P, dtype=float)
+
+    ## H(ell|h) = log M for M equal-weight samples
+    if ell_w0s is None:
+        H_ell = float(np.log(P.shape[0]))
+        
+        ## p(ell_m|h,a) = p(a|h,ell_m) / sum_m' p(a|h,ell_m') NB no need for p(ell_m) because the samples are equal weight
+        col = P.sum(axis=0, keepdims=True) # normalise each column
+        P_post = np.divide(P, col, out=np.zeros_like(P), where=col > 0)
+
+        ## p(a|h) = 1/M sum_m p(a|h,ell_m)
+        p_marg = P.mean(axis=0)
+
+    else:
+        H_ell = float(-np.sum(ell_w0s * np.log(ell_w0s + 1e-12)))
+        
+        ## p(ell_m|h,a) = p(a|h,ell_m) p(ell_m) / sum_m' p(a|h,ell_m')p(ell_m') NB no need for p(ell_m) because the samples are equal weight
+        col = (P * ell_w0s[:, None]).sum(axis=0, keepdims=True) # normalise each column
+        P_post = np.divide(P * ell_w0s[:, None], col, out=np.zeros_like(P), where=col > 0)
+
+        ## p(a|h) = sum_m p(a|h,ell_m) p(ell_m|h)
+        p_marg = np.sum(P * ell_w0s[:, None], axis=0)
+
+
+    ## E_a[H(ell|h,a)] = sum_a p(a|h) H(ell|h,a) 
+    H_ell_cond = float(p_marg @ _neg_p_log_p(P_post.T)) # transpose puts ell on the last axis for `_neg_p_log_p`. See docstring.
+
+    mi = max(H_ell - H_ell_cond, 0.0)
+    return H_ell, H_ell_cond, mi
+
+
+def _mi_from_policies(P, check=True):
     """(H_marg, H_cond, mi) from an (M, A) array of equal-weight policies.
 
     Row m is p(.|h, ell_m). `mi` is clipped at 0: it is non-negative in exact
     arithmetic, so any negative value is float noise.
+
+    `check=True` recomputes the same MI the other way round via
+    `_mi_from_policies_reverse` and asserts the two agree. Off by default: this
+    runs per canonical history inside a joblib-parallel sweep, so it is a
+    debugging switch rather than an always-on invariant.
     """
+
+    ## I(A; ell | h) = H(A|h) - E_ell[H(A|h,ell)]
     P = np.asarray(P, dtype=float)
     p_marg = P.mean(axis=0)                       # p(a|h), the ell-marginal
     H_marg = float(_neg_p_log_p(p_marg))          # H(A|h)
     H_cond = float(np.mean(_neg_p_log_p(P)))      # E_ell[H(A|h,ell)]
-    return H_marg, H_cond, max(H_marg - H_cond, 0.0)
+    mi = max(H_marg - H_cond, 0.0)
+
+    if check:
+        ## compare UNCLIPPED: both sides clip at 0, so on a history whose true
+        ## MI is ~0 the clip alone could hide a real mismatch.
+        H_ell, H_ell_cond, _ = _mi_from_policies_reverse(P)
+        fwd, rev = H_marg - H_cond, H_ell - H_ell_cond
+        assert np.isclose(fwd, rev, atol=1e-6), (
+            f"MI decompositions disagree: H(A|h) - E_ell[H(A|h,ell)] = {fwd} "
+            f"vs H(ell|h) - E_a[H(ell|h,a)] = {rev}")
+
+    return H_marg, H_cond, mi
 
 
 def _diag_emp_row(t, canon_C, canon_counts, history_str,
@@ -888,22 +958,107 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
     ALREADY tie-robust -- built from the softmax policies, near-indifferent ells
     barely move it.
     """
+    
+    ### I(A; ell | h) = H(A|h) - E_ell[H(A|h,ell)]
+
+    ## init
     h_remaining = int(np.min([horizon, n_trials - t]))
     n_actions = n_arms + int(termination_arm)
-    n_ell = len(ell_samples)
     tie_tol = float(np.log(3.0)) if tie_tol is None else float(tie_tol)
 
-    ## p(a|h,ell) for each sampled ell
-    P = np.empty((n_ell, n_actions))
-    Qs = np.empty((n_ell, n_actions))
-    for m, ell in enumerate(ell_samples):
-        Q = _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm,
-                           canon_C, h_remaining, cost=cost,
-                           independent_contexts=independent_contexts)
-        Qs[m] = Q
-        P[m] = _softmax(Q / temp)
-    H_marg, H_cond, mi = _mi_from_policies(P)
-    p_marg = P.mean(axis=0)
+    ## grid sampling of ells
+    n_ell = len(ell_samples)
+    ell_w0s = ell_weights(ell_samples)
+    ell_log_w0s = np.log(ell_w0s + 1e-12)
+
+    ## if just a single action, MI is taken over single step
+    if h_remaining == 1:
+
+        ## p(a|h,ell) for each sampled ell
+        P = np.empty((n_ell, n_actions))
+        Qs = np.empty((n_ell, n_actions))
+        for e, ell in enumerate(ell_samples):
+            Q = _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm,
+                            canon_C, h_remaining, cost=cost,
+                            independent_contexts=independent_contexts)
+            Qs[e] = Q
+            P[e] = _softmax(Q / temp)
+
+        ## I(A;ell|h)
+        H_ell, H_ell_cond, mi = _mi_from_policies_reverse(P, ell_w0s)
+        p_marg = P.mean(axis=0)
+
+        mi1 = mi
+
+    ## else, need to marginalise over sequences resulting from h
+    else:
+
+        ## get all lists of (action, outcome) tuples for the remaining horizon
+        seqs = ao_sequences(n_arms, n_outcomes, h_remaining, termination_arm=termination_arm)
+        n_seqs = len(seqs)
+        alpha = float(ctx[0][0])
+        log_seq_Ps = np.zeros((n_seqs, n_ell))
+        Qs = np.empty((n_ell, n_actions))
+
+        ## calculate choice probabilities for each point in the sequence
+        for e, ell in enumerate(ell_samples):
+            for s, seq in enumerate(seqs):
+
+                ## start from current history counts
+                seq_counts = canon_C.copy()
+                log_seq_P = 0.0
+
+                ## get choice probs for the rest of the sequence
+                for subseq_t in range(0, len(seq)):
+                    at,ot = seq[subseq_t]
+
+                    ## get choice probs for the next step
+                    Q = _emp_bellman_Q(n_arms, n_outcomes, ctx, ell, termination_arm,
+                                    seq_counts, h_remaining - subseq_t, cost=cost,
+                                    independent_contexts=independent_contexts)
+                    P = _softmax(Q / temp)
+                    log_seq_P += np.log(P[at])
+
+                    ## just save the first Qs for subsequent diagnosticity analysis
+                    if subseq_t == 0:
+                        Qs[e] = Q
+
+                    ## outcome only relevant if no termination
+                    if at < n_arms:
+                        
+                        ## get probability of outcome under this arm
+                        aa = alpha + seq_counts[at]
+                        ao_prob = aa / np.sum(aa)
+                        log_seq_P += np.log(ao_prob[ot])
+
+                        ## update counts with the next action/outcome
+                        seq_counts[at, ot] += 1
+
+                else: 
+                    ## terminate action has no outcome, so this should be the end of the sequence
+                    pass
+                log_seq_Ps[s, e] = log_seq_P
+        seq_Ps = np.exp(log_seq_Ps)
+        
+        ## entropy of prior weights: H(ell|h) = -sum_g w_0^g log w_0^g
+        H_ell = float(_neg_p_log_p(ell_w0s))
+
+        ## marginal over sequences: p(seq|h) = \sum_g w_0^g p(seq|h,ell_g)
+        # seq_marg = np.sum(seq_Ps * ell_w0s[None, :], axis=1)
+        log_seq_marg = logsumexp(log_seq_Ps + ell_log_w0s[None, :], axis=1)
+
+        ## posterior weights: p(ell|h,seq) = w_0^g p(seq|h,ell_g) / p(seq|h)
+        # w_post = np.divide(seq_Ps * ell_w0s[None, :], seq_marg[:, None], out=np.zeros_like(seq_Ps), where=seq_marg[:, None] > 0)
+        w_post_log = log_seq_Ps + ell_log_w0s[None, :] - log_seq_marg[:, None]
+        w_post = np.exp(w_post_log)
+
+        ## entropy of posterior weights: H(ell|h,seq) = -sum_g p(ell_g|h,seq) log p(ell_g|h,seq)
+        H_ell_cond = _neg_p_log_p(w_post)
+
+        ## expected posterior entropy: E_seq[H(ell|h,seq)] = sum_seq p(seq|h) H(ell|h,seq)
+        H_ell_cond = float(np.exp(log_seq_marg) @ H_ell_cond)
+        mi = max(H_ell - H_ell_cond, 0.0)
+        # print('H_ell', H_ell, 'E_H_ell_cond', E_H_ell_cond, 'mi', mi)
 
     ## which action(s) the diagnosticity comes from. `near_best[m, a]` is "a is
     ## among the best actions at ell_m"; an ell is decisive when that set is a
@@ -925,8 +1080,8 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
         'alpha': alpha_label, 'context_set': context_set,
         'horizon': horizon, 'cost': cost, 'temp': temp,
         't': t, 'history_str': history_str, 'history': canon_counts,
-        'H_A_h': H_marg,
-        'E_H_A_h_ell': H_cond,
+        'H_ell': H_ell,
+        'H_ell_cond': H_ell_cond,
         'mi': mi,
         'mi_bits': mi / np.log(2.0),
         'mi_norm': mi / np.log(n_actions),
@@ -940,7 +1095,6 @@ def _diag_emp_row(t, canon_C, canon_counts, history_str,
         'gap_min': float(gap.min()),
         'gap_mean_temp': float(gap_temp.mean()),
         'gap_median_temp': float(np.median(gap_temp)),
-        'p_best_mean': float(P.max(axis=1).mean()),
     }
     for a in range(n_arms):
         row[f'p_marg_{a}'] = p_marg[a]
@@ -1020,14 +1174,14 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
                            independent_contexts=independent_contexts)
         Qs_emp[m] = Q
         P_emp[m] = _softmax(Q / temp_emp)
-    H_marg_emp, H_cond_emp, mi_emp = _mi_from_policies(P_emp)
+    H_ell, H_cond_ell, mi_emp = _mi_from_policies_reverse(P_emp)
     p_marg_emp = P_emp.mean(axis=0)
 
     ## info-seeking agent: not parameterised by ell, so a single policy.
     info_Q = _info_bellman_Q(n_arms, n_outcomes, ctx, None, termination_arm,
                              canon_C, h_remaining, cost=cost)
     p_marg_info = _softmax(info_Q / temp_info)
-    H_marg_info = float(_neg_p_log_p(p_marg_info))   # H(A|h,info); I(A;ell|h,info) = 0
+    H_cond_info = float(_neg_p_log_p(p_marg_info)) # E_ell[H(A|h,info)] = H(A|h,info) because no ell-dependence
 
     ### margins -- see TIES. tie_tol is a log-odds threshold throughout.
     tie_tol = float(np.log(3.0)) if tie_tol is None else float(tie_tol)
@@ -1056,23 +1210,28 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
     info_tie = bool(gap_info_temp <= tie_tol)
     tvd = float(0.5 * np.abs(p_marg_emp - p_marg_info).sum())
 
-    ## E_m[H(A|h,m)] = sum_m p(m) H(A|h,m)
+
+    ### I(A;M|h) = H(M|h) - E_a[H(M|h,a)]
+
+    ## H(M|h) = -sum_m p(m|h) log p(m|h) = H(M) because the prior is independent of h
     p_m = np.asarray(p_model, dtype=float)
     p_m = p_m / p_m.sum()
-    H_cond_model = p_m[0] * H_marg_emp + p_m[1] * H_marg_info
+    H_M = float(_neg_p_log_p(p_m))
 
-    ## p(a|h) = sum_m p(m) p(a|h,m)
-    p_marg_model = p_m[0] * p_marg_emp + p_m[1] * p_marg_info
+    ## H(M|h,a) = -sum_m p(m|h,a) log p(m|h,a),
+    ## p(m|h,a)  = p(a|h,m) p(m) / sum_m' p(a|h,m') p(m')
+    p_marg_model = p_m[0] * p_marg_emp + p_m[1] * p_marg_info # p(a|h)
     H_marg_model = float(_neg_p_log_p(p_marg_model))
+    p_m_emp = p_marg_emp * p_m[0] / p_marg_model
+    p_m_info = p_marg_info * p_m[1] / p_marg_model
+    p_m_post = np.stack([p_m_emp, p_m_info], axis=0) # (M, A)
+    H_M_cond = _neg_p_log_p(p_m_post.T) # transpose puts a on the last axis
 
-    ## I(A;M|h) = H(A|h) - E_m[H(A|h,m)]
-    mi_model = max(H_marg_model - H_cond_model, 0.0)
-
-    ## I(A;M,ell|h) = H(A|h) - E_m[E_ell[H(A|h,ell,m)]] -- kept for the identity check
-    mi_joint = max(H_marg_model - (p_m[0] * H_cond_emp + p_m[1] * H_marg_info), 0.0)
+    ## E_a[H(M|h,a)] = sum_a p(a|h) H(M|h,a)
+    E_a_H_M_cond = float(p_marg_model @ H_M_cond) 
+    mi_model = max(H_M - E_a_H_M_cond, 0.0)
 
     ## normalise by H(M): I(A;M|h) <= min(H(A), H(M))
-    H_M = float(_neg_p_log_p(p_m))
     mi_norm = mi_model / H_M if H_M > 0 else 0.0
 
     ## get LML (belief-model property, shared by both agents)
@@ -1086,14 +1245,10 @@ def _diag_model_row(t, canon_C, canon_counts, history_str,
         'target': 'model',
         'p_model_emp': p_m[0],
         'H_A_h': H_marg_model,
-        'E_m_H_A_h': H_cond_model,
-        'H_A_h_emp': H_marg_emp,
-        'H_A_h_info': H_marg_info,
         'mi': mi_model,
         'mi_bits': mi_model / np.log(2.0),
         'mi_norm': mi_norm,
         'mi_ell': mi_emp,        # I(A;ell|h,emp) -- the _diag_emp_row quantity
-        'mi_joint': mi_joint,    # I(A;M,ell|h) = mi + p(emp)*mi_ell
         'n_ell_samples': n_ell,
         'LML': LML,
         ## tie diagnostics -- within emp (across ell)
@@ -1140,7 +1295,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             termination_arm=True, temp_emp=1.0, temp_info=1.0,
                             horizons=None, costs=(0.0,),
                             n_samples=200, prior_mu=0.0, prior_sigma=1.0,
-                            sampling='quantile', seed=None,
+                            sampling='grid', seed=None,
                             init_t=0, n_jobs=1,
                             target='ell', p_model=(0.5, 0.5), tie_tol=None):
     """Diagnosticity of every canonical history, for one of two targets.
