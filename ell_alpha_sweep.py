@@ -16,10 +16,7 @@ def main():
     parser.add_argument('--horizons', type=int, nargs='+', default=None)
     parser.add_argument('--alphas', type=float, nargs='+', default=[0.1, 0.5, 1])
     parser.add_argument('--termination_arm', action='store_true')
-    parser.add_argument('--contexts', type=float, nargs='+', default=None)
-    parser.add_argument('--context_prior', type=float, nargs='+', default=None)
     parser.add_argument('--init_t', type=int, default=0)
-    parser.add_argument('--independent_contexts', action='store_true')
     parser.add_argument('--costs', type=float, nargs='+',
                         default=[0])
 
@@ -28,9 +25,6 @@ def main():
     tag = ["noTermination", "Termination"][args.termination_arm]
     stem = f'useful_saves/sweep/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{tag}'
     max_emps_path = f'{stem}_max_emps.csv'
-
-    if args.contexts is not None:
-        stem += f'_unknown_contexts'
 
     ## run expt
     print('Running experiment with parameters:')
@@ -43,9 +37,6 @@ def main():
     print(f'  ell_hi: {args.ell_hi}')
     print(f'  alphas: {args.alphas}')
     print(f'  termination_arm: {args.termination_arm}')
-    print(f'  contexts: {args.contexts}')
-    print(f'  context_prior: {args.context_prior}')
-    print(f'  independent_contexts: {args.independent_contexts}')
     print(f'  costs: {args.costs}')
     print(f'  init_t: {args.init_t}')
     print(f'  n_jobs: {args.n_jobs}')
@@ -53,8 +44,7 @@ def main():
 
     df_curves = enumerate_curves(n_arms=args.n_arms, n_outcomes=args.n_outcomes, n_trials=args.n_trials, alphas=args.alphas,
                                  ell_hi=args.ell_hi, ell_lo=args.ell_lo,
-                                 horizons=args.horizons, independent_contexts=args.independent_contexts,
-                                context_prior=args.context_prior, contexts=args.contexts,
+                                 horizons=args.horizons,
                                  termination_arm=args.termination_arm,
                                  n_jobs=args.n_jobs, n_ell_samples=args.n_ell_samples,
                                  costs=args.costs,

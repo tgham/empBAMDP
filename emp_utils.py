@@ -63,62 +63,32 @@ def make_emp_env(n_arms=3, n_outcomes=5, n_trials=20, alpha=1.0, ell=1.0,
 
 
 class EmpAgent:
-    """Bayes-adaptive belief agent over a global Dirichlet context.
+    """Bayes-adaptive belief agent over a symmetric Dirichlet prior.
 
-    The agent's belief model is a list of `contexts`, each a (alpha, prior)
-    pair giving a symmetric Dirichlet concentration and its prior weight p(z).
+    Each arm's outcome distribution has its own Dir(alpha * 1_K) prior, so after
+    counts n the posterior predictive is
+    p(o|a,h) = (alpha + n_{a,o}) / sum_o'(alpha + n_{a,o'}).
 
-      - len(contexts) == 1  -> KNOWN context: a single Dirichlet posterior,
-        p(z|h) = 1 always. Reproduces the original single-alpha behaviour.
-      - len(contexts) >= 2  -> UNKNOWN context: the agent infers
-        p(z|h) = p(h|z) p(z) / sum_z p(h|z) p(z),
-        with the GLOBAL marginal likelihood p(h|z) = prod_a B(a_z + n_a)/B(a_z)
-        (all arms share one z), and acts on the MIXTURE posterior predictive
-        p(o|a,h) = sum_z p(z|h) (a_z + n_{a,o}) / sum_o'(a_z + n_{a,o'}).
-
-    State carried through the recursion is the RAW count matrix `counts`
-    (n_arms x n_outcomes), because under a global context observing (a,o)
-    shifts p(z|h) and hence the predictive for every arm -- summed alphas
-    cannot represent this. The recursion scaffold (expectation over outcomes
-    weighted by the mixture predictive, depth recursion, termination arm) is
-    shared; subclasses supply the objective via `leaf_value` and the
-    optimisation direction (`_opt` / `_worst`).
+    State carried through the recursion is the count matrix `counts`
+    (n_arms x n_outcomes). The recursion scaffold (expectation over outcomes
+    weighted by the predictive, depth recursion, termination arm) is shared;
+    subclasses supply the objective via `leaf_value` and the optimisation
+    direction (`_opt` / `_worst`).
     """
 
     ## objective hooks -- overridden by subclasses
     _worst = None              # initial "best" before optimisation (-inf / +inf)
 
-    def __init__(self, n_arms, n_outcomes, contexts, termination_arm=False, cost=0.0,
-                 independent_contexts=False):
+    def __init__(self, n_arms, n_outcomes, alpha, termination_arm=False, cost=0.0):
         self.n_arms = n_arms
         self.n_outcomes = n_outcomes
         self.termination_arm = bool(termination_arm)
-        ## independent_contexts: if True, each arm infers its OWN context posterior
-        ## p(z_a | n_a) from only that arm's counts (arms may be drawn from the same
-        ## or different priors). If False (default), a single GLOBAL posterior p(z|h)
-        ## is shared across all arms. No effect when single-context.
-        self.independent = bool(independent_contexts)
-        
+
         ## per-pull sampling cost, paid on every arm pull throughout the horizon.
         self.cost = float(cost)
 
-        alphas = np.array([float(a) for a, _ in contexts], dtype=float) ## i.e. the alpha for each context
-        priors = np.array([float(p) for _, p in contexts], dtype=float) ## i.e. the prior probability of each context
-        priors = priors / priors.sum()
-        self.alphas_z = alphas                       # (Z,) symmetric concentrations
-        with np.errstate(divide='ignore'):           # a zero prior -> -inf is intended
-            self.log_prior = np.log(priors)          # (Z,)
-        self.single = len(contexts) == 1
-        
-        ## constant Dirichlet log-normaliser per context, per arm:
-        ## log B(a_z * 1_K) = K*gammaln(a_z) - gammaln(K*a_z) - i.e. the denominator in the multinomial beta function
-        # if self.single:
-        #     self._logB0_z = None
-        # else:
-        #     K = n_outcomes
-        #     self._logB0_z = K * gammaln(alphas) - gammaln(K * alphas)
-        K = n_outcomes
-        self._logB0_z = K * gammaln(alphas) - gammaln(K * alphas)
+        ## symmetric Dirichlet concentration
+        self.alpha = float(alpha)
 
     def _opt(self, a, b):
         raise NotImplementedError
@@ -127,64 +97,18 @@ class EmpAgent:
         raise NotImplementedError
 
     ## ---- belief model -------------------------------------------------
-    def context_log_posterior(self, counts):
-        """Unnormalised log p(z|h) per context.
-
-        GLOBAL (default): one weight vector, shape (Z,), from the marginal
-        likelihood summed over all arms p(h|z) = prod_a B(a_z + n_a)/B(a_z).
-        INDEPENDENT: per-arm weights, shape (A, Z), each arm's likelihood
-        p(n_a|z) = B(a_z + n_a)/B(a_z) using ONLY that arm's counts.
-        """
-        row_sums = counts.sum(axis=1)                          # (A,)
-        if self.independent and not self.single:
-            ## per arm a, per context z:
-            ##   sum_o gammaln(a_z + n_{a,o}) - gammaln(K*a_z + n_a.sum()) - logB0_z
-            loglik = np.empty((self.n_arms, len(self.alphas_z)))
-            for z, a_z in enumerate(self.alphas_z):
-                num = gammaln(a_z + counts).sum(axis=1)        # (A,)
-                den = gammaln(self.n_outcomes * a_z + row_sums)  # (A,)
-                logB_pseudo = (num - den) ## log B(a_z + n_a) - log B(a_z)
-                loglik[:, z] = logB_pseudo - self._logB0_z[z] ## i.e. minus the log B(a_z) term
-            return self.log_prior[None, :] + loglik            # (A, Z)
-        loglik = np.empty(len(self.alphas_z))
-        for z, a_z in enumerate(self.alphas_z):
-            ## sum over arms of log B(a_z + n_a): per arm
-            ##   sum_o gammaln(a_z + n_{a,o}) - gammaln(K*a_z + n_a.sum())
-            num = gammaln(a_z + counts).sum()
-            den = gammaln(self.n_outcomes * a_z + row_sums).sum()
-            logB_pseudo = (num - den) ## log B(a_z + n_a) - log B(a_z)
-            loglik[z] = logB_pseudo - self.n_arms * self._logB0_z[z] ## i.e. minus the log B(a_z) term
-        return self.log_prior + loglik
-    
-    ## for ease: marginal likelihood under context 0 (only meaningful when single-context).
     def marginal_likelihood(self, counts):
-        return self.context_log_posterior(counts)[0]
-
-
-    def context_posterior(self, counts):
-        """Normalised context weights: (Z,) global, (A, Z) independent."""
-        return softmax(self.context_log_posterior(counts), axis=-1)
-
-    def _context_weights(self, counts):
-        """List of Z context weights, each broadcastable against an (A, O) array.
-
-        Global: scalar w[z]. Independent: column w[:, z][:, None] (per-arm)."""
-        w = self.context_posterior(counts)
-        if self.independent:
-            return [w[:, z][:, None] for z in range(w.shape[1])]
-        return [w[z] for z in range(len(w))]
+        """log p(h) = sum_a [log B(alpha + n_a) - log B(alpha * 1_K)]."""
+        K, a = self.n_outcomes, self.alpha
+        num = gammaln(a + counts).sum()                        # sum_{a,o} gammaln(alpha + n_{a,o})
+        den = gammaln(K * a + counts.sum(axis=1)).sum()        # sum_a gammaln(K*alpha + n_a)
+        logB0 = K * gammaln(a) - gammaln(K * a)                # log B(alpha * 1_K), per arm
+        return float(num - den - self.n_arms * logB0)
 
     def predictive(self, counts):
-        """Mixture posterior predictive matrix p(o|a,h), shape (A, O)."""
-        if self.single:
-            a = self.alphas_z[0] + counts
-            return a / a.sum(axis=1, keepdims=True)
-        weights = self._context_weights(counts)
-        pred = np.zeros((self.n_arms, self.n_outcomes))
-        for z, a_z in enumerate(self.alphas_z):
-            a = a_z + counts
-            pred += weights[z] * (a / a.sum(axis=1, keepdims=True))
-        return pred
+        """Posterior predictive matrix p(o|a,h), shape (A, O)."""
+        a = self.alpha + counts
+        return a / a.sum(axis=1, keepdims=True)
 
     ## ---- shared Bellman recursion -------------------------------------
     def bellman_V(self, counts, depth):
@@ -230,10 +154,8 @@ class EmpowermentAgent(EmpAgent):
 
     _worst = -np.inf
 
-    def __init__(self, n_arms, n_outcomes, contexts, ell, termination_arm=False, cost=0.0,
-                 independent_contexts=False):
-        super().__init__(n_arms, n_outcomes, contexts, termination_arm, cost=cost,
-                         independent_contexts=independent_contexts)
+    def __init__(self, n_arms, n_outcomes, alpha, ell, termination_arm=False, cost=0.0):
+        super().__init__(n_arms, n_outcomes, alpha, termination_arm, cost=cost)
         self.ell = ell
 
         ## define emp normaliser
@@ -262,99 +184,71 @@ class EmpowermentAgent(EmpAgent):
         return emp
 
 class InfoSeekingAgent(EmpAgent):
-    """Minimises end-state posterior variance (mixture: law of total variance).
+    """Maximises end-state posterior variance reduction.
 
-    Var[p_{a,o}|h] = sum_z w_z Var[p|z] + sum_z w_z (E[p|z] - Ebar)^2, summed
-    over all (a, o) cells. LOWER IS BETTER. Reduces to the single-context
-    Dirichlet variance when there is one context (the between term vanishes).
+    Scores a belief state by 1 - Var[p|h] / Var[p|h_0]: the Dirichlet posterior
+    variance summed over all (a, o) cells, normalised by its value at the
+    flat-prior root. HIGHER IS BETTER.
     """
 
-    # _worst = np.inf # if minimising 
+    # _worst = np.inf # if minimising
     _worst = -np.inf # if maximising
 
-    def __init__(self, n_arms, n_outcomes, contexts, termination_arm=False, cost=0, independent_contexts=False):
-        super().__init__(n_arms, n_outcomes, contexts, termination_arm, cost, independent_contexts)
+    def __init__(self, n_arms, n_outcomes, alpha, termination_arm=False, cost=0):
+        super().__init__(n_arms, n_outcomes, alpha, termination_arm, cost)
 
         ## define MSE(h_0) - i.e. the posterior variance at root
-        var, _ = self._context_var_mean(np.zeros((self.n_arms, self.n_outcomes)), self.alphas_z[0])
-        self._var_norm = var.sum()
-
-
+        self._var_norm = self._var(np.zeros((self.n_arms, self.n_outcomes))).sum()
 
     def _opt(self, a, b):
-        # return a if a < b else b # if minimising 
+        # return a if a < b else b # if minimising
         return a if a > b else b # if maximising
-    
 
-    def _context_var_mean(self, counts, a_z):
-        a = a_z + counts
+    def _var(self, counts):
+        """Dirichlet posterior variance of each p_{a,o}, shape (A, O)."""
+        a = self.alpha + counts
         a0 = a.sum(axis=1, keepdims=True)
-        var = a * (a0 - a) / (a0 ** 2 * (a0 + 1))
-        mean = a / a0
-        return var, mean
+        return a * (a0 - a) / (a0 ** 2 * (a0 + 1))
 
     def leaf_value(self, counts):
-        
-        ## single context
-        if self.single:
-            var, _ = self._context_var_mean(counts, self.alphas_z[0])
 
-            ## normalise var
-            var = 1-(var.sum() / self._var_norm)
+        ## normalise var
+        var = 1 - (self._var(counts).sum() / self._var_norm)
 
-            ## apply cost
-            var = float(var * (1 - counts.sum() * self.cost))
-
-            return var
-        
-        ## unknown context
-        if self.single:
-            var, _ = self._context_var_mean(counts, self.alphas_z[0])
-            return float(var.sum())
-        weights = self._context_weights(counts)
-        Z = len(weights)
-        vars_z, means_z = [], []
-        for a_z in self.alphas_z:
-            v, m = self._context_var_mean(counts, a_z)
-            vars_z.append(v); means_z.append(m)
-        mean_bar = sum(weights[z] * means_z[z] for z in range(Z))
-        total = np.zeros_like(mean_bar)
-        for z in range(Z):
-            total += weights[z] * (vars_z[z] + (means_z[z] - mean_bar) ** 2)
-        return float(total.sum())
+        ## apply cost
+        return float(var * (1 - counts.sum() * self.cost))
 
 
 ## ---------------------------------------------------------------------------
-## Backward-compatible free functions. These are now thin wrappers around the
-## single-context EmpAgent path. The passed `alphas`/`current_alphas` is already
-## (flat prior + counts); a single context with concentration 0 reproduces it
-## exactly, since predictive = (0 + alphas)/sum(alphas) and the variance leaf
-## uses the same alphas. The mixture machinery is bypassed (self.single).
+## Backward-compatible free functions: thin wrappers around EmpAgent. The passed
+## `alphas`/`current_alphas` is already (flat prior + counts), so alpha=0
+## reproduces it exactly, since predictive = (0 + alphas)/sum(alphas) and the
+## variance leaf uses the same alphas.
 ## ---------------------------------------------------------------------------
 def bellman_emp_V(alphas, n_arms, n_outcomes, depth, termination_arm, ell, cost=0.0):
-    """Bayes-adaptive optimal empowerment value (single-context wrapper)."""
-    agent = EmpowermentAgent(n_arms, n_outcomes, contexts=[(0.0, 1.0)],
+    """Bayes-adaptive optimal empowerment value (wrapper)."""
+    agent = EmpowermentAgent(n_arms, n_outcomes, alpha=0.0,
                              ell=ell, termination_arm=termination_arm, cost=cost)
     return agent.bellman_V(np.asarray(alphas, dtype=float), depth)
 
 
 def bellman_emp_Q(current_alphas, n_arms, n_outcomes, h, termination_arm, ell, verbose=False, cost=0.0):
-    """Per-first-action Bayes-adaptive empowerment Q (single-context wrapper)."""
-    agent = EmpowermentAgent(n_arms, n_outcomes, contexts=[(0.0, 1.0)],
+    """Per-first-action Bayes-adaptive empowerment Q (wrapper)."""
+    agent = EmpowermentAgent(n_arms, n_outcomes, alpha=0.0,
                              ell=ell, termination_arm=termination_arm, cost=cost)
     return agent.bellman_Q(current_alphas, h)
 
 
 def bellman_info_V(alphas, n_arms, n_outcomes, depth, termination_arm):
-    """Bayes-adaptive minimal posterior-variance value (single-context wrapper)."""
-    agent = InfoSeekingAgent(n_arms, n_outcomes, contexts=[(0.0, 1.0)],
+    """Bayes-adaptive minimal posterior-variance value (wrapper)."""
+    agent = InfoSeekingAgent(n_arms, n_outcomes, alpha=0.0,
                              termination_arm=termination_arm)
     return agent.bellman_V(np.asarray(alphas, dtype=float), depth)
 
 
 def bellman_info_Q(current_alphas, n_arms, n_outcomes, h, termination_arm, verbose=False):
-    """Per-first-action Bayes-adaptive info-seeking Q (single-context wrapper)."""
-    agent = InfoSeekingAgent(n_arms, n_outcomes, contexts=[(0.0, 1.0)],
+    """Per-first-action Bayes-adaptive info-seeking Q (wrapper)."""
+    agent = InfoSeekingAgent(n_arms, n_outcomes, alpha=0.0,
                              termination_arm=termination_arm)
     return agent.bellman_Q(current_alphas, h)
 

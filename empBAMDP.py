@@ -300,8 +300,7 @@ def _(np):
     nk = 4
     nt = 8
     alph = 0.1
-    contexts = [(float(alph), 1.0)]
-    agent = EmpowermentAgent(n_arms=na, n_outcomes=nk, termination_arm=True, contexts=contexts, ell=1)
+    agent = EmpowermentAgent(n_arms=na, n_outcomes=nk, termination_arm=True, alpha=alph, ell=1)
     init_counts = np.zeros((na, nk))
 
     ## runtime for single trial
