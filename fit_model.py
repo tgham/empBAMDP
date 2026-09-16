@@ -56,12 +56,10 @@ def main():
                         help='sampling cost; defaults to 1/(n_trials+1), as in config.js')
     parser.add_argument('--alpha', type=float, default=None,
                         help='override the Dirichlet alpha logged per participant')
-    parser.add_argument('--no_termination_arm', dest='termination_arm',
-                        action='store_false',
-                        help='the task has no terminate action (it does by default)')
+    parser.add_argument('--termination_arm', action='store_true')
     parser.add_argument('--ell_bounds', type=float, default=(0.01, 10), nargs=2)
     parser.add_argument('--temp_bounds', type=float, default=(0.001, 0.1), nargs=2)
-    parser.add_argument('--horizon', type=int, default=3)
+    parser.add_argument('--horizon', type=int, default=1)
     parser.add_argument('--init_t', type=int, default=1,
                         help='leading trials used to warm the belief without being scored')
     parser.add_argument('--agent_types', nargs='+', default=['emp', 'info'],
@@ -112,7 +110,7 @@ def main():
         horizon=args.horizon,
         init_t=args.init_t,
         n_jobs=args.n_jobs,
-        verbose=args.verbose,
+        verbose=True,
     )
     df_fits.loc[df_fits['agent_type'] == 'info', 'ell'] = None
 
