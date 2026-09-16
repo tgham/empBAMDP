@@ -79,6 +79,7 @@ def main():
                              "'emp_lo emp_1 emp_hi' in place of 'emp' to split "
                              "the empowerment agent by ell<1, ell=1 and ell>1.")
     parser.add_argument('--gen_data', action='store_true')
+    parser.add_argument('--skip_recovery', action='store_true')
     parser.add_argument('--termination_arm', action='store_true')
 
     ## horizons task
@@ -95,7 +96,7 @@ def main():
     ## pathname for saving
     stem = (f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_'
             f'{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_'
-            f'{args.alpha}alpha_{args.cost}_cost_{term}')
+            f'{args.alpha}alpha_{args.cost}cost_{term}')
     if args.preset_histories:
         stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq'
 
@@ -206,31 +207,32 @@ def main():
 
 
     ## fit data
-    param_bounds = [
-        args.ell_bounds,
-        args.temp_bounds
-    ]
-    print('fitting')
-    df_fits = fit_emp(
-        df_ppt=df_sim,
-        agent_types=args.agent_types,
-        param_bounds=param_bounds,
-        horizon=args.horizon,
-        init_t=init_t,
-        n_jobs=args.n_jobs,
-        verbose=True
-    )
+    if not args.skip_recovery:
+        param_bounds = [
+            args.ell_bounds,
+            args.temp_bounds
+        ]
+        print('fitting')
+        df_fits = fit_emp(
+            df_ppt=df_sim,
+            agent_types=args.agent_types,
+            param_bounds=param_bounds,
+            horizon=args.horizon,
+            init_t=init_t,
+            n_jobs=args.n_jobs,
+            verbose=True
+        )
 
-    ## add the generative params back in 
-    for sim in range(len(df_sim['subject_id'].unique())):
-        df_fits.loc[df_fits['subject_id']==sim, 'gen_agent_type'] = df_sim.loc[df_sim['subject_id']==sim, 'agent_type'].iloc[0]
-        df_fits.loc[df_fits['subject_id']==sim, 'gen_ell'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_ell'].iloc[0]
-        df_fits.loc[df_fits['subject_id']==sim, 'gen_temp'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_temp'].iloc[0]
+        ## add the generative params back in 
+        for sim in range(len(df_sim['subject_id'].unique())):
+            df_fits.loc[df_fits['subject_id']==sim, 'gen_agent_type'] = df_sim.loc[df_sim['subject_id']==sim, 'agent_type'].iloc[0]
+            df_fits.loc[df_fits['subject_id']==sim, 'gen_ell'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_ell'].iloc[0]
+            df_fits.loc[df_fits['subject_id']==sim, 'gen_temp'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_temp'].iloc[0]
 
-    ## save fits
-    path = f'{stem}_fits.csv'
-    df_fits.to_csv(path, index=False)
-    print(f"Saved fits to {path}")
+        ## save fits
+        path = f'{stem}_fits.csv'
+        df_fits.to_csv(path, index=False)
+        print(f"Saved fits to {path}")
 
 if __name__ == '__main__':
     main()
