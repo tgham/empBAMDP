@@ -13,19 +13,23 @@ micromamba activate chickpeas
 
 # # srun python -u ell_alpha_sweep.py --n_ell_samples 1000 --alphas 0.0125 0.025 0.05 0.1 0.2 0.4 0.7 1.0 --horizons 1 8 --n_trials 8 --n_outcomes 4 --termination_arm --ks 0 --skip_t0
 # # srun python -u ell_alpha_sweep.py --n_ell_samples 1000 --alphas 0.25 1 --horizons 1 8 --n_trials 8 --n_outcomes 4 --termination_arm --ks 0 --contexts 0.25 1 --independent_contexts --init_t 2
-# srun python -u ell_alpha_sweep.py --n_ell_samples 1000 --alphas 0.25 --horizons 1 --n_arms 2 --n_trials 10 --n_outcomes 4 --termination_arm --costs 0 0.015625 0.03125  --init_t 2
-# srun python -u ell_alpha_sweep.py --n_ell_samples 1000 --alphas 0.25 --horizons 1 --n_arms 3 --n_trials 10 --n_outcomes 4 --termination_arm --costs 0 0.015625 0.03125  --init_t 2
+# srun python -u ell_alpha_sweep.py --n_ell_samples 1000 --alphas 0.25 --horizons 1 --n_arms 2 --n_trials 10 --n_outcomes 4 --termination_arm --costs 0 0.015625 --init_t 2
+# srun python -u ell_alpha_sweep.py --n_ell_samples 1000 --alphas 0.25 --horizons 1 3 8 --n_arms 3 --n_trials 8 --n_outcomes 4 --costs 0.111111 --init_t 2
+srun python -u ell_alpha_sweep.py --n_ell_samples 2000 --alphas 0.25 --horizons 3 --n_arms 3 --n_trials 8 --n_outcomes 4 --termination_arm --costs 0 --init_t 2
 
-# srun python -u emp_recovery.py --n_trials 8 --n_outcomes 4 --n_arms 2 --n_rooms 80 --alpha 0.25 --init_t 1 --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --termination_arm 
-# srun python -u emp_recovery.py --n_trials 8 --n_outcomes 4 --n_arms 3 --n_rooms 80 --alpha 0.25 --init_t 1 --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --termination_arm 
+# srun python -u emp_recovery.py --n_trials 8 --n_outcomes 4 --n_arms 2 --n_rooms 30 --alpha 0.25 --init_t 1 --horizon 3 --n_sims 4000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --termination_arm --gen_data --skip_recovery
+# srun python -u emp_recovery.py --n_trials 8 --n_outcomes 4 --n_arms 3 --n_rooms 30 --alpha 0.25 --init_t 1 --horizon 3 --n_sims 4000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --termination_arm --gen_data --skip_recovery
 # srun python -u emp_recovery.py --n_trials 8 --n_outcomes 4 --n_arms 2 --n_rooms 80 --alpha 0.25 --init_t 1 --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.01 0.3 --gen_data --agent_types emp
 # srun python -u emp_recovery.py --n_trials 8 --n_outcomes 4 --n_arms 3 --n_rooms 80 --alpha 0.25 --init_t 1 --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.01 0.3 --gen_data --agent_types emp
-srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 2 --cost 0 --n_rooms 100 --alpha 0.25 --init_t 0 --termination_arm --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model 
-srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 3 --cost 0 --n_rooms 100 --alpha 0.25 --init_t 0 --termination_arm --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model 
-srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 2 --cost 0.015625  --n_rooms 100 --alpha 0.25 --init_t 0 --termination_arm --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model 
-srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 3 --cost 0.015625  --n_rooms 100 --alpha 0.25 --init_t 0 --termination_arm --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model 
-srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 2 --cost 0.03125  --n_rooms 100 --alpha 0.25 --init_t 0 --termination_arm --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model 
-srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 3 --cost 0.03125  --n_rooms 100 --alpha 0.25 --init_t 0 --termination_arm --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model 
+# srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 2 --cost 0 --n_rooms 100 --alpha 0.25 --init_t 0 --termination_arm --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model 
+# srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 3 --cost 0.0 --n_rooms 120 --alpha 0.25 --init_t 0 --n_sims 2500 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model --n_subseq_trials 1
+# srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 3 --cost 0.0 --n_rooms 120 --alpha 0.25 --init_t 0 --n_sims 2500 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model --n_subseq_trials 3
+# srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 3 --cost 0.03125 --n_rooms 100 --alpha 0.25 --init_t 0 --n_sims 2500 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model --n_subseq_trials 3 --termination_arm
+# srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 3 --cost 0.0625 --n_rooms 100 --alpha 0.25 --init_t 0 --n_sims 2500 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model --n_subseq_trials 3 --termination_arm
+# srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 2 --cost 0.015625  --n_rooms 100 --alpha 0.25 --init_t 0 --termination_arm --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model 
+# srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 3 --cost 0.015625  --n_rooms 100 --alpha 0.25 --init_t 0 --termination_arm --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model 
+# srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 2 --cost 0.03125  --n_rooms 100 --alpha 0.25 --init_t 0 --termination_arm --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model 
+# srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 3 --cost 0.03125  --n_rooms 100 --alpha 0.25 --init_t 0 --termination_arm --n_sims 5000 --ell_bounds 0.01 10 --temp_bounds 0.001 0.1 --gen_data --preset_histories --diag_target model 
 
 # srun python -u emp_scoring.py --n_trials 8 --n_outcomes 4 --n_arms 2 --n_rooms 30 --alpha 0.25 --init_t 1 --n_sims 25000 --greedy
 # srun python -u emp_scoring.py --n_trials 8 --n_outcomes 4 --n_arms 2 --n_rooms 30 --alpha 0.25 --init_t 1 --n_sims 25000 --greedy --termination_arm
@@ -40,5 +44,7 @@ srun python -u emp_recovery.py --n_trials 10 --n_outcomes 4 --n_arms 3 --cost 0.
 # srun python -u diag_sweep.py --n_samples 2500 --alphas 0.01 0.1 0.25 0.4 1.0 --costs 0 0.015625 0.03125 --horizons 1 --n_trials 8 --n_arms 3 --termination_arm --n_outcomes 4 --temp 0.1 --init_t 1
 # srun python -u diag_sweep.py --n_samples 2000 --alphas 0.25 --costs 0 0.015625 0.03125 --horizons 1 --n_trials 10 --n_arms 2 --termination_arm --n_outcomes 4 --temp_emp 0.05 --init_t 1 --target ell
 # srun python -u diag_sweep.py --n_samples 2000 --alphas 0.25 --costs 0 0.015625 0.03125 --horizons 1 --n_trials 10 --n_arms 3 --termination_arm --n_outcomes 4 --temp_emp 0.05 --init_t 1 --target ell
-# srun python -u diag_sweep.py --n_samples 2000 --alphas 0.25 --costs 0 0.015625 0.03125 --horizons 1 --n_trials 10 --n_arms 2 --termination_arm --n_outcomes 4 --temp_emp 0.05 --init_t 1 --target model
-# srun python -u diag_sweep.py --n_samples 2000 --alphas 0.25 --costs 0 0.015625 0.03125 --horizons 1 --n_trials 10 --n_arms 3 --termination_arm --n_outcomes 4 --temp_emp 0.05 --init_t 1 --target model
+# srun python -u diag_sweep.py --n_samples 2000 --alphas 0.25 --costs 0 0.015625 0.03125 --horizons 1 --n_trials 10 --n_arms 3 --n_outcomes 4 --temp_emp 0.05 --init_t 1 --target model
+
+
+# srun python -u fit_model.py --n_arms 3 --n_outcomes 4 --n_trials 8 --cost 0.11111 --termination_arm --alpha 0.4 --horizon 3  --init_t 1 

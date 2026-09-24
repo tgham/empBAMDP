@@ -346,6 +346,19 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
             ## calculate max counts fraction - i.e. the action that has been sampled the most, divided by total samples
             max_counts_fraction = np.max(counts.sum(axis=1)) / np.sum(counts) if np.sum(counts) > 0 else 0.0
 
+            ## some useful measures for comparing with humans
+            least_sampled_counts = np.min(counts.sum(axis=1))
+            most_sampled_counts = np.max(counts.sum(axis=1))
+            chose_least_sampled = action in np.where(counts.sum(axis=1) == least_sampled_counts)[0]
+            p_chose_least_sampled = probs[np.where(counts.sum(axis=1) == least_sampled_counts)[0]].max()
+            if t>0:
+                repeat_choice = action == last_action
+                p_repeat_choice = probs[last_action] if not np.isnan(last_action) else np.nan
+            else:
+                repeat_choice = np.nan
+                p_repeat_choice = np.nan
+            last_action = action
+
 
             ## save
             sim_out['room'].append(r)
@@ -356,6 +369,10 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
             sim_out['terminated'].append(action == n_arms if termination_arm else False)
             sim_out['counts_array'].append(counts.copy())
             sim_out['max_counts_fraction'].append(max_counts_fraction)
+            sim_out['chose_least_sampled'].append(chose_least_sampled)
+            sim_out['p_chose_least_sampled'].append(p_chose_least_sampled)
+            sim_out['repeat_choice'].append(repeat_choice)
+            sim_out['p_repeat_choice'].append(p_repeat_choice)
             for a in range(n_arms):
                 sim_out[f'Q_{a}'].append(Q[a])
                 sim_out[f'p_{a}'].append(probs[a])
@@ -366,6 +383,13 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
             ## update counts if no termination
             if action != n_arms:
                 counts[action, outcome] += 1
+
+            ## counts post diff - i.e. diff between the two arms
+            if n_arms == 2:
+                counts_post_diff = np.abs(counts[0].sum() - counts[1].sum())
+            else:
+                counts_post_diff = np.nan
+            sim_out['counts_post_diff'].append(counts_post_diff)
 
             ## score on current probability of reward - i.e. emp_1
             ell_1 = ell_1_agent.leaf_value(counts)[0]
