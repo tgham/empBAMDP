@@ -582,36 +582,33 @@ def _top2_gap(V):
 
 
 
-def _mi_from_step(P, ell_w0s=None):
+def _mi_from_step(P, ell_w0s):
     P = np.asarray(P, dtype=float)
-
-    ## H(ell|h) = log M for M equal-weight samples
+    
+    ## dummy if info
     if ell_w0s is None:
-        H_ell = float(np.log(P.shape[0]))
-        
-        ## p(ell_m|h,a) = p(a|h,ell_m) / sum_m' p(a|h,ell_m') NB no need for p(ell_m) because the samples are equal weight
-        col = P.sum(axis=0, keepdims=True) # normalise each column
-        P_post = np.divide(P, col, out=np.zeros_like(P), where=col > 0)
-
-        ## p(a|h) = 1/M sum_m p(a|h,ell_m)
-        p_marg = P.mean(axis=0)
-
+        ell_w0s = np.array([1.0], dtype=float)
+        info_seeker = True
     else:
-        H_ell = float(-np.sum(ell_w0s * np.log(ell_w0s + 1e-12)))
-        
-        ## p(ell_m|h,a) = p(a|h,ell_m) p(ell_m) / sum_m' p(a|h,ell_m')p(ell_m') NB no need for p(ell_m) because the samples are equal weight
-        col = (P * ell_w0s[:, None]).sum(axis=0, keepdims=True) # normalise each column
-        P_post = np.divide(P * ell_w0s[:, None], col, out=np.zeros_like(P), where=col > 0)
+        info_seeker = False
+    H_ell = float(-np.sum(ell_w0s * np.log(ell_w0s + 1e-12)))
+    
+    ## or, H(ell|h) = log M for M equal-weight samples
+    # H_ell = float(np.log(P.shape[0]))
+    
+    ## p(ell_m|h,a) = p(a|h,ell_m) p(ell_m) / sum_m' p(a|h,ell_m')p(ell_m') NB no need for p(ell_m) because the samples are equal weight
+    col = (P * ell_w0s[:, None]).sum(axis=0, keepdims=True) # normalise each column
+    P_post = np.divide(P * ell_w0s[:, None], col, out=np.zeros_like(P), where=col > 0)
 
-        ## p(a|h) = sum_m p(a|h,ell_m) p(ell_m|h)
-        p_marg = np.sum(P * ell_w0s[:, None], axis=0)
-
+    ## p(a|h) = sum_m p(a|h,ell_m) p(ell_m|h)
+    p_marg = np.sum(P * ell_w0s[:, None], axis=0)
 
     ## E_a[H(ell|h,a)] = sum_a p(a|h) H(ell|h,a) 
     H_ell_cond = float(p_marg @ _neg_p_log_p(P_post.T)) # transpose puts ell on the last axis for `_neg_p_log_p`. See docstring.
 
     mi = max(H_ell - H_ell_cond, 0.0)
-    return H_ell, H_ell_cond, mi
+
+    return H_ell, H_ell_cond, mi, p_marg
 
 ##   I(A;ell|h) = H(A|h) - E_ell[ H(A|h,ell) ]
 def _mi_from_step_reverse(P):
@@ -636,7 +633,7 @@ def _mi_from_step_reverse(P):
     return H_marg, H_cond, mi
 
 
-def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s):
+def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s=None):
     """(H_ell, H_ell_cond, mi) from every (action, outcome) sequence that can follow h.
 
     The multi-step counterpart to `_mi_from_step`: how much the remaining
@@ -651,8 +648,15 @@ def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s)
     """
     n_arms, n_outcomes = agent.n_arms, agent.n_outcomes
     h_remaining = int(min(horizon, n_trials - t))
-    n_ell = len(ell_w0s)
-    ell_log_w0s = np.log(ell_w0s + 1e-12)
+
+    ## emp agent 
+    if ell_w0s is not None:
+        n_ell = len(ell_w0s)
+        ell_log_w0s = np.log(ell_w0s + 1e-12)
+    ## info agent (no ell, so just single dummy ell with weight 1)
+    else:
+        n_ell = 1
+        ell_log_w0s = np.log([1.0])
 
     ## every sequence of h_remaining (action, outcome) steps, or fewer if it terminates
     seqs = ao_sequences(n_arms, n_outcomes, h_remaining, termination_arm=agent.termination_arm)
@@ -703,7 +707,7 @@ def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s)
     H_ell_cond = float(np.exp(log_seq_marg) @ H_ell_post)
 
     mi = max(H_ell - H_ell_cond, 0.0)
-    return H_ell, H_ell_cond, mi
+    return H_ell, H_ell_cond, mi, np.exp(log_seq_marg)
 
 
 def _diag_emp_row(t, counts_array, canon_counts, history_str,
@@ -755,7 +759,7 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
     ## init
     h_remaining = int(np.min([horizon, n_trials - t]))
     n_actions = n_arms + int(termination_arm)
-    tie_tol = float(np.log(3.0)) if tie_tol is None else float(tie_tol)
+    tie_tol = float(np.log(2.0)) if tie_tol is None else float(tie_tol)
 
     ## grid sampling of ells
     n_ell = len(ell_samples)
@@ -771,21 +775,21 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
 
         ## I(A;ell|h), from p(a|h,ell) for each sampled ell
         P = np.exp(agent.log_policy(counts_array, h_remaining, temp))
-        H_ell, H_ell_cond, mi = _mi_from_step(P, ell_w0s)
+        H_ell, H_ell_cond, mi, p_marg = _mi_from_step(P, ell_w0s)
 
     ## else, need to marginalise over sequences resulting from h
     else:
 
         ## I(seq;ell|h), exactly over every sequence of the remaining choices
-        H_ell, H_ell_cond, mi = _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s)
-        print('mi', mi, 'H_ell', H_ell, 'H_ell_cond', H_ell_cond)
+        H_ell, H_ell_cond, mi, p_marg = _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s)
+        # print('mi', mi, 'H_ell', H_ell, 'H_ell_cond', H_ell_cond)
 
-    ## which action(s) the diagnosticity comes from. `near_best[m, a]` is "a is
-    ## among the best actions at ell_m"; an ell is decisive when that set is a
-    ## singleton, which is exactly gap/temp > tie_tol. See TIES.
-    near_best = Qs >= Qs.max(axis=1, keepdims=True) - tie_tol * temp
-    decisive = near_best.sum(axis=1) == 1
-    frac = near_best.mean(axis=0)                        # does NOT sum to 1
+    ### which action(s) does the diagnosticity comes from? 
+    # near_best = Qs >= Qs.max(axis=1, keepdims=True) - tie_tol * temp
+    tol = Qs.max() * 1e-6 
+    near_best = Qs >= Qs.max(axis=1, keepdims=True) - tol ## i.e. which actions are among the best
+    decisive = near_best.sum(axis=1) == 1 ## i.e. is there just one best action
+    frac = near_best.mean(axis=0)
     frac_dec = (near_best & decisive[:, None]).mean(axis=0)
 
     ## how decisive is that choice? top-two Q gap per ell, in temp units.
@@ -879,26 +883,51 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     no meaningful cross-model gap in Q units -- every between-model quantity
     here is in probability space, the only common currency.
     """
+
+    ## init
     h_remaining = int(np.min([horizon, n_trials - t]))
     n_actions = n_arms + int(termination_arm)
+    tie_tol = float(np.log(2.0)) if tie_tol is None else float(tie_tol)
+
+    ## grid sampling of ells
+    n_ell = len(ell_samples)
+    ell_w0s = ell_weights(ell_samples)
 
     ### p(a|h,m) for each model
 
     ## emp agent: one policy per sampled ell, then marginalise over ell
-    n_ell = len(ell_samples)
     if emp_agent is None:
         emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
     Qs_emp = emp_agent.Q(counts_array, h_remaining)             # (n_ell, n_actions)
-    P_emp = np.exp(emp_agent.log_policy(counts_array, h_remaining, temp_emp))
-    H_ell, H_cond_ell, mi_emp = _mi_from_step(P_emp)
-    p_marg_emp = P_emp.mean(axis=0)
-
-    ## info-seeking agent: not parameterised by ell, so a single policy.
     if info_agent is None:
         info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost)
-    info_Q = info_agent.Q(counts_array, h_remaining)[0]
-    p_marg_info = _softmax(info_Q / temp_info)
-    H_cond_info = float(_neg_p_log_p(p_marg_info)) # E_ell[H(A|h,info)] = H(A|h,info) because no ell-dependence
+    info_Q = info_agent.Q(counts_array, h_remaining)[0]         # (n_actions,)
+    
+    ## if just single action, MI is taken over single step
+    if h_remaining == 1:
+        P_emp = np.exp(emp_agent.log_policy(counts_array, h_remaining, temp_emp))
+        H_ell, H_cond_ell, mi_emp, p_marg_emp = _mi_from_step(P_emp, ell_w0s)
+
+        ## info-seeking agent: not parameterised by ell, so a single policy.
+        if info_agent is None:
+            info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost)
+        P_info = np.exp(info_agent.log_policy(counts_array, h_remaining, temp_info))
+        
+        info_Q = info_agent.Q(counts_array, h_remaining)[0]
+        p_marg_info = _softmax(info_Q / temp_info) ## p(a|h,info)
+
+        _, _, _, p_marg_info = _mi_from_step(P_info, None) ## don't need mi_info - trivially 0, because no ell-dependence
+
+    
+    ## else need to marginalise over sequences resulting from h
+    else:
+
+        ## emp terms
+        _, _, mi_emp, p_marg_emp = _mi_from_sequences(emp_agent, counts_array, t, n_trials, horizon, temp_emp, ell_w0s)
+
+        ## info-seeker terms
+        _, _, _, p_marg_info = _mi_from_sequences(info_agent, counts_array, t, n_trials, horizon, temp_info, None)
+
 
     ### margins -- see TIES. tie_tol is a log-odds threshold throughout.
     tie_tol = float(np.log(3.0)) if tie_tol is None else float(tie_tol)
@@ -964,7 +993,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         'mi': mi_model,
         'mi_bits': mi_model / np.log(2.0),
         'mi_norm': mi_norm,
-        'mi_ell': mi_emp,        # I(A;ell|h,emp) -- the _diag_emp_row quantity
+        'mi_emp': mi_emp,        # I(A;ell|h,emp) -- the _diag_emp_row quantity
         'n_ell_samples': n_ell,
         'LML': LML,
         ## tie diagnostics -- within emp (across ell)
@@ -975,11 +1004,9 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         'gap_min_emp': float(gap_emp.min()),
         'gap_mean_temp_emp': float(gap_emp_temp.mean()),
         'gap_median_temp_emp': float(np.median(gap_emp_temp)),
-        'p_best_mean_emp': float(P_emp.max(axis=1).mean()),
         ## -- within info
         'gap_info': gap_info,
         'gap_info_temp': gap_info_temp,
-        'p_best_info': float(p_marg_info.max()),
         'info_tie': info_tie,
         ## -- between models
         'best_a_emp': best_a_emp,
