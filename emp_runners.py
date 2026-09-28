@@ -634,28 +634,6 @@ def _mi_from_step(P, ell_w0s):
 
     return H_ell, H_ell_cond, mi, p_marg
 
-##   I(A;ell|h) = H(A|h) - E_ell[ H(A|h,ell) ]
-def _mi_from_step_reverse(P):
-    """(H_marg, H_cond, mi) from an (M, A) array of equal-weight policies.
-
-    Row m is p(.|h, ell_m). `mi` is clipped at 0: it is non-negative in exact
-    arithmetic, so any negative value is float noise.
-
-    `check=True` recomputes the same MI the other way round via
-    `_mi_from_step_reverse` and asserts the two agree. Off by default: this
-    runs per canonical history inside a joblib-parallel sweep, so it is a
-    debugging switch rather than an always-on invariant.
-    """
-
-    ## I(A; ell | h) = H(A|h) - E_ell[H(A|h,ell)]
-    P = np.asarray(P, dtype=float)
-    p_marg = P.mean(axis=0)                       # p(a|h), the ell-marginal
-    H_marg = float(_neg_p_log_p(p_marg))          # H(A|h)
-    H_cond = float(np.mean(_neg_p_log_p(P)))      # E_ell[H(A|h,ell)]
-    mi = max(H_marg - H_cond, 0.0)
-
-    return H_marg, H_cond, mi
-
 
 def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s=None):
     """(H_ell, H_ell_cond, mi) from every (action, outcome) sequence that can follow h.
@@ -737,7 +715,7 @@ def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s=
 def _diag_emp_row(t, counts_array, canon_counts, history_str,
                           ell_samples, n_arms, n_outcomes, n_trials, alpha,
                           termination_arm, horizon, cost, temp,
-                          tie_tol=None, agent=None,
+                          tie_tol=None, room_selection=False, agent=None,
                           ):
     """Per-canonical-history diagnosticity row.
 
@@ -782,7 +760,6 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
 
     ## init
     h_remaining = int(np.min([horizon, n_trials - t]))
-    n_actions = n_arms + int(termination_arm)
     tie_tol = float(np.log(2.0)) if tie_tol is None else float(tie_tol)
 
     ## grid sampling of ells
@@ -792,13 +769,31 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
     ## memoised agent over every sampled ell
     if agent is None:
         agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
-    Qs = agent.Q(counts_array, h_remaining)             # (n_ell, n_actions)
 
+    ## Q values for single history - i.e. counts_array is a single (n_arms, n_outcomes) array, not a list of two arrays for a pair of histories
+    if not room_selection:
+        Qs = agent.Q(counts_array, h_remaining)             # (n_ell, n_actions)
+    
+    ## else, compare empowerment of two histories
+    elif room_selection:
+        n_rooms = counts_array.shape[0]
+        Qs = np.zeros(n_rooms)
+        for r in range(n_rooms):
+            Qs[r] = agent.leaf_value(counts_array[r])[0] ## i.e. Q is given by the empowerment afforded by the room's belief state
+        
     ## if just a single action, MI is taken over single step
     if h_remaining == 1:
 
-        ## I(A;ell|h), from p(a|h,ell) for each sampled ell
-        P = np.exp(agent.log_policy(counts_array, h_remaining, temp))
+        ## I(A;ell|h), from p(a|h,ell) for each sampled ell, where a is either the next sample or the chosen room
+        if not room_selection:
+            P = np.exp(agent.log_policy(counts_array, h_remaining, temp))
+        else:
+            P = np.zeros((n_ell, n_rooms), dtype=float)
+            
+            ## softmax over the two histories, for each ell
+            for ei in range(n_ell):
+                P[ei] = _softmax(Qs[ei] / temp)
+            
         H_ell, H_ell_cond, mi, p_marg = _mi_from_step(P, ell_w0s)
 
     ## else, need to marginalise over sequences resulting from h
@@ -806,7 +801,6 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
 
         ## I(seq;ell|h), exactly over every sequence of the remaining choices
         H_ell, H_ell_cond, mi, p_marg = _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s)
-        # print('mi', mi, 'H_ell', H_ell, 'H_ell_cond', H_ell_cond)
 
     ### which action(s) does the diagnosticity comes from? 
     # near_best = Qs >= Qs.max(axis=1, keepdims=True) - tie_tol * temp
@@ -821,7 +815,12 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
     gap_temp = gap / temp
 
     ## get LML
-    LML = agent.marginal_likelihood(counts_array)
+    if room_selection:
+        LML = np.zeros(n_rooms)
+        for r in range(n_rooms):
+            LML[r] = agent.marginal_likelihood(counts_array[r])
+    else:
+        LML = agent.marginal_likelihood(counts_array)
 
     row = {
         'alpha': alpha,
@@ -831,7 +830,6 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
         'H_ell_cond': H_ell_cond,
         'mi': mi,
         'mi_bits': mi / np.log(2.0),
-        'mi_norm': mi / np.log(n_actions),
         'n_ell_samples': n_ell,
         'LML': LML,
         
