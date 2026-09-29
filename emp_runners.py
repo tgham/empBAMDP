@@ -787,9 +787,9 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
     ## else, compare empowerment of the rooms' histories
     elif room_selection:
         counts_array = np.asarray(counts_array)
-        n_rooms = counts_array.shape[0]
-        Qs = np.zeros((n_ell, n_rooms))
-        for r in range(n_rooms):
+        n_AFC = counts_array.shape[0]
+        Qs = np.zeros((n_ell, n_AFC))
+        for r in range(n_AFC):
             Qs[:, r] = agent.leaf_value(counts_array[r]) ## i.e. Q is given by the empowerment afforded by the room's belief state, for every ell
 
     ## if just a single action, MI is taken over single step
@@ -800,7 +800,7 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
             P = np.exp(agent.log_policy(counts_array, h_remaining, temp))
         else:
             ## softmax over the rooms, for each ell
-            P = _softmax(Qs / temp, axis=1)                 # (n_ell, n_rooms)
+            P = _softmax(Qs / temp, axis=1)                 # (n_ell, n_AFC)
 
         H_ell, H_ell_cond, mi, p_marg = _mi_from_step(P, ell_w0s)
 
@@ -845,7 +845,7 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
     ## room selection: t, history and LML are per room, and the "actions" are the rooms
     if room_selection:
         row['pair_str'] = ' | '.join(history_str)
-        for r in range(n_rooms):
+        for r in range(n_AFC):
             row[f't_{r}'] = t[r]
             row[f'history_str_{r}'] = history_str[r]
             row[f'history_{r}'] = canon_counts[r]
@@ -952,13 +952,13 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
 
     ## Q-values = emp of each room
     else:
-        n_rooms = counts_array.shape[0]
-        Qs_emp = np.zeros((n_ell, n_rooms))
-        for r in range(n_rooms):
-            Qs_emp[:, r] = emp_agent.leaf_value(counts_array[r]) # (n_ell, n_rooms)
-        Q_info = np.zeros(n_rooms)
-        for r in range(n_rooms):
-            Q_info[r] = info_agent.leaf_value(counts_array[r])[0] # (n_rooms,)
+        n_AFC = counts_array.shape[0]
+        Qs_emp = np.zeros((n_ell, n_AFC))
+        for r in range(n_AFC):
+            Qs_emp[:, r] = emp_agent.leaf_value(counts_array[r]) # (n_ell, n_AFC)
+        Q_info = np.zeros(n_AFC)
+        for r in range(n_AFC):
+            Q_info[r] = info_agent.leaf_value(counts_array[r])[0] # (n_AFC,)
 
     ### p(a|h,m) for each model
     
@@ -1080,7 +1080,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     ## room selection: t, history and LML are per room, and the "actions" are the rooms
     if room_selection:
         row['pair_str'] = ' | '.join(history_str)
-        for r in range(n_rooms):
+        for r in range(n_AFC):
             row[f't_{r}'] = t[r]
             row[f'history_str_{r}'] = history_str[r]
             row[f'history_{r}'] = canon_counts[r]
@@ -1132,7 +1132,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             sampling='grid', seed=None,
                             init_t=0, n_jobs=1,
                             target='ell', p_model=(0.5, 0.5), tie_tol=None,
-                            expt='arms', n_rooms=2, n_room_samples=None):
+                            expt='arms', n_AFC=2, n_room_samples=None):
     """Diagnosticity of every canonical history, for one of two targets.
 
     Mirrors `enumerate_curves`: the same canonical-history enumeration, the same
@@ -1143,7 +1143,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
 
     `expt` selects WHAT the agent chooses between:
       - 'arms'  (default): the next action within one history, as above.
-      - 'rooms': a room, from `n_rooms` distinct canonical histories, with
+      - 'rooms': a room, from `n_AFC` distinct canonical histories, with
                 p(r|h,ell) = softmax_r(Emp_ell(h_r) / temp_emp) -- the leaf
                 empowerment of each room's belief state (see `_diag_emp_row`,
                 ROOM SELECTION). One step by construction, so `horizons` is
@@ -1208,7 +1208,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     if expt == 'rooms':
         ## rooms are valued at their leaf, so a single dummy horizon of 0
         horizons = [0]
-        states = _room_tuples(states, n_rooms, n_room_samples, seed)
+        states = _room_tuples(states, n_AFC, n_room_samples, seed)
     elif horizons is None:
         # horizons = [n_trials]
         horizons = [1]
@@ -1244,8 +1244,8 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     return df
 
 
-def _room_tuples(states, n_rooms, n_room_samples=None, seed=None):
-    """Tuples of `n_rooms` distinct canonical histories, packed for `_diag_rows`.
+def _room_tuples(states, n_AFC, n_room_samples=None, seed=None):
+    """Tuples of `n_AFC` distinct canonical histories, packed for `_diag_rows`.
 
     `n_room_samples=None` gives every unordered tuple once; an int draws that many
     uniformly, with replacement across tuples. Each tuple comes back in the
@@ -1253,14 +1253,14 @@ def _room_tuples(states, n_rooms, n_room_samples=None, seed=None):
     ((t_0, t_1, ...), stacked C, (cc_0, ...), (hs_0, ...), (orbit_0, ...)).
     """
     n_states = len(states)
-    if n_states < n_rooms:
-        raise ValueError(f'only {n_states} canonical histories, cannot fill {n_rooms} distinct rooms')
+    if n_states < n_AFC:
+        raise ValueError(f'only {n_states} canonical histories, cannot fill {n_AFC} distinct rooms')
 
     if n_room_samples is None:
-        idx = list(itertools.combinations(range(n_states), n_rooms))
+        idx = list(itertools.combinations(range(n_states), n_AFC))
     else:
         rng = np.random.default_rng(seed)
-        idx = [rng.choice(n_states, size=n_rooms, replace=False) for _ in range(int(n_room_samples))]
+        idx = [rng.choice(n_states, size=n_AFC, replace=False) for _ in range(int(n_room_samples))]
     tuples = [tuple(zip(*(states[i] for i in ii))) for ii in idx]
     return [(ts, np.stack(Cs), ccs, hss, os_) for (ts, Cs, ccs, hss, os_) in tuples]
 
