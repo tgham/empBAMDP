@@ -351,7 +351,7 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
             most_sampled_counts = np.max(counts.sum(axis=1))
             chose_least_sampled = action in np.where(counts.sum(axis=1) == least_sampled_counts)[0]
             p_chose_least_sampled = probs[np.where(counts.sum(axis=1) == least_sampled_counts)[0]].max()
-            if t>0:
+            if i>0:
                 repeat_choice = action == last_action
                 p_repeat_choice = probs[last_action] if not np.isnan(last_action) else np.nan
             else:
