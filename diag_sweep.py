@@ -33,7 +33,7 @@ def main():
                         metavar=('P_EMP', 'P_INFO'))
     
     parser.add_argument('--expt', type=str, default='arms', choices=['arms','rooms'])
-    parser.add_argument('--n_rooms', type=int, default=2)
+    parser.add_argument('--n_AFC', type=int, default=2)
     parser.add_argument('--n_room_samples', type=int, default=None)
 
     args = parser.parse_args()
@@ -59,7 +59,7 @@ def main():
         init_t=args.init_t, n_jobs=args.n_jobs,
         target=args.target, temp_info=args.temp_info,
         p_model=tuple(args.p_model),
-        expt=args.expt, n_rooms=args.n_rooms, n_room_samples=args.n_room_samples
+        expt=args.expt, n_AFC=args.n_AFC, n_room_samples=args.n_room_samples
     )
 
     ## save

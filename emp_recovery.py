@@ -1,4 +1,4 @@
-from emp_runners import gen_emp, fit_emp, emp_ell_bounds
+from emp_runners import gen_arms, gen_rooms, fit_emp, emp_ell_bounds
 from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canonicalise_histories
 import pandas as pd
 import numpy as np
@@ -7,6 +7,7 @@ from joblib import Parallel, delayed
 from tqdm_joblib import tqdm_joblib
 import argparse
 import ast
+import os
 
 def load_diag_histories(args, term):
     """The `args.n_rooms` most diagnostic histories for this design.
@@ -20,15 +21,22 @@ def load_diag_histories(args, term):
     agent from the info-seeking one (model recovery); `--diag_target ell` ranks
     by how well it separates ells (parameter recovery).
 
-    Returns a list of histories, each `(((arm, outcome), count), ...)`.
+    For `--expt rooms` each row is a tuple of `args.n_AFC` histories to choose
+    between, ranked and de-duplicated by `pair_str`.
+
+    Returns a list of histories, each `(((arm, outcome), count), ...)`, or for
+    rooms a list of tuples of them.
     """
-    path = (f'useful_saves/diag/{args.n_arms}arms_{args.n_outcomes}outcomes_'
+    rooms = args.expt == 'rooms'
+    path = (f'useful_saves/diag/{args.expt}/{args.n_arms}arms_{args.n_outcomes}outcomes_'
             f'{args.n_trials}trials_{term}_{args.diag_target}_diag.csv')
     df_diag = pd.read_csv(path)
 
-    ## keep only the rows generated under this run's design
+    ## keep only the rows generated under this run's design (rooms are valued at their leaf, so no horizon)
     sel = df_diag
-    for col, val in (('alpha', args.alpha), ('horizon', args.horizon), ('cost', args.cost)):
+    conds = (('alpha', args.alpha), ('cost', args.cost)) if rooms else \
+            (('alpha', args.alpha), ('horizon', args.horizon), ('cost', args.cost))
+    for col, val in conds:
         if col in sel.columns:
             match = sel.loc[np.isclose(sel[col].astype(float), float(val))]
             if match.empty:
@@ -38,8 +46,9 @@ def load_diag_histories(args, term):
                 )
             sel = match
 
-    ## one row per history, then the most diagnostic n_rooms of them
-    sel = sel.sort_values('mi', ascending=False).drop_duplicates('history')
+    ## one row per history (or tuple of histories), then the most diagnostic n_rooms of them
+    key = 'pair_str' if rooms else 'history'
+    sel = sel.sort_values('mi', ascending=False).drop_duplicates(key)
     if len(sel) < args.n_rooms:
         raise ValueError(
             f'{path} only has {len(sel)} distinct histories for this condition, '
@@ -50,6 +59,13 @@ def load_diag_histories(args, term):
     n_repeats = 4
     sel = sel.head(args.n_rooms // n_repeats)
     sel = pd.concat([sel] * n_repeats, ignore_index=True)
+
+    if rooms:
+        n_AFC = sum(c.startswith('history_') and c[len('history_'):].isdigit() for c in sel.columns)
+        if n_AFC != args.n_AFC:
+            raise ValueError(f'{path} has {n_AFC}-AFC tuples, but --n_AFC={args.n_AFC} was requested')
+        return [tuple(ast.literal_eval(row[f'history_{r}']) for r in range(n_AFC))
+                for _, row in sel.iterrows()]
 
     return [ast.literal_eval(h) for h in sel['history']]
 
@@ -82,23 +98,40 @@ def main():
     parser.add_argument('--skip_recovery', action='store_true')
     parser.add_argument('--termination_arm', action='store_true')
 
+    
+    ### expt type
+    parser.add_argument('--expt', type=str, default='arms', choices=['rooms', 'arms'])
+    
     ## horizons task
     parser.add_argument('--preset_histories', action='store_true')
     parser.add_argument('--n_subseq_trials', type=int, default=1)
+
+    ## room task
+    parser.add_argument('--n_AFC', type=int, default=2)
+
     parser.add_argument('--diag_target', choices=['model', 'ell'], default='ell')
 
     args = parser.parse_args()
 
     term = ["noTermination", "Termination"][args.termination_arm]
 
+    ## rooms task: every choice is between preset histories, and all of it is scored
+    rooms = args.expt == 'rooms'
+    if rooms:
+        args.preset_histories = True
     init_t = 0 if args.preset_histories else args.init_t
 
     ## pathname for saving
-    stem = (f'useful_saves/recovery/{args.n_arms}arms_{args.n_outcomes}outcomes_'
-            f'{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_'
-            f'{args.alpha}alpha_{args.cost}cost_{term}')
-    if args.preset_histories:
-        stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq'
+    if rooms:
+        stem = (f'useful_saves/recovery/{args.expt}/{args.n_arms}arms_{args.n_outcomes}outcomes_'
+                f'{args.n_trials}trials_{args.n_sims}sims_'
+                f'{args.alpha}alpha_{args.cost}cost_{term}_{args.n_AFC}AFC_{args.n_rooms}rooms')
+    else:
+        stem = (f'useful_saves/recovery/{args.expt}/{args.n_arms}arms_{args.n_outcomes}outcomes_'
+                f'{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_'
+                f'{args.alpha}alpha_{args.cost}cost_{term}')
+        if args.preset_histories:
+            stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq'
 
     if args.gen_data:
         print('EMP RECOVERY')
@@ -106,7 +139,10 @@ def main():
         print(f'  - Number of arms: {args.n_arms}')
         print(f'  - Number of outcomes: {args.n_outcomes}')
         print(f'  - Number of trials: {args.n_trials}')
+        print(f'  - Expt type: {args.expt}')
         print(f'  - Number of rooms: {args.n_rooms}')
+        if rooms:
+            print(f'  - N AFC: {args.n_AFC}')
         print(f'  - Alpha: {args.alpha}')
         print(f'  - Horizon: {args.horizon}')
         print(f'  - Cost: {args.cost}')
@@ -120,8 +156,12 @@ def main():
         if args.preset_histories:
             diag_histories = load_diag_histories(args, term)
             print(f'  - Diagnosticity target: {args.diag_target}')
-            print(f'  - Loaded {len(diag_histories)} diagnostic histories '
-                  f'(lengths {sorted({sum(c for _, c in h) for h in diag_histories})})')
+            if rooms:
+                print(f'  - Loaded {len(diag_histories)} diagnostic {args.n_AFC}-AFC tuples '
+                      f'(lengths {sorted({sum(c for _, c in h) for hs in diag_histories for h in hs})})')
+            else:
+                print(f'  - Loaded {len(diag_histories)} diagnostic histories '
+                      f'(lengths {sorted({sum(c for _, c in h) for h in diag_histories})})')
         else:
             diag_histories = None
 
@@ -139,22 +179,36 @@ def main():
             temp = np.random.uniform(*args.temp_bounds)
 
             # Generate data
-            sim_tmp = gen_emp(
-                n_arms=args.n_arms,
-                n_outcomes=args.n_outcomes,
-                n_trials=args.n_trials,
-                n_rooms=args.n_rooms,
-                alpha=args.alpha,
-                ell=ell,
-                horizon=args.horizon,
-                cost = args.cost,
-                temp=temp,
-                termination_arm=args.termination_arm,
+            if rooms:
+                sim_tmp = gen_rooms(
+                    n_arms=args.n_arms,
+                    n_outcomes=args.n_outcomes,
+                    n_trials=args.n_trials,
+                    n_rooms=args.n_rooms,
+                    alpha=args.alpha,
+                    ell=ell,
+                    cost=args.cost,
+                    temp=temp,
+                    termination_arm=args.termination_arm,
+                    diag_histories=diag_histories,
+                )
+            else:
+                sim_tmp = gen_arms(
+                    n_arms=args.n_arms,
+                    n_outcomes=args.n_outcomes,
+                    n_trials=args.n_trials,
+                    n_rooms=args.n_rooms,
+                    alpha=args.alpha,
+                    ell=ell,
+                    horizon=args.horizon,
+                    cost = args.cost,
+                    temp=temp,
+                    termination_arm=args.termination_arm,
 
-                ## horizons task
-                diag_histories=diag_histories,
-                n_subseq_trials=args.n_subseq_trials
-            )
+                    ## horizons task
+                    diag_histories=diag_histories,
+                    n_subseq_trials=args.n_subseq_trials
+                )
             sim_tmp['subject_id'] = [sim_id] * len(sim_tmp['room'])
             sim_tmp['agent_type'] = [agent_type] * len(sim_tmp['room'])
 
@@ -183,17 +237,22 @@ def main():
         df_sim['alpha'] = args.alpha
         df_sim['termination_arm'] = args.termination_arm
         df_sim['cost'] = args.cost
+        df_sim['expt'] = args.expt
+        if rooms:
+            df_sim['n_AFC'] = args.n_AFC
 
         # Reorder columns so that 'subject_id' is first
         cols = df_sim.columns.tolist()
         cols = ['subject_id'] + [c for c in cols if c != 'subject_id']
         df_sim = df_sim[cols]
 
-        ## canonicalise histories 
-        df_sim = canonicalise_histories(df_sim, args.n_arms, args.n_outcomes)
+        ## canonicalise histories (rooms histories are already canonical, from the diag table)
+        if not rooms:
+            df_sim = canonicalise_histories(df_sim, args.n_arms, args.n_outcomes)
 
         ## Save
         print('saving...')
+        os.makedirs(os.path.dirname(stem), exist_ok=True)
         path = f'{stem}.csv'
         df_sim.to_csv(path, index=False)
 

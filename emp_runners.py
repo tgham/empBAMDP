@@ -273,7 +273,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
     
 
 ## generate a single synthetic dataset, i.e. an ell agent acting in its own emp bandit env
-def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, termination_arm=True, diag_histories=None, n_subseq_trials=1, temp=1.0, greedy =False, seed=None):
+def gen_arms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, termination_arm=True, diag_histories=None, n_subseq_trials=1, temp=1.0, greedy =False, seed=None):
     """Generate synthetic data from an agent in its own emp bandit env."""
     ## emp agent at this ell, or info-seeking agent if ell is None (NB: the info agent here is cost-free)
     agent = make_agent(n_arms, n_outcomes, alpha, ell, termination_arm,
@@ -321,8 +321,8 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
         env = make_emp_env(n_arms=n_arms, n_outcomes=n_outcomes, n_trials=n_trials,
                         alpha=alpha, ell=ell, termination_arm=termination_arm, p_matrix=p_matrix,
                         seed=seed)
-        env.reset() 
-        
+        env.reset()
+
         ## loop through trials
         for i in range(n_trials_in_room):
             t = t0 + i
@@ -352,7 +352,7 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
             most_sampled_counts = np.max(counts.sum(axis=1))
             chose_least_sampled = action in np.where(counts.sum(axis=1) == least_sampled_counts)[0]
             p_chose_least_sampled = probs[np.where(counts.sum(axis=1) == least_sampled_counts)[0]].max()
-            if t>0:
+            if i>0:
                 repeat_choice = action == last_action
                 p_repeat_choice = probs[last_action] if not np.isnan(last_action) else np.nan
             else:
@@ -401,6 +401,72 @@ def gen_emp(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, te
                 break
 
     
+    ## add info to dict about params
+    sim_out['gen_ell'] = [ell] * len(sim_out['room'])
+    sim_out['gen_horizon'] = [horizon] * len(sim_out['room'])
+    sim_out['gen_temp'] = [temp] * len(sim_out['room'])
+
+    return sim_out
+
+
+## generate a single synthetic dataset for the rooms task, i.e. an ell agent choosing between n_AFC belief states
+def gen_rooms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon=None, termination_arm=True, diag_histories=None, temp=1.0, greedy=False, seed=None):
+    """Generate synthetic data from an agent choosing between preset belief states.
+
+    Each of the `n_rooms` choices is between one tuple of `diag_histories`, with
+    p(r|ell) = softmax_r(Emp_ell(h_r) / temp) -- the leaf value of each room's
+    belief state, as in `_diag_model_row`. `n_trials` and `horizon` are unused,
+    and kept only so the signature mirrors `gen_arms`.
+    """
+    ## emp agent at this ell, or info-seeking agent if ell is None 
+    agent = make_agent(n_arms, n_outcomes, alpha, ell, termination_arm,
+                       cost=cost if ell is not None else 0.0) #(NB: the info agent here is cost-free)
+
+    ## define ell_1 agent for scoring expected p(reward)
+    ell_1_agent = make_agent(n_arms, n_outcomes, alpha, 1.0, termination_arm, cost)
+
+    ## init data
+    sim_out = defaultdict(list)
+
+    ## loop through choices, each between one diagnostic tuple of histories
+    for r in range(n_rooms):
+
+        ## seed each room's belief with its preset history
+        histories = diag_histories[r % len(diag_histories)]
+        counts_array = np.zeros((len(histories), n_arms, n_outcomes), dtype=int)
+        for k, history_k in enumerate(histories):
+            for (a_obs, o_obs), c in history_k:
+                counts_array[k, a_obs, o_obs] += c
+
+        ## compute Q = emp of each room's belief state
+        Q = np.array([agent.leaf_value(C)[0] for C in counts_array])
+        probs = _softmax(Q/temp)
+
+        ## select room
+        if greedy:
+            max_Q = np.nanmax(Q)
+            best_rooms = np.where(Q == max_Q)[0]
+            if len(best_rooms) > 1:
+                action = int(np.random.choice(best_rooms))
+            else:
+                action = int(best_rooms[0])
+        else: #prob matching
+            action = int(np.random.choice(len(probs), p=probs))
+
+        ## save
+        sim_out['room'].append(r)
+        sim_out['trial'].append(0)
+        sim_out['action'].append(action)
+        for k, history_k in enumerate(histories):
+            sim_out[f'room_history_{k}'].append(repr(history_k))
+            sim_out[f't_{k}'].append(int(counts_array[k].sum()))
+            sim_out[f'Q_{k}'].append(Q[k])
+            sim_out[f'p_{k}'].append(probs[k])
+
+        ## score chosen room on current probability of reward - i.e. emp_1
+        ell_1 = ell_1_agent.leaf_value(counts_array[action])[0]
+        sim_out['ell_1'].append(ell_1)
+
     ## add info to dict about params
     sim_out['gen_ell'] = [ell] * len(sim_out['room'])
     sim_out['gen_horizon'] = [horizon] * len(sim_out['room'])
@@ -638,7 +704,7 @@ def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s=
 
     `agent` is the emp agent over the ell grid whose prior weights are `ell_w0s`.
     Step k of a sequence plans with the receding horizon min(horizon, n_trials - t - k),
-    as in `gen_emp`. Every sequence is enumerated, so time and memory grow as
+    as in `gen_arms`. Every sequence is enumerated, so time and memory grow as
     (n_arms * n_outcomes) ** h_remaining.
     """
     n_arms, n_outcomes = agent.n_arms, agent.n_outcomes
@@ -1294,7 +1360,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
     """Diagnosticity for ONE arbitrary (non-canonical) count matrix.
 
     For scoring a real participant's history (`run_emp`) or a simulated one
-    (`gen_emp`'s `counts_array`). `C` is canonicalised first: diagnosticity is
+    (`gen_arms`'s `counts_array`). `C` is canonicalised first: diagnosticity is
     constant on arm/outcome-relabelling orbits, so the canonical value is the
     right one, and the returned `history_str` is the canonical label that joins
     against `enumerate_diagnosticity` / `enumerate_curves` output.
@@ -1461,7 +1527,10 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
     
     ## hoist the data out of the DataFrame
     design = _design_from_df(df_ppt)
-    rooms = _rooms_from_df(df_ppt)
+    if design['expt'] == 'rooms':
+        rooms = _rooms_from_df(df_ppt)
+    else:
+        arms = _arms_from_df(df_ppt)
 
     ## emp vs info agent, and which parameters the optimiser actually searches
     if agent_type is None:
@@ -1482,7 +1551,10 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
         else: ## empowerment agent
             ell, temp = params
 
-        return _nll_from_rooms(rooms, design, ell, temp, horizon, init_t)
+        if design['expt'] == 'rooms':
+            return _nll_from_rooms(rooms, design, ell, temp)
+        elif design['expt'] == 'arms':
+            return _nll_from_arms(arms, design, ell, temp, horizon, init_t)
 
     res = differential_evolution(
         func=compute_nll,
@@ -1507,7 +1579,10 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
     success = res.success
 
     ## calculate n_trials from the scored count
-    n_fit_trials = len(df_ppt.loc[df_ppt['trial'] >= init_t])
+    if design['expt'] == 'rooms':
+        n_fit_trials = len(rooms)
+    else:
+        n_fit_trials = len(df_ppt.loc[df_ppt['trial'] >= init_t])
     n_free_params = len(bounds) ## temp, plus ell wherever it is free
     BIC = n_free_params*np.log(n_fit_trials) + 2*nll
 
@@ -1533,6 +1608,7 @@ def _design_from_df(df_ppt):
         'termination_arm': bool(df_ppt['termination_arm'].values[0]),
         'cost': float(df_ppt['cost'].values[0]),
         'alpha': float(df_ppt['alpha'].values[0]),
+        'expt': str(df_ppt['expt'].values[0]) if 'expt' in df_ppt.columns else 'arms',
     }
 
 
@@ -1542,7 +1618,7 @@ def _counts_from_preset(history, n_arms, n_outcomes):
 
     Returns None for an absent/empty history, i.e. "start from a flat prior".
     This is the same encoding as the `history` column of the diagnosticity
-    tables, so a preset history can be dropped straight into `gen_emp`.
+    tables, so a preset history can be dropped straight into `gen_arms`.
     """
     if history is None or (isinstance(history, float) and np.isnan(history)):
         return None
@@ -1559,7 +1635,7 @@ def _counts_from_preset(history, n_arms, n_outcomes):
     return counts
 
 
-def _rooms_from_df(df_ppt):
+def _arms_from_df(df_ppt):
     """Hoist each room's choice sequence out of the DataFrame, together with the
     belief it starts from.
 
@@ -1592,7 +1668,7 @@ def _rooms_from_df(df_ppt):
 
 
 # NLL of the choices under, given parameterised model
-def _nll_from_rooms(rooms, design, ell, temp, horizon, init_t):
+def _nll_from_arms(arms, design, ell, temp, horizon, init_t):
 
     n_arms = design['n_arms']
     n_outcomes = design['n_outcomes']
@@ -1605,7 +1681,7 @@ def _nll_from_rooms(rooms, design, ell, temp, horizon, init_t):
     agent = make_agent(n_arms, n_outcomes, alpha, ell, termination_arm, cost)
 
     NLL = 0.0
-    for trials, actions, outcomes, terminated, init_counts in rooms:
+    for trials, actions, outcomes, terminated, init_counts in arms:
 
         ## flat prior for the full task
         if init_counts is None:
@@ -1637,15 +1713,70 @@ def _nll_from_rooms(rooms, design, ell, temp, horizon, init_t):
     return NLL
 
 
+def _rooms_from_df(df_ppt):
+    """Hoist each room's choice out of the DataFrame, together with the belief
+    states on offer.
+
+    In the rooms task each room is a single choice between the `n_AFC` belief
+    states in its `room_history_{k}` columns.
+    """
+    n_arms = int(df_ppt['n_arms'].values[0])
+    n_outcomes = int(df_ppt['n_outcomes'].values[0])
+    n_AFC = int(df_ppt['n_AFC'].values[0])
+
+    ## get choice info
+    df = df_ppt.sort_values(['subject_id', 'room'])
+    rooms = []
+    for _, row in df.iterrows():
+        counts_array = np.zeros((n_AFC, n_arms, n_outcomes), dtype=int)
+        for k in range(n_AFC):
+            counts = _counts_from_preset(row[f'room_history_{k}'], n_arms, n_outcomes)
+            if counts is not None:
+                counts_array[k] = counts
+        rooms.append((
+            counts_array,
+            int(row['action']),
+        ))
+    return rooms
+
+
+# NLL of the room choices, given parameterised model
+def _nll_from_rooms(rooms, design, ell, temp):
+
+    n_arms = design['n_arms']
+    n_outcomes = design['n_outcomes']
+    termination_arm = design['termination_arm']
+    cost = design['cost']
+    alpha = design['alpha']
+
+    ## fresh agent per evaluation, as in _nll_from_arms
+    agent = make_agent(n_arms, n_outcomes, alpha, ell, termination_arm, cost)
+
+    NLL = 0.0
+    for counts_array, action in rooms:
+
+        ## Q = emp of each room's belief state
+        Q = np.array([agent.leaf_value(counts)[0] for counts in counts_array])
+        probs = _softmax(Q / temp)
+
+        NLL -= np.log(probs[action])
+    return NLL
+
+
 def nll_emp(df_ppt, ell=1, horizon=None, init_t=0, temp=1):
     """NLL of the yoked choices in `df_ppt` under (ell, temp). Returns a float.
 
     The scoring counterpart to `run_emp`. Extracts the sequence and the task
     constants, then scores; `_fit_ppt` skips this wrapper and reuses a single
-    extraction across every evaluation of the optimiser.
+    extraction across every evaluation of the optimiser. Rooms-task data
+    (`expt == 'rooms'`) is scored with `_nll_from_rooms`.
     """
-    return _nll_from_rooms(_rooms_from_df(df_ppt), _design_from_df(df_ppt),
-                           ell, temp, horizon, init_t)
+    design = _design_from_df(df_ppt)
+    if design['expt'] == 'rooms':
+        return _nll_from_rooms(_rooms_from_df(df_ppt), design, ell, temp)
+    elif design['expt'] == 'arms':
+        return _nll_from_arms(_arms_from_df(df_ppt), design,
+                            ell, temp, horizon, init_t)
 
 ### calculate PFs for info-seeking agent
 def pareto_run(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
