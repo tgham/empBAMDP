@@ -1,8 +1,13 @@
+import re
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.transforms import blended_transform_factory, offset_copy
 from matplotlib.ticker import LogLocator
+from matplotlib.patches import Rectangle, Circle
+from matplotlib.lines import Line2D
+from matplotlib.legend_handler import HandlerBase
+from scipy.special import softmax
 
 def _split_counts_str(h):
     if h in ('', 'init'):
@@ -432,12 +437,12 @@ def plot_tipping_points(
     return fig, all_axes
 
 
-def plot_curves(
+def plot_arm_curves(
     df_curves,
     n_arms,
     df_tip=None,
     termination_arm=True,
-    y='Q',
+    y='p',
     arm_colors=None,
     log_x=True,
     ncols=4,
@@ -446,13 +451,15 @@ def plot_curves(
     suptitle=None,
     info_seeker=False,
     ML=False,
-    save = True
+    save = True,
 ):
     """Plot Q-value (or softmax-prob) curves across ell for each (history, t)
     in `df_curves` (output of `enumerate_curves`). Returns one figure per
     trial t; each figure has a grid of panels for that trial's histories.
 
     `y='Q'` plots Q_a vs ell; `y='p'` plots softmax choice probabilities.
+    For all histories on a single axis (including empowerment), see
+    `plot_emp_curves`.
 
     Each panel gets a short strip beneath the curve plot showing which
     action(s) is the argmax across ell. When `df_tip` is provided, the strip
@@ -468,6 +475,8 @@ def plot_curves(
     """
     if 'history_str' not in df_curves.columns or len(df_curves) == 0:
         raise ValueError("df_curves is empty or missing 'history_str'")
+    if y not in ('Q', 'p'):
+        raise ValueError(f"y must be 'Q' or 'p', got {y!r}")
 
     panels_by_t = {}
     for t, history_str in (df_curves[['t', 'history_str']]
@@ -479,8 +488,11 @@ def plot_curves(
     ts = sorted(panels_by_t.keys())
 
     if arm_colors is None:
-        default_cycle = ['tab:blue', 'tab:orange', 'tab:red',
-                         'tab:green', 'tab:purple', 'tab:brown']
+        default_cycle = [
+            'tab:blue', 'tab:red', 'tab:green',
+            # 'tab:blue', 'tab:orange', 'tab:red',
+            #              'tab:green', 'tab:purple', 'tab:brown',
+                         ]
         arm_colors = {a: default_cycle[a % len(default_cycle)] for a in range(n_arms)}
         if termination_arm:
             arm_colors[n_arms] = 'tab:grey'
@@ -529,20 +541,10 @@ def plot_curves(
                 decades = np.log10(ell_hi) - np.log10(ell_lo)
                 log_ticks = np.logspace(np.ceil(np.log10(ell_lo)), np.floor(np.log10(ell_hi)), num=int(decades) + 1)
                 ax.set_xticks(log_ticks)
-            ## for the unknown-context agent, also show p(ctx 0 | history)
-            ## (constant across ell for a given history/t)
-            if len(sub) and str(sub['alpha'].iloc[0]) == 'unknown':
-                if 'p_ctx_0_0' in sub.columns:
-                    ax.set_title(f'{history_str}\np_ctx_0_0 = {sub["p_ctx_0_0"].iloc[0]:.3f}, p_ctx_1_0 = {sub["p_ctx_1_0"].iloc[0]:.3f}',
-                                fontsize=8)
-                else:
-                    ax.set_title(f'{history_str}\np_ctx_0 = {sub["p_ctx_0"].iloc[0]:.3f}',
-                                fontsize=8)
+            if ML:
+                ax.set_title(f'{history_str}\nML = {sub["ML"].iloc[0]:.3f}', fontsize=9)
             else:
-                if ML:
-                    ax.set_title(f'{history_str}\nML = {sub["ML"].iloc[0]:.3f}', fontsize=8)
-                else:
-                    ax.set_title(history_str, fontsize=8)
+                ax.set_title(history_str, fontsize=9)
             ax.grid(alpha=0.25, which='both')
             if i % ncols == 0:
                 ax.set_ylabel(y)
@@ -634,6 +636,256 @@ def plot_curves(
     
 
     return figs_by_t
+
+
+## ---------------------------------------------------------------------------
+## history glyphs: a visual stand-in for history strings like 'a0o0:2-a1o1:1'.
+## A plus-shaped grid of 5 cells; outcome o gets the cell in direction
+## HISTORY_OUTCOME_DIRS[o] from the (empty) centre, and each (a, o) observation
+## is a token in that cell, coloured by action.
+## ---------------------------------------------------------------------------
+
+HISTORY_OUTCOME_DIRS = {0: (0, 1), 1: (1, 0), 2: (0, -1), 3: (-1, 0)}  # up, right, down, left
+HISTORY_ACTION_COLORS = ['tab:blue', 'tab:red', 'tab:green', 'tab:orange',
+                         'tab:purple', 'tab:brown']
+
+
+def parse_history_str(history):
+    """'a0o0:2-a1o1:1' -> {(0, 0): 2, (1, 1): 1}; '' / 'init' -> {}."""
+    counts = {}
+    if history in ('', 'init', None):
+        return counts
+    for tok in str(history).split('-'):
+        m = re.fullmatch(r'a(\d+)o(\d+):(\d+)', tok.strip())
+        if m is None:
+            raise ValueError(f'cannot parse history token {tok!r} in {history!r}')
+        a, o, c = map(int, m.groups())
+        counts[(a, o)] = counts.get((a, o), 0) + c
+    return counts
+
+
+def _token_offsets(n, min_grid=2):
+    """Centres (in units of cell size, relative to cell centre) and radius
+    for n tokens packed on a near-square grid inside one cell. The grid is
+    at least `min_grid` wide so token size only shrinks once a cell gets
+    crowded, rather than a lone token filling its cell."""
+    if n == 0:
+        return [], 0.
+    ncol = int(np.ceil(np.sqrt(n)))
+    nrow = int(np.ceil(n / ncol))
+    pitch = 0.84 / max(ncol, nrow, min_grid)
+    offsets = []
+    for i in range(n):
+        r, c = divmod(i, ncol)
+        n_in_row = min(ncol, n - r * ncol)  # centre a partial last row
+        x = (c - (n_in_row - 1) / 2) * pitch
+        y = ((nrow - 1) / 2 - r) * pitch
+        offsets.append((x, y))
+    return offsets, 0.42 * pitch
+
+
+def history_glyph_artists(history, center=(0., 0.), size=1., action_colors=None,
+                          outcome_dirs=None, transform=None,
+                          cell_kw=None, token_kw=None):
+    """Build (but don't add) the patches for one history glyph.
+
+    `history` is a history string or a {(a, o): count} dict. `size` is the
+    side of one cell, so the glyph spans 3*size. `transform` is applied to
+    every patch (e.g. a legend handlebox transform); None leaves them in
+    the data coords of whatever axes they get added to.
+    """
+    counts = parse_history_str(history) if not isinstance(history, dict) else history
+    action_colors = HISTORY_ACTION_COLORS if action_colors is None else action_colors
+    outcome_dirs = HISTORY_OUTCOME_DIRS if outcome_dirs is None else outcome_dirs
+    cell_kw = {'facecolor': '0.96', 'edgecolor': '0.55', 'linewidth': 0.6, **(cell_kw or {})}
+    token_kw = {'edgecolor': 'white', 'linewidth': 0.3, **(token_kw or {})}
+    cx, cy = center
+
+    by_outcome = {}
+    for (a, o), c in sorted(counts.items()):
+        if o not in outcome_dirs:
+            raise ValueError(f'outcome {o} has no glyph position (outcome_dirs has '
+                             f'{sorted(outcome_dirs)})')
+        by_outcome.setdefault(o, []).extend([a] * c)
+
+    artists = []
+    for dx, dy in [(0, 0)] + [outcome_dirs[o] for o in sorted(outcome_dirs)]:
+        artists.append(Rectangle((cx + (dx - 0.5) * size, cy + (dy - 0.5) * size),
+                                 size, size, **cell_kw))
+    for o, actions in by_outcome.items():
+        dx, dy = outcome_dirs[o]
+        offsets, r = _token_offsets(len(actions))
+        for a, (ox, oy) in zip(actions, offsets):
+            color = (action_colors[a] if isinstance(action_colors, dict)
+                     else action_colors[a % len(action_colors)])
+            artists.append(Circle((cx + (dx + ox) * size, cy + (dy + oy) * size),
+                                  r * size, facecolor=color, **token_kw))
+    if transform is not None:
+        for art in artists:
+            art.set_transform(transform)
+    return artists
+
+
+def draw_history_glyph(ax, history, center=(0., 0.), size=1., **kwargs):
+    """Add a history glyph to `ax` in data coords (see history_glyph_artists).
+    Tokens are circles, so use an equal-aspect axis to keep them round."""
+    artists = history_glyph_artists(history, center=center, size=size, **kwargs)
+    for art in artists:
+        ax.add_patch(art)
+    return artists
+
+
+def plot_history_glyph(history, ax=None, size=1., title=None, **kwargs):
+    """Standalone glyph on its own (possibly new) axis. Returns ax."""
+    if ax is None:
+        _, ax = plt.subplots(figsize=(1.2, 1.2))
+    draw_history_glyph(ax, history, size=size, **kwargs)
+    lim = 1.55 * size
+    ax.set_xlim(-lim, lim)
+    ax.set_ylim(-lim, lim)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    if title is not None:
+        ax.set_title(title, fontsize=6)
+    return ax
+
+
+class _HistoryHandle:
+    """Legend proxy: a line colour plus a history to draw as a glyph."""
+    def __init__(self, history, color, lw=2.0):
+        self.history, self.color, self.lw = history, color, lw
+
+
+class _HistoryGlyphHandler(HandlerBase):
+    """Legend handler drawing a short line sample followed by the glyph."""
+    def __init__(self, action_colors=None, outcome_dirs=None, **kw):
+        super().__init__(**kw)
+        self.action_colors, self.outcome_dirs = action_colors, outcome_dirs
+
+    def create_artists(self, legend, orig_handle, xdescent, ydescent, width,
+                       height, fontsize, trans):
+        x0, y0 = -xdescent, -ydescent
+        size = height / 3
+        glyph_w = 3 * size
+        line_end = x0 + max(width - glyph_w - 0.3 * fontsize, 0.3 * width)
+        line = Line2D([x0, line_end], [y0 + height / 2] * 2,
+                      color=orig_handle.color, lw=orig_handle.lw,
+                      solid_capstyle='butt', transform=trans)
+        glyph = history_glyph_artists(
+            orig_handle.history,
+            center=(x0 + width - glyph_w / 2, y0 + height / 2), size=size,
+            action_colors=self.action_colors, outcome_dirs=self.outcome_dirs,
+            transform=trans, cell_kw={'linewidth': 0.4})
+        return [line] + glyph
+
+
+def history_glyph_legend(ax, histories, colors, action_colors=None,
+                         outcome_dirs=None, show_text=False, glyph_height=5,
+                         fontsize=7, **legend_kw):
+    """Legend on `ax` with one (line colour, glyph) entry per history.
+    `glyph_height` is the glyph height in units of `fontsize`. With
+    `show_text` the history string is kept as the entry's label."""
+    handles = [_HistoryHandle(h, c) for h, c in zip(histories, colors)]
+    labels = [h if show_text else '' for h in histories]
+    legend_kw = {'handleheight': glyph_height, 'handlelength': glyph_height + 1.5,
+                 'handletextpad': 0.4 if show_text else 0., 'labelspacing': 0.3,
+                 'columnspacing': 1.0, 'framealpha': 0.9, **legend_kw}
+    handler = _HistoryGlyphHandler(action_colors=action_colors, outcome_dirs=outcome_dirs)
+    return ax.legend(handles, labels, fontsize=fontsize,
+                     handler_map={_HistoryHandle: handler}, **legend_kw)
+
+
+def plot_emp_curves(df_curves, y='emp', temp=1.0, log_x=True, figsize=(7, 4.5),
+                    cmap='viridis', suptitle=None, history_repr='text',
+                    action_colors=None, glyph_labels=False):
+    """Plot a per-history quantity vs ell for every history in `df_curves`
+    on one axis, one line per history, coloured by history (ordered by t,
+    then history_str, along `cmap`). Returns (fig, ax).
+
+    `y='emp'` plots the empowerment of the current belief state
+    (`current_emp`); `y='p'` plots, at each ell, the softmax of `current_emp`
+    across the plotted histories, softmax(emp / temp) -- i.e. the probability
+    of choosing each history if its empowerment were its value. The softmax
+    runs over exactly the histories in `df_curves`, so filter it to the set
+    being compared (and to a single alpha / horizon / cost) first.
+
+    `history_repr` sets how histories are identified: 'text' (history strings
+    in the legend), 'glyph' (legend of line sample + history glyph) or 'inset'
+    (a side panel with one glyph per history, underlined in its curve colour).
+    `action_colors` colours glyph tokens by action; `glyph_labels` also
+    prints the history strings next to the glyphs.
+    """
+    if y not in ('emp', 'p'):
+        raise ValueError(f"y must be 'emp' or 'p', got {y!r}")
+    if history_repr not in ('text', 'glyph', 'inset'):
+        raise ValueError(f"history_repr must be 'text', 'glyph' or 'inset', got {history_repr!r}")
+    histories = (df_curves[['t', 'history_str']]
+                 .drop_duplicates()
+                 .sort_values(['t', 'history_str'])['history_str']
+                 .tolist())
+    colors = plt.get_cmap(cmap)(np.linspace(0, 1, max(len(histories), 2)))
+
+    ## (ell x history) grid of empowerments
+    if df_curves.duplicated(['ell', 'history_str']).any():
+        raise ValueError('df_curves has several rows per (ell, history_str); '
+                         'filter it to a single alpha / horizon / cost first')
+    emp =(df_curves.pivot(index='ell', columns='history_str', values='current_emp')
+           .sort_index()[histories])
+    if y == 'p':
+        vals = pd.DataFrame(softmax(emp.values / temp, axis=1),
+                            index=emp.index, columns=emp.columns)
+        y_label = 'p'
+    else:
+        vals, y_label = emp, 'emp'
+
+    if history_repr == 'inset':
+        ## side panel of glyphs, roughly as tall as the main axis
+        n = len(histories)
+        g_nrows = max(1, min(n, int(np.ceil(np.sqrt(2 * n)))))
+        g_ncols = int(np.ceil(n / g_nrows))
+        cell_in = figsize[1] / g_nrows
+        fig = plt.figure(figsize=(figsize[0] + g_ncols * cell_in, figsize[1]))
+        gs = fig.add_gridspec(1, 2, width_ratios=[figsize[0], g_ncols * cell_in], wspace=0.05)
+        ax = fig.add_subplot(gs[0])
+        ggs = gs[1].subgridspec(g_nrows, g_ncols, wspace=0.05, hspace=0.25 if glyph_labels else 0.05)
+        for i, (color, h) in enumerate(zip(colors, histories)):
+            r, c = i % g_nrows, i // g_nrows  # fill column-major, like a legend
+            gax = fig.add_subplot(ggs[r, c])
+            plot_history_glyph(h, ax=gax, action_colors=action_colors,
+                               title=h if glyph_labels else None)
+            gax.set_ylim(-1.9, 1.55)
+            gax.plot([-1.2, 1.2], [-1.75, -1.75], color=color, lw=2.5,
+                     solid_capstyle='butt')
+    else:
+        fig, ax = plt.subplots(figsize=figsize)
+
+    for color, history_str in zip(colors, histories):
+        ax.plot(vals.index, vals[history_str], '-', color=color,
+                label=history_str, alpha=0.9)
+    if y == 'p':
+        ax.axhline(1 / len(histories), color='k', linestyle='--',
+                   linewidth=1, zorder=1.5)
+    if log_x:
+        ax.set_xscale('log')
+    ax.set_xlabel(r'$\ell$')
+    ax.set_ylabel(y_label)
+    ax.grid(alpha=0.25, which='both')
+    if history_repr == 'text':
+        ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), fontsize=7,
+                  ncol=max(1, len(histories) // 25), framealpha=0.9)
+    elif history_repr == 'glyph':
+        glyph_height, spacing, fontsize = 5, 0.3, 7
+        rows_fit = max(1, int(figsize[1] * 72 / ((glyph_height + spacing) * fontsize)))
+        history_glyph_legend(ax, histories, colors, action_colors=action_colors,
+                             show_text=glyph_labels, glyph_height=glyph_height,
+                             fontsize=fontsize, labelspacing=spacing,
+                             loc='center left', bbox_to_anchor=(1.02, 0.5),
+                             ncol=int(np.ceil(len(histories) / rows_fit)))
+    if suptitle is not None:
+        ax.set_title(suptitle, fontsize=12, fontweight='bold')
+    if history_repr != 'inset':  # tight_layout fights the glyph subgridspec
+        fig.tight_layout()
+    return fig, ax
 
 
 def _heatmap_metric_spec(metric, cmap):

@@ -1,4 +1,5 @@
 import ast
+import itertools
 import numpy as np
 import pandas as pd
 from emp_utils import *
@@ -413,8 +414,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      horizons = None,
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50,
-                     df_max=None, costs=(0.0,),
-                     tied_only=False, init_t=0):
+                     costs=(0.0,),init_t=0):
     """Q / softmax-prob curves over ell for canonical histories.
 
     - enumerate ALL canonical histories at all trials,
@@ -437,12 +437,6 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     is penalised by `c = k * (max achievable emp for this alpha, ell)`, paid
     recursively on every pull over the horizon (see `EmpAgent.Q`); the
     terminate action is free and the info-seeking columns stay cost-free.
-
-    The per-(alpha, ell) max empowerment comes from `df_max` (columns `ell`,
-    `alpha`, `current_emp`). If `df_max` is None and any `k != 0` is requested,
-    it is derived internally as the max `current_emp` over all swept histories
-    for each (alpha, ell) -- i.e. the `k=0` pass seeds the costed ones, so a
-    single call is self-contained. 
 
     Returns a long-format DataFrame with one row per (history_str, t, ell,
     agent), columns: alpha, Q_0, Q_1, ..., Q_terminate (if
@@ -471,7 +465,6 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
 
     ## sampling costs to sweep
     costs = [costs] if np.isscalar(costs) else list(costs)
-    need_cost = any(float(k) != 0 for k in costs)
 
     ## sampled ells, shared by every history
     sample_ells = np.logspace(np.log10(ell_lo), np.log10(ell_hi), n_ell_samples)
@@ -518,9 +511,9 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                     Qs = emp_agent.Q(counts_array, h_remaining)
 
                     ## info-seeking agent (not parameterised by ell)
-                    info_Q = info_agent.Q(counts_array, h_remaining)[0]
-                    info_best_a = int(np.argmax(info_Q))
-                    info_probs = _softmax(info_Q / temp)
+                    Q_info = info_agent.Q(counts_array, h_remaining)[0]
+                    info_best_a = int(np.argmax(Q_info))
+                    info_probs = _softmax(Q_info / temp)
 
                     ## save data
                     for ei in range(len(sample_ells)):
@@ -537,12 +530,12 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                         for a in range(n_arms):
                             row[f'Q_{a}'] = Q[a]
                             row[f'p_{a}'] = probs[a]
-                            row[f'info_Q_{a}'] = info_Q[a]
+                            row[f'Q_info_{a}'] = Q_info[a]
                             row[f'info_p_{a}'] = info_probs[a]
                         if termination_arm:
                             row['Q_terminate'] = Q[-1]
                             row['p_terminate'] = probs[-1]
-                            row['info_Q_terminate'] = info_Q[-1]
+                            row['Q_info_terminate'] = Q_info[-1]
                             row['info_p_terminate'] = info_probs[-1]
                         rows.append(row)
 
@@ -633,28 +626,6 @@ def _mi_from_step(P, ell_w0s):
     mi = max(H_ell - H_ell_cond, 0.0)
 
     return H_ell, H_ell_cond, mi, p_marg
-
-##   I(A;ell|h) = H(A|h) - E_ell[ H(A|h,ell) ]
-def _mi_from_step_reverse(P):
-    """(H_marg, H_cond, mi) from an (M, A) array of equal-weight policies.
-
-    Row m is p(.|h, ell_m). `mi` is clipped at 0: it is non-negative in exact
-    arithmetic, so any negative value is float noise.
-
-    `check=True` recomputes the same MI the other way round via
-    `_mi_from_step_reverse` and asserts the two agree. Off by default: this
-    runs per canonical history inside a joblib-parallel sweep, so it is a
-    debugging switch rather than an always-on invariant.
-    """
-
-    ## I(A; ell | h) = H(A|h) - E_ell[H(A|h,ell)]
-    P = np.asarray(P, dtype=float)
-    p_marg = P.mean(axis=0)                       # p(a|h), the ell-marginal
-    H_marg = float(_neg_p_log_p(p_marg))          # H(A|h)
-    H_cond = float(np.mean(_neg_p_log_p(P)))      # E_ell[H(A|h,ell)]
-    mi = max(H_marg - H_cond, 0.0)
-
-    return H_marg, H_cond, mi
 
 
 def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s=None):
@@ -776,14 +747,30 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
     actions now share credit instead of going to the lowest index. Note `mi` is
     ALREADY tie-robust -- built from the softmax policies, near-indifferent ells
     barely move it.
+
+    ROOM SELECTION (`room_selection=True`): the choice is between rooms rather
+    than arms. `counts_array` is then an (n_rooms, n_arms, n_outcomes) stack and
+    `t`, `canon_counts`, `history_str` are per-room tuples. Each room is valued
+    by its leaf empowerment, p(r|h,ell) = softmax_r(Emp_ell(h_r) / temp), so the
+    choice is always one step and `horizon` / `n_trials` are unused. The row
+    carries per-room `t_{r}`, `history_str_{r}`, `LML_{r}`, `p_marg_{r}` and
+    `best_room_frac[_dec]_{r}` (the `best_a_frac` diagnostics, over rooms),
+    plus the joined `pair_str`.
     """
-    
+
+    ## determine expt type
+    if np.ndim(counts_array) == 3: # a list or stack of (n_arms, n_outcomes) count matrices, one per room
+        room_selection = True # choice between rooms
+    else:
+        room_selection = False # choice between arms
+
     ### I(A; ell | h) = H(A|h) - E_ell[H(A|h,ell)]
 
     ## init
-    h_remaining = int(np.min([horizon, n_trials - t]))
-    n_actions = n_arms + int(termination_arm)
     tie_tol = float(np.log(2.0)) if tie_tol is None else float(tie_tol)
+
+    ## room selection is always a one-step choice, so horizon/n_trials don't enter (and t is per-room)
+    h_remaining = 1 if room_selection else int(np.min([horizon, n_trials - t]))
 
     ## grid sampling of ells
     n_ell = len(ell_samples)
@@ -792,13 +779,29 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
     ## memoised agent over every sampled ell
     if agent is None:
         agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
-    Qs = agent.Q(counts_array, h_remaining)             # (n_ell, n_actions)
+
+    ## Q values for single history - i.e. counts_array is a single (n_arms, n_outcomes) array, not a list of two arrays for a pair of histories
+    if not room_selection:
+        Qs = agent.Q(counts_array, h_remaining)             # (n_ell, n_actions)
+
+    ## else, compare empowerment of the rooms' histories
+    elif room_selection:
+        counts_array = np.asarray(counts_array)
+        n_rooms = counts_array.shape[0]
+        Qs = np.zeros((n_ell, n_rooms))
+        for r in range(n_rooms):
+            Qs[:, r] = agent.leaf_value(counts_array[r]) ## i.e. Q is given by the empowerment afforded by the room's belief state, for every ell
 
     ## if just a single action, MI is taken over single step
     if h_remaining == 1:
 
-        ## I(A;ell|h), from p(a|h,ell) for each sampled ell
-        P = np.exp(agent.log_policy(counts_array, h_remaining, temp))
+        ## I(A;ell|h), from p(a|h,ell) for each sampled ell, where a is either the next sample or the chosen room
+        if not room_selection:
+            P = np.exp(agent.log_policy(counts_array, h_remaining, temp))
+        else:
+            ## softmax over the rooms, for each ell
+            P = _softmax(Qs / temp, axis=1)                 # (n_ell, n_rooms)
+
         H_ell, H_ell_cond, mi, p_marg = _mi_from_step(P, ell_w0s)
 
     ## else, need to marginalise over sequences resulting from h
@@ -806,7 +809,6 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
 
         ## I(seq;ell|h), exactly over every sequence of the remaining choices
         H_ell, H_ell_cond, mi, p_marg = _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s)
-        # print('mi', mi, 'H_ell', H_ell, 'H_ell_cond', H_ell_cond)
 
     ### which action(s) does the diagnosticity comes from? 
     # near_best = Qs >= Qs.max(axis=1, keepdims=True) - tie_tol * temp
@@ -820,21 +822,16 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
     gap = _top2_gap(Qs)                                  # >= 0
     gap_temp = gap / temp
 
-    ## get LML
-    LML = agent.marginal_likelihood(counts_array)
-
     row = {
         'alpha': alpha,
         'horizon': horizon, 'cost': cost, 'temp': temp,
-        't': t, 'history_str': history_str, 'history': canon_counts,
+        **({} if room_selection else {'t': t, 'history_str': history_str, 'history': canon_counts}),
         'H_ell': H_ell,
         'H_ell_cond': H_ell_cond,
         'mi': mi,
         'mi_bits': mi / np.log(2.0),
-        'mi_norm': mi / np.log(n_actions),
         'n_ell_samples': n_ell,
-        'LML': LML,
-        
+
         ## tie diagnostics
         'tie_tol': tie_tol,
         'tie_frac': float(1.0 - decisive.mean()),
@@ -844,6 +841,22 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
         'gap_mean_temp': float(gap_temp.mean()),
         'gap_median_temp': float(np.median(gap_temp)),
     }
+
+    ## room selection: t, history and LML are per room, and the "actions" are the rooms
+    if room_selection:
+        row['pair_str'] = ' | '.join(history_str)
+        for r in range(n_rooms):
+            row[f't_{r}'] = t[r]
+            row[f'history_str_{r}'] = history_str[r]
+            row[f'history_{r}'] = canon_counts[r]
+            row[f'LML_{r}'] = agent.marginal_likelihood(counts_array[r])
+            row[f'emp_mean_{r}'] = float(ell_w0s @ Qs[:, r]) # prior-weighted E_ell[emp of room r]
+            row[f'p_marg_{r}'] = p_marg[r]
+            row[f'best_room_frac_{r}'] = frac[r]
+            row[f'best_room_frac_dec_{r}'] = frac_dec[r]
+        return row
+
+    row['LML'] = agent.marginal_likelihood(counts_array)
     for a in range(n_arms):
         # row[f'p_marg_{a}'] = p_marg[a]
         row[f'best_a_frac_{a}'] = frac[a]
@@ -882,8 +895,8 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     TIES: `mi` itself is tie-robust (it is a Jensen-Shannon divergence between
     the two softmax policies -- exactly JSD when p_model = (0.5, 0.5)), but any
     argmax READING of this row is not, so the margins are reported on all three
-    fronts. `tie_tol` is a log-odds threshold, default log(3) ~ 1.0986 (winner
-    at least 3:1 over the runner-up), and applies to each:
+    fronts. `tie_tol` is a log-odds threshold, default log(2) ~ 0.693 (winner
+    at least 2:1 over the runner-up), and applies to each:
 
       - WITHIN emp, across ell: `gap_*_emp`, `tie_frac_emp`, `p_best_mean_emp`
         and `best_a_frac[_dec]_emp_{a}` -- the `_diag_emp_row` diagnostics for
@@ -908,37 +921,64 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     here is in probability space, the only common currency.
     """
 
+    ## determine expt type
+    if np.ndim(counts_array) == 3: # a list or stack of (n_arms, n_outcomes) count matrices, one per room
+        room_selection = True # choice between rooms
+    else:
+        room_selection = False # choice between arms
+
     ## init
-    h_remaining = int(np.min([horizon, n_trials - t]))
-    n_actions = n_arms + int(termination_arm)
+    if room_selection:
+        counts_array = np.asarray(counts_array)
+    h_remaining = 1 if room_selection else int(np.min([horizon, n_trials - t]))
+    n_actions = n_arms + int(termination_arm) if not room_selection else counts_array.shape[0]
     tie_tol = float(np.log(2.0)) if tie_tol is None else float(tie_tol)
 
     ## grid sampling of ells
     n_ell = len(ell_samples)
     ell_w0s = ell_weights(ell_samples)
 
-    ### p(a|h,m) for each model
 
-    ## emp agent: one policy per sampled ell, then marginalise over ell
+    ## memoised agents
     if emp_agent is None:
         emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
-    Qs_emp = emp_agent.Q(counts_array, h_remaining)             # (n_ell, n_actions)
     if info_agent is None:
         info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost)
-    info_Q = info_agent.Q(counts_array, h_remaining)[0]         # (n_actions,)
+    
+    ## Q-values in sampling task
+    if not room_selection:
+        Qs_emp = emp_agent.Q(counts_array, h_remaining)             # (n_ell, n_actions)
+        Q_info = info_agent.Q(counts_array, h_remaining)[0]         # (n_actions,)
+
+    ## Q-values = emp of each room
+    else:
+        n_rooms = counts_array.shape[0]
+        Qs_emp = np.zeros((n_ell, n_rooms))
+        for r in range(n_rooms):
+            Qs_emp[:, r] = emp_agent.leaf_value(counts_array[r]) # (n_ell, n_rooms)
+        Q_info = np.zeros(n_rooms)
+        for r in range(n_rooms):
+            Q_info[r] = info_agent.leaf_value(counts_array[r])[0] # (n_rooms,)
+
+    ### p(a|h,m) for each model
     
     ## if just single action, MI is taken over single step
     if h_remaining == 1:
-        P_emp = np.exp(emp_agent.log_policy(counts_array, h_remaining, temp_emp))
+
+        ## empowerment agent: marginalise over ell
+        if not room_selection:
+            P_emp = np.exp(emp_agent.log_policy(counts_array, h_remaining, temp_emp))
+        else:
+            ## softmax over the rooms, for each ell
+            P_emp = _softmax(Qs_emp / temp_emp, axis=1)
         H_ell, H_cond_ell, mi_emp, p_marg_emp = _mi_from_step(P_emp, ell_w0s)
 
-        ## info-seeking agent: not parameterised by ell, so a single policy.
-        if info_agent is None:
-            info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost)
-        P_info = np.exp(info_agent.log_policy(counts_array, h_remaining, temp_info))
-        
-        info_Q = info_agent.Q(counts_array, h_remaining)[0]
-        p_marg_info = _softmax(info_Q / temp_info) ## p(a|h,info)
+        ## info-seeking agent: not parameterised by ell, so a single policy
+        if not room_selection:
+            P_info = np.exp(info_agent.log_policy(counts_array, h_remaining, temp_info))
+        else:
+            P_info = _softmax(Q_info / temp_info)
+            P_info = P_info[None, :] ## make it 2D for `_mi_from_step` to accept
 
         _, _, _, p_marg_info = _mi_from_step(P_info, None) ## don't need mi_info - trivially 0, because no ell-dependence
 
@@ -954,7 +994,6 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
 
 
     ### margins -- see TIES. tie_tol is a log-odds threshold throughout.
-    tie_tol = float(np.log(3.0)) if tie_tol is None else float(tie_tol)
 
     ## within emp, across ell: the same diagnostics `_diag_emp_row` reports --
     ## `best_a_frac_emp_{a}` counts ells where a is AMONG the best (so it does
@@ -967,7 +1006,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     gap_emp_temp = gap_emp / temp_emp
 
     ## within info: one policy, so gap/temp_info IS its top-two log-odds
-    gap_info = float(_top2_gap(info_Q)[0])
+    gap_info = float(_top2_gap(Q_info)[0])
     gap_info_temp = gap_info / temp_info
 
     ## between models: probability space, the only common currency
@@ -1004,13 +1043,11 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     ## normalise by H(M): I(A;M|h) <= min(H(A), H(M))
     mi_norm = mi_model / H_M if H_M > 0 else 0.0
 
-    ## get LML (belief-model property, shared by both agents)
-    LML = emp_agent.marginal_likelihood(counts_array)
 
     row = {
         'alpha': alpha,
         'horizon': horizon, 'cost': cost, 'temp_emp': temp_emp, 'temp_info': temp_info,
-        't': t, 'history_str': history_str, 'history': canon_counts,
+        **({} if room_selection else {'t': t, 'history_str': history_str, 'history': canon_counts}),
         'target': 'model',
         'p_model_emp': p_m[0],
         'H_A_h': H_marg_model,
@@ -1019,7 +1056,6 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         'mi_norm': mi_norm,
         'mi_emp': mi_emp,        # I(A;ell|h,emp) -- the _diag_emp_row quantity
         'n_ell_samples': n_ell,
-        'LML': LML,
         ## tie diagnostics -- within emp (across ell)
         'tie_tol': tie_tol,
         'tie_frac_emp': float(1.0 - decisive_emp.mean()),
@@ -1041,18 +1077,33 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         'model_tie': bool(emp_marg_tie or info_tie),
         'tvd_emp_info': tvd,
     }
-    for a in range(n_arms):
-        row[f'p_marg_{a}'] = p_marg_model[a]
-        row[f'p_marg_emp_{a}'] = p_marg_emp[a]
-        row[f'p_marg_info_{a}'] = p_marg_info[a]
-        row[f'best_a_frac_emp_{a}'] = frac_emp[a]
-        row[f'best_a_frac_dec_emp_{a}'] = frac_dec_emp[a]
-    if termination_arm:
-        row['p_marg_terminate'] = p_marg_model[-1]
-        row['p_marg_emp_terminate'] = p_marg_emp[-1]
-        row['p_marg_info_terminate'] = p_marg_info[-1]
-        row['best_a_frac_emp_terminate'] = frac_emp[-1]
-        row['best_a_frac_dec_emp_terminate'] = frac_dec_emp[-1]
+    ## room selection: t, history and LML are per room, and the "actions" are the rooms
+    if room_selection:
+        row['pair_str'] = ' | '.join(history_str)
+        for r in range(n_rooms):
+            row[f't_{r}'] = t[r]
+            row[f'history_str_{r}'] = history_str[r]
+            row[f'history_{r}'] = canon_counts[r]
+            row[f'LML_{r}'] = emp_agent.marginal_likelihood(counts_array[r]) # belief-model property, shared by both agents
+            row[f'p_marg_{r}'] = p_marg_model[r]
+            row[f'p_marg_emp_{r}'] = p_marg_emp[r]
+            row[f'p_marg_info_{r}'] = p_marg_info[r]
+            row[f'best_room_frac_emp_{r}'] = frac_emp[r]
+            row[f'best_room_frac_dec_emp_{r}'] = frac_dec_emp[r]
+    else:
+        row['LML'] = emp_agent.marginal_likelihood(counts_array) # belief-model property, shared by both agents
+        for a in range(n_arms):
+            row[f'p_marg_{a}'] = p_marg_model[a]
+            row[f'p_marg_emp_{a}'] = p_marg_emp[a]
+            row[f'p_marg_info_{a}'] = p_marg_info[a]
+            row[f'best_a_frac_emp_{a}'] = frac_emp[a]
+            row[f'best_a_frac_dec_emp_{a}'] = frac_dec_emp[a]
+        if termination_arm:
+            row['p_marg_terminate'] = p_marg_model[-1]
+            row['p_marg_emp_terminate'] = p_marg_emp[-1]
+            row['p_marg_info_terminate'] = p_marg_info[-1]
+            row['best_a_frac_emp_terminate'] = frac_emp[-1]
+            row['best_a_frac_dec_emp_terminate'] = frac_dec_emp[-1]
     return row
 
 
@@ -1080,7 +1131,8 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             n_ell_samples=200, prior_mu=0.0, prior_sigma=1.0,
                             sampling='grid', seed=None,
                             init_t=0, n_jobs=1,
-                            target='ell', p_model=(0.5, 0.5), tie_tol=None):
+                            target='ell', p_model=(0.5, 0.5), tie_tol=None,
+                            expt='arms', n_rooms=2, n_room_samples=None):
     """Diagnosticity of every canonical history, for one of two targets.
 
     Mirrors `enumerate_curves`: the same canonical-history enumeration, the same
@@ -1088,6 +1140,23 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     the same horizon / cost sweeps. Where `enumerate_curves` reports the Q/p curve
     at each ell, this reports the single scalar that summarises how much the
     action reveals about ell.
+
+    `expt` selects WHAT the agent chooses between:
+      - 'arms'  (default): the next action within one history, as above.
+      - 'rooms': a room, from `n_rooms` distinct canonical histories, with
+                p(r|h,ell) = softmax_r(Emp_ell(h_r) / temp_emp) -- the leaf
+                empowerment of each room's belief state (see `_diag_emp_row`,
+                ROOM SELECTION). One step by construction, so `horizons` is
+                ignored (the `horizon` column reads 0). For target='model' the
+                info agent likewise values each room by its leaf, with
+                softmax_r(Info(h_r) / temp_info). `n_room_samples=None` (default) enumerates every
+                unordered tuple of histories once -- quadratic in the number of
+                histories for pairs, so keep n_trials small; an int instead
+                draws that many tuples uniformly, with replacement across
+                tuples (so one can recur), seeded by `seed`. Rows carry a
+                `pair` index and per-room `t_{r}`, `history_str_{r}`,
+                `orbit_size_{r}` etc; `history_str_{r}` joins against the
+                'arms' output.
 
     `target` selects WHAT the action is diagnostic OF:
       - 'ell'   (default): I(A;ell|h) -- which ell, within the empowerment model
@@ -1106,14 +1175,15 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                 applies here too, as a log-odds threshold on each model's own
                 top-two margin: `model_tie` flags the histories where
                 `models_agree` is reading argmax noise.
-    Both emit a `target` column and a comparable `mi`, so the two frames concat.
+    Both emit `target` and `expt` columns and a comparable `mi`, so the frames concat.
 
     The ell sample is drawn ONCE and reused across every history, alpha, horizon
     and cost -- common random numbers, so the resulting mi values are directly
     comparable between histories, which is the point of the score.
 
     Returns a long DataFrame, one row per (alpha, horizon, cost, t,
-    history_str). Column names match `enumerate_curves` so the two merge on
+    history_str) -- or per (alpha, cost, pair) for 'rooms'. Column names match
+    `enumerate_curves` so the two merge on
     ['alpha', 'horizon', 'cost', 't', 'history_str'].
 
     COST: n_samples Bayes-adaptive Bellman solves per (history, alpha, horizon,
@@ -1124,6 +1194,8 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     """
     if target not in ('ell', 'model'):
         raise ValueError(f"target must be 'ell' or 'model', got {target!r}")
+    if expt not in ('arms', 'rooms'):
+        raise ValueError(f"expt must be 'arms' or 'rooms', got {expt!r}")
 
     ## shared ell sample from the truncated-normal prior
     ell_samples = ell_prior_samples(n_ell_samples, mu=prior_mu, sigma=prior_sigma,
@@ -1133,7 +1205,11 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     states = canonical_states(n_arms, n_outcomes, n_trials)
     states = [s for s in states if int(s[0]) >= init_t]
 
-    if horizons is None:
+    if expt == 'rooms':
+        ## rooms are valued at their leaf, so a single dummy horizon of 0
+        horizons = [0]
+        states = _room_tuples(states, n_rooms, n_room_samples, seed)
+    elif horizons is None:
         # horizons = [n_trials]
         horizons = [1]
 
@@ -1144,34 +1220,69 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     for alpha in alphas:
         for horizon in horizons:
             for cost in costs:
-                desc = (f"Diagnosticity[{target}] (alpha={alpha}, "
+                desc = (f"Diagnosticity[{target}, {expt}] (alpha={alpha}, "
                         f"h={horizon}, cost={cost})")
                 args = (ell_samples, n_arms, n_outcomes, n_trials, alpha,
                         termination_arm, horizon, cost, temp_emp)
                 args = args + ((temp_info, p_model, tie_tol) if target == 'model'
                                else (tie_tol,))
-                if n_jobs == 1:
-                    rows.extend(_diag_rows(target, tqdm(states, desc=desc), args))
-                else:
-                    ## several batches per worker, interleaved so each mixes early (deep) and late histories
-                    n_batches = min(len(states), 4 * effective_n_jobs(n_jobs))
-                    with tqdm_joblib(tqdm(total=n_batches, desc=desc)):
-                        batch_rows = Parallel(n_jobs=n_jobs)(
-                            delayed(_diag_rows)(target, states[b::n_batches], args)
-                            for b in range(n_batches)
-                        )
+                block = _run_diag_rows(target, states, args, n_jobs, desc)
 
-                    ## undo the interleaving so rows keep the order of `states`
-                    block = [None] * len(states)
-                    for b, r in enumerate(batch_rows):
-                        block[b::n_batches] = r
-                    rows.extend(block)
+                ## rooms: index the tuples, and carry each room's orbit size
+                if expt == 'rooms':
+                    for p, (row, pair) in enumerate(zip(block, states)):
+                        row['pair'] = p
+                        for r, o in enumerate(pair[4]):
+                            row[f'orbit_size_{r}'] = o
+                rows.extend(block)
 
     df = pd.DataFrame(rows)
     df['target'] = target
+    df['expt'] = expt
     df['prior_mu'] = prior_mu
     df['prior_sigma'] = prior_sigma
     return df
+
+
+def _room_tuples(states, n_rooms, n_room_samples=None, seed=None):
+    """Tuples of `n_rooms` distinct canonical histories, packed for `_diag_rows`.
+
+    `n_room_samples=None` gives every unordered tuple once; an int draws that many
+    uniformly, with replacement across tuples. Each tuple comes back in the
+    per-history (t, C, canon_counts, history_str, orbit_size) layout, per room:
+    ((t_0, t_1, ...), stacked C, (cc_0, ...), (hs_0, ...), (orbit_0, ...)).
+    """
+    n_states = len(states)
+    if n_states < n_rooms:
+        raise ValueError(f'only {n_states} canonical histories, cannot fill {n_rooms} distinct rooms')
+
+    if n_room_samples is None:
+        idx = list(itertools.combinations(range(n_states), n_rooms))
+    else:
+        rng = np.random.default_rng(seed)
+        idx = [rng.choice(n_states, size=n_rooms, replace=False) for _ in range(int(n_room_samples))]
+    tuples = [tuple(zip(*(states[i] for i in ii))) for ii in idx]
+    return [(ts, np.stack(Cs), ccs, hss, os_) for (ts, Cs, ccs, hss, os_) in tuples]
+
+
+def _run_diag_rows(target, states, args, n_jobs, desc):
+    """`_diag_rows` over `states`, serially or in `n_jobs` parallel batches, in the order of `states`."""
+    if n_jobs == 1:
+        return _diag_rows(target, tqdm(states, desc=desc), args)
+
+    ## several batches per worker, interleaved so each mixes early (deep) and late histories
+    n_batches = min(len(states), 4 * effective_n_jobs(n_jobs))
+    with tqdm_joblib(tqdm(total=n_batches, desc=desc)):
+        batch_rows = Parallel(n_jobs=n_jobs)(
+            delayed(_diag_rows)(target, states[b::n_batches], args)
+            for b in range(n_batches)
+        )
+
+    ## undo the interleaving so rows keep the order of `states`
+    block = [None] * len(states)
+    for b, r in enumerate(batch_rows):
+        block[b::n_batches] = r
+    return block
 
 
 def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
