@@ -511,9 +511,9 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                     Qs = emp_agent.Q(counts_array, h_remaining)
 
                     ## info-seeking agent (not parameterised by ell)
-                    info_Q = info_agent.Q(counts_array, h_remaining)[0]
-                    info_best_a = int(np.argmax(info_Q))
-                    info_probs = _softmax(info_Q / temp)
+                    Q_info = info_agent.Q(counts_array, h_remaining)[0]
+                    info_best_a = int(np.argmax(Q_info))
+                    info_probs = _softmax(Q_info / temp)
 
                     ## save data
                     for ei in range(len(sample_ells)):
@@ -530,12 +530,12 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                         for a in range(n_arms):
                             row[f'Q_{a}'] = Q[a]
                             row[f'p_{a}'] = probs[a]
-                            row[f'info_Q_{a}'] = info_Q[a]
+                            row[f'Q_info_{a}'] = Q_info[a]
                             row[f'info_p_{a}'] = info_probs[a]
                         if termination_arm:
                             row['Q_terminate'] = Q[-1]
                             row['p_terminate'] = probs[-1]
-                            row['info_Q_terminate'] = info_Q[-1]
+                            row['Q_info_terminate'] = Q_info[-1]
                             row['info_p_terminate'] = info_probs[-1]
                         rows.append(row)
 
@@ -895,8 +895,8 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     TIES: `mi` itself is tie-robust (it is a Jensen-Shannon divergence between
     the two softmax policies -- exactly JSD when p_model = (0.5, 0.5)), but any
     argmax READING of this row is not, so the margins are reported on all three
-    fronts. `tie_tol` is a log-odds threshold, default log(3) ~ 1.0986 (winner
-    at least 3:1 over the runner-up), and applies to each:
+    fronts. `tie_tol` is a log-odds threshold, default log(2) ~ 0.693 (winner
+    at least 2:1 over the runner-up), and applies to each:
 
       - WITHIN emp, across ell: `gap_*_emp`, `tie_frac_emp`, `p_best_mean_emp`
         and `best_a_frac[_dec]_emp_{a}` -- the `_diag_emp_row` diagnostics for
@@ -921,37 +921,64 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     here is in probability space, the only common currency.
     """
 
+    ## determine expt type
+    if np.ndim(counts_array) == 3: # a list or stack of (n_arms, n_outcomes) count matrices, one per room
+        room_selection = True # choice between rooms
+    else:
+        room_selection = False # choice between arms
+
     ## init
-    h_remaining = int(np.min([horizon, n_trials - t]))
-    n_actions = n_arms + int(termination_arm)
+    if room_selection:
+        counts_array = np.asarray(counts_array)
+    h_remaining = 1 if room_selection else int(np.min([horizon, n_trials - t]))
+    n_actions = n_arms + int(termination_arm) if not room_selection else counts_array.shape[0]
     tie_tol = float(np.log(2.0)) if tie_tol is None else float(tie_tol)
 
     ## grid sampling of ells
     n_ell = len(ell_samples)
     ell_w0s = ell_weights(ell_samples)
 
-    ### p(a|h,m) for each model
 
-    ## emp agent: one policy per sampled ell, then marginalise over ell
+    ## memoised agents
     if emp_agent is None:
         emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
-    Qs_emp = emp_agent.Q(counts_array, h_remaining)             # (n_ell, n_actions)
     if info_agent is None:
         info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost)
-    info_Q = info_agent.Q(counts_array, h_remaining)[0]         # (n_actions,)
+    
+    ## Q-values in sampling task
+    if not room_selection:
+        Qs_emp = emp_agent.Q(counts_array, h_remaining)             # (n_ell, n_actions)
+        Q_info = info_agent.Q(counts_array, h_remaining)[0]         # (n_actions,)
+
+    ## Q-values = emp of each room
+    else:
+        n_rooms = counts_array.shape[0]
+        Qs_emp = np.zeros((n_ell, n_rooms))
+        for r in range(n_rooms):
+            Qs_emp[:, r] = emp_agent.leaf_value(counts_array[r]) # (n_ell, n_rooms)
+        Q_info = np.zeros(n_rooms)
+        for r in range(n_rooms):
+            Q_info[r] = info_agent.leaf_value(counts_array[r])[0] # (n_rooms,)
+
+    ### p(a|h,m) for each model
     
     ## if just single action, MI is taken over single step
     if h_remaining == 1:
-        P_emp = np.exp(emp_agent.log_policy(counts_array, h_remaining, temp_emp))
+
+        ## empowerment agent: marginalise over ell
+        if not room_selection:
+            P_emp = np.exp(emp_agent.log_policy(counts_array, h_remaining, temp_emp))
+        else:
+            ## softmax over the rooms, for each ell
+            P_emp = _softmax(Qs_emp / temp_emp, axis=1)
         H_ell, H_cond_ell, mi_emp, p_marg_emp = _mi_from_step(P_emp, ell_w0s)
 
-        ## info-seeking agent: not parameterised by ell, so a single policy.
-        if info_agent is None:
-            info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost)
-        P_info = np.exp(info_agent.log_policy(counts_array, h_remaining, temp_info))
-        
-        info_Q = info_agent.Q(counts_array, h_remaining)[0]
-        p_marg_info = _softmax(info_Q / temp_info) ## p(a|h,info)
+        ## info-seeking agent: not parameterised by ell, so a single policy
+        if not room_selection:
+            P_info = np.exp(info_agent.log_policy(counts_array, h_remaining, temp_info))
+        else:
+            P_info = _softmax(Q_info / temp_info)
+            P_info = P_info[None, :] ## make it 2D for `_mi_from_step` to accept
 
         _, _, _, p_marg_info = _mi_from_step(P_info, None) ## don't need mi_info - trivially 0, because no ell-dependence
 
@@ -967,7 +994,6 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
 
 
     ### margins -- see TIES. tie_tol is a log-odds threshold throughout.
-    tie_tol = float(np.log(3.0)) if tie_tol is None else float(tie_tol)
 
     ## within emp, across ell: the same diagnostics `_diag_emp_row` reports --
     ## `best_a_frac_emp_{a}` counts ells where a is AMONG the best (so it does
@@ -980,7 +1006,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     gap_emp_temp = gap_emp / temp_emp
 
     ## within info: one policy, so gap/temp_info IS its top-two log-odds
-    gap_info = float(_top2_gap(info_Q)[0])
+    gap_info = float(_top2_gap(Q_info)[0])
     gap_info_temp = gap_info / temp_info
 
     ## between models: probability space, the only common currency
@@ -1017,13 +1043,11 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     ## normalise by H(M): I(A;M|h) <= min(H(A), H(M))
     mi_norm = mi_model / H_M if H_M > 0 else 0.0
 
-    ## get LML (belief-model property, shared by both agents)
-    LML = emp_agent.marginal_likelihood(counts_array)
 
     row = {
         'alpha': alpha,
         'horizon': horizon, 'cost': cost, 'temp_emp': temp_emp, 'temp_info': temp_info,
-        't': t, 'history_str': history_str, 'history': canon_counts,
+        **({} if room_selection else {'t': t, 'history_str': history_str, 'history': canon_counts}),
         'target': 'model',
         'p_model_emp': p_m[0],
         'H_A_h': H_marg_model,
@@ -1032,7 +1056,6 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         'mi_norm': mi_norm,
         'mi_emp': mi_emp,        # I(A;ell|h,emp) -- the _diag_emp_row quantity
         'n_ell_samples': n_ell,
-        'LML': LML,
         ## tie diagnostics -- within emp (across ell)
         'tie_tol': tie_tol,
         'tie_frac_emp': float(1.0 - decisive_emp.mean()),
@@ -1054,18 +1077,33 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         'model_tie': bool(emp_marg_tie or info_tie),
         'tvd_emp_info': tvd,
     }
-    for a in range(n_arms):
-        row[f'p_marg_{a}'] = p_marg_model[a]
-        row[f'p_marg_emp_{a}'] = p_marg_emp[a]
-        row[f'p_marg_info_{a}'] = p_marg_info[a]
-        row[f'best_a_frac_emp_{a}'] = frac_emp[a]
-        row[f'best_a_frac_dec_emp_{a}'] = frac_dec_emp[a]
-    if termination_arm:
-        row['p_marg_terminate'] = p_marg_model[-1]
-        row['p_marg_emp_terminate'] = p_marg_emp[-1]
-        row['p_marg_info_terminate'] = p_marg_info[-1]
-        row['best_a_frac_emp_terminate'] = frac_emp[-1]
-        row['best_a_frac_dec_emp_terminate'] = frac_dec_emp[-1]
+    ## room selection: t, history and LML are per room, and the "actions" are the rooms
+    if room_selection:
+        row['pair_str'] = ' | '.join(history_str)
+        for r in range(n_rooms):
+            row[f't_{r}'] = t[r]
+            row[f'history_str_{r}'] = history_str[r]
+            row[f'history_{r}'] = canon_counts[r]
+            row[f'LML_{r}'] = emp_agent.marginal_likelihood(counts_array[r]) # belief-model property, shared by both agents
+            row[f'p_marg_{r}'] = p_marg_model[r]
+            row[f'p_marg_emp_{r}'] = p_marg_emp[r]
+            row[f'p_marg_info_{r}'] = p_marg_info[r]
+            row[f'best_room_frac_emp_{r}'] = frac_emp[r]
+            row[f'best_room_frac_dec_emp_{r}'] = frac_dec_emp[r]
+    else:
+        row['LML'] = emp_agent.marginal_likelihood(counts_array) # belief-model property, shared by both agents
+        for a in range(n_arms):
+            row[f'p_marg_{a}'] = p_marg_model[a]
+            row[f'p_marg_emp_{a}'] = p_marg_emp[a]
+            row[f'p_marg_info_{a}'] = p_marg_info[a]
+            row[f'best_a_frac_emp_{a}'] = frac_emp[a]
+            row[f'best_a_frac_dec_emp_{a}'] = frac_dec_emp[a]
+        if termination_arm:
+            row['p_marg_terminate'] = p_marg_model[-1]
+            row['p_marg_emp_terminate'] = p_marg_emp[-1]
+            row['p_marg_info_terminate'] = p_marg_info[-1]
+            row['best_a_frac_emp_terminate'] = frac_emp[-1]
+            row['best_a_frac_dec_emp_terminate'] = frac_dec_emp[-1]
     return row
 
 
@@ -1109,8 +1147,9 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                 p(r|h,ell) = softmax_r(Emp_ell(h_r) / temp_emp) -- the leaf
                 empowerment of each room's belief state (see `_diag_emp_row`,
                 ROOM SELECTION). One step by construction, so `horizons` is
-                ignored (the `horizon` column reads 0) and only target='ell'
-                is supported. `n_room_samples=None` (default) enumerates every
+                ignored (the `horizon` column reads 0). For target='model' the
+                info agent likewise values each room by its leaf, with
+                softmax_r(Info(h_r) / temp_info). `n_room_samples=None` (default) enumerates every
                 unordered tuple of histories once -- quadratic in the number of
                 histories for pairs, so keep n_trials small; an int instead
                 draws that many tuples uniformly, with replacement across
@@ -1157,8 +1196,6 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
         raise ValueError(f"target must be 'ell' or 'model', got {target!r}")
     if expt not in ('arms', 'rooms'):
         raise ValueError(f"expt must be 'arms' or 'rooms', got {expt!r}")
-    if expt == 'rooms' and target != 'ell':
-        raise ValueError("expt='rooms' only supports target='ell'")
 
     ## shared ell sample from the truncated-normal prior
     ell_samples = ell_prior_samples(n_ell_samples, mu=prior_mu, sigma=prior_sigma,
