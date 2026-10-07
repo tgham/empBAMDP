@@ -128,16 +128,14 @@ def main():
     if rooms:
         stem = (f'useful_saves/recovery/{args.expt}/{args.n_arms}arms_{args.n_outcomes}outcomes_'
                 f'{args.n_trials}trials_{args.n_sims}sims_'
-                f'{args.alpha}alpha_{args.cost}cost_{term}_{args.n_AFC}AFC_{args.n_rooms}rooms')
+                f'{args.alpha}alpha_{args.cost}cost_{term}_{args.n_AFC}AFC_{args.n_rooms}rooms_{args.diag_target}target')
     else:
         stem = (f'useful_saves/recovery/{args.expt}/{args.n_arms}arms_{args.n_outcomes}outcomes_'
                 f'{args.n_trials}trials_{args.n_sims}sims_{args.horizon}h_'
                 f'{args.alpha}alpha_{args.cost}cost_{term}')
         if args.preset_histories:
-            stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq'
-    ## log-uniform is the default, so it leaves older file names unchanged
-    if args.ell_prior != 'loguniform':
-        stem += f'_{args.ell_prior}'
+            stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq_{args.diag_target}target'
+    stem += f'_{args.ell_prior}'
 
     if args.gen_data:
         print('EMP RECOVERY')
