@@ -33,8 +33,9 @@ def main():
                         metavar=('P_EMP', 'P_INFO'))
     
     parser.add_argument('--expt', type=str, default='arms', choices=['arms','rooms'])
-    parser.add_argument('--n_AFC', type=int, default=2)
-    parser.add_argument('--n_room_samples', type=int, default=None)
+    if parser.parse_known_args()[0].expt == 'rooms':
+        parser.add_argument('--n_AFC', type=int, default=2)
+        parser.add_argument('--n_room_samples', type=int, default=None)
 
     args = parser.parse_args()
 
