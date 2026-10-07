@@ -81,6 +81,8 @@ def main():
     parser.add_argument('--n_rooms', type=int, default=25)
     parser.add_argument('--alpha', type=float, default=0.4)
     parser.add_argument('--ell_bounds', type=float, default=(0.01, 10), nargs=2)
+    parser.add_argument('--ell_prior', choices=['loguniform', 'truncnorm'], default='truncnorm',
+                        help="Distribution to sample generative ells from, within --ell_bounds.")
     parser.add_argument('--temp_bounds', type=float, default=(0.001, 0.2), nargs=2)
     parser.add_argument('--cost', type=float, default=0.0)
     parser.add_argument('--horizon', type=int, default=1)
@@ -133,6 +135,9 @@ def main():
                 f'{args.alpha}alpha_{args.cost}cost_{term}')
         if args.preset_histories:
             stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq'
+    ## log-uniform is the default, so it leaves older file names unchanged
+    if args.ell_prior != 'loguniform':
+        stem += f'_{args.ell_prior}'
 
     if args.gen_data:
         print('EMP RECOVERY')
@@ -169,28 +174,20 @@ def main():
         # Define the worker function
         def _gen_single_sim(sim_id, args, agent_type):
             
-            ## Sample parameters from log uniform
-            # if agent_type == 'info':
-            #     ell = None
-            # else:
-            #     ## ell from a log-uniform distribution over this type's slice
-            #     ## of the bounds (the whole range for 'emp', ell=1 for 'emp_1')
-            #     lo, hi = emp_ell_bounds(agent_type, args.ell_bounds)
-            #     ell = lo if lo == hi else float(np.exp(np.random.uniform(np.log(lo), np.log(hi))))
-            # temp = np.random.uniform(*args.temp_bounds)
-
-            ## or, from trunc normal
+            ## Sample ell over this type's slice of the bounds (the whole
+            ## range for 'emp', ell=1 for 'emp_1')
             if agent_type == 'info':
                 ell = None
             else:
                 lo, hi = emp_ell_bounds(agent_type, args.ell_bounds)
-                if agent_type == 'emp_lo':
-                    loc = 0.5
-                    scale = 1
-                elif agent_type == 'emp_hi':
-                    loc = 1
-                    scale = 2
-                ell = lo if lo == hi else truncnorm.rvs((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale)
+                if lo == hi:
+                    ell = lo
+                elif args.ell_prior == 'loguniform':
+                    ell = float(np.exp(np.random.uniform(np.log(lo), np.log(hi))))
+                else:
+                    ## truncated normal, (loc, scale) per agent type
+                    loc, scale = {'emp': (0, 5), 'emp_lo': (0.5, 1), 'emp_hi': (1, 2)}[agent_type]
+                    ell = float(truncnorm.rvs((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale))
             temp = np.random.uniform(*args.temp_bounds)
 
 
