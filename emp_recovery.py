@@ -1,4 +1,4 @@
-from emp_runners import gen_arms, gen_rooms, fit_emp, emp_ell_bounds
+from emp_runners import gen_arms, gen_rooms, fit_emp, emp_ell_bounds, ELL_TRUNCNORM
 from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canonicalise_histories
 import pandas as pd
 import numpy as np
@@ -98,6 +98,8 @@ def main():
                              "'emp_lo emp_1 emp_hi' in place of 'emp' to split "
                              "the empowerment agent by ell<1, ell=1 and ell>1.")
     parser.add_argument('--gen_data', action='store_true')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='Seed for the generative parameters (default: fresh entropy).')
     parser.add_argument('--skip_recovery', action='store_true')
     parser.add_argument('--termination_arm', action='store_true')
 
@@ -172,7 +174,7 @@ def main():
             diag_histories = None
 
         # Define the worker function
-        def _gen_single_sim(sim_id, args, agent_type):
+        def _gen_single_sim(sim_id, args, agent_type, rng):
             
             ## Sample ell over this type's slice of the bounds (the whole
             ## range for 'emp', ell=1 for 'emp_1')
@@ -183,12 +185,13 @@ def main():
                 if lo == hi:
                     ell = lo
                 elif args.ell_prior == 'loguniform':
-                    ell = float(np.exp(np.random.uniform(np.log(lo), np.log(hi))))
+                    ell = float(np.exp(rng.uniform(np.log(lo), np.log(hi))))
                 else:
                     ## truncated normal, (loc, scale) per agent type
-                    loc, scale = {'emp': (0, 5), 'emp_lo': (0.5, 1), 'emp_hi': (1, 2)}[agent_type]
-                    ell = float(truncnorm.rvs((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale))
-            temp = np.random.uniform(*args.temp_bounds)
+                    loc, scale = ELL_TRUNCNORM[agent_type]
+                    ell = float(truncnorm.rvs((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale,
+                                              random_state=rng))
+            temp = rng.uniform(*args.temp_bounds)
 
 
             # Generate data
@@ -232,9 +235,14 @@ def main():
         for agent_type in args.agent_types:
             agent_type_ids += [agent_type] * args.n_sims
         n_sims_total = len(agent_type_ids)
+
+        ## an independent generator per sim, passed in explicitly: a pickled
+        ## scipy distribution carries a frozen copy of its random state, so
+        ## without random_state every joblib task would draw the same ell
+        rngs = [np.random.default_rng(ss) for ss in np.random.SeedSequence(args.seed).spawn(n_sims_total)]
         with tqdm_joblib(tqdm(desc="Generating datasets", total=n_sims_total, ncols=100, unit='sim', mininterval=1)):
             results = Parallel(n_jobs=args.n_jobs)(
-                delayed(_gen_single_sim)(sim_id, args, agent_type)
+                delayed(_gen_single_sim)(sim_id, args, agent_type, rngs[sim_id])
                 for sim_id, agent_type in enumerate(agent_type_ids)
             )
 
