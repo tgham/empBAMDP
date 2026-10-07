@@ -627,7 +627,7 @@ def _ell_prior_dist(prior, mu, sigma, agent_type, ell_bounds):
 
 
 ## generate samples
-def ell_prior_samples(n_samples=200, mu=0.0, sigma=1.0, sampling='grid', seed=None,
+def ell_prior_samples(n_samples=200, mu=0.0, sigma=1.0, seed=None,
                       prior='lognormal', agent_type='emp', ell_bounds=(0.01, 10.0)):
     """Sample of ell from the prior, with the weight each sample carries.
 
@@ -647,18 +647,13 @@ def ell_prior_samples(n_samples=200, mu=0.0, sigma=1.0, sampling='grid', seed=No
     Returns (ells, weights), weights normalised to sum to 1.
     """
     n_samples = int(n_samples)
+
+    ## get the prior distr
     dist, (lo, hi) = _ell_prior_dist(prior, mu, sigma, agent_type, ell_bounds)
-    if sampling == 'grid':
-        ells = np.geomspace(lo, hi, n_samples)
-        return ells, ell_weights(ells, dist)
-    if sampling == 'quantile':
-        q = (np.arange(n_samples) + 0.5) / n_samples
-        ells = dist.ppf(q)
-    elif sampling == 'random':
-        ells = dist.rvs(size=n_samples, random_state=seed)
-    else:
-        raise ValueError(f"sampling must be 'grid', 'quantile' or 'random', got {sampling!r}")
-    return ells, np.full(n_samples, 1.0 / n_samples)
+
+    ## evenly spaced in log ell, weighted by prior mass of each cell
+    ells = np.geomspace(lo, hi, n_samples)
+    return ells, ell_weights(ells, dist)
 
 
 ## (normalised) prior weights for a grid of ells evenly spaced in log ell
@@ -1227,7 +1222,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             termination_arm=True, temp_emp=1.0, temp_info=1.0,
                             horizons=None, costs=(0.0,),
                             n_ell_samples=200, prior_mu=0.0, prior_sigma=1.0,
-                            sampling='grid', seed=None,
+                            seed=None,
                             ell_prior='lognormal', agent_type='emp', ell_bounds=(0.01, 10.0),
                             init_t=0, n_jobs=1,
                             target='ell', p_model=(0.5, 0.5), tie_tol=None,
@@ -1302,7 +1297,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
 
     ## shared ell sample from the prior, with its weights
     ell_samples, ell_w0s = ell_prior_samples(n_ell_samples, mu=prior_mu, sigma=prior_sigma,
-                                             sampling=sampling, seed=seed, prior=ell_prior,
+                                             seed=seed, prior=ell_prior,
                                              agent_type=agent_type, ell_bounds=ell_bounds)
 
     ## canonical histories, optionally skipping the first init_t trials
@@ -1399,7 +1394,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
                              alpha=0.1,
                              termination_arm=True, temp_emp=1.0, temp_info=1.0, horizon=None, cost=0.0,
                              n_samples=200, prior_mu=0.0, prior_sigma=1.0,
-                             sampling='quantile', seed=None,
+                             seed=None,
                              ell_prior='lognormal', agent_type='emp', ell_bounds=(0.01, 10.0),
                              target='ell', p_model=(0.5, 0.5), tie_tol=None):
     """Diagnosticity for ONE arbitrary (non-canonical) count matrix.
@@ -1434,7 +1429,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
 
 
     ell_samples, ell_w0s = ell_prior_samples(n_samples, mu=prior_mu, sigma=prior_sigma,
-                                             sampling=sampling, seed=seed, prior=ell_prior,
+                                             seed=seed, prior=ell_prior,
                                              agent_type=agent_type, ell_bounds=ell_bounds)
     args = (ell_samples, n_arms, n_outcomes, n_trials, alpha,
             termination_arm, horizon, cost, temp_emp)

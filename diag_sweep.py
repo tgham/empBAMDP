@@ -24,8 +24,6 @@ def main():
     parser.add_argument('--temp_info', type=float, default=1.0)
     parser.add_argument('--prior_mu', type=float, default=0.0)
     parser.add_argument('--prior_sigma', type=float, default=1.0)
-    parser.add_argument('--sampling', type=str, default='grid',
-                        choices=['quantile', 'random','grid'])
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--ell_prior', type=str, default='lognormal',
                         choices=['lognormal', 'truncnorm'],
@@ -68,7 +66,7 @@ def main():
         termination_arm=args.termination_arm, temp_emp=args.temp_emp,
         horizons=args.horizons, costs=args.costs,
         n_ell_samples=args.n_ell_samples,
-        prior_mu=args.prior_mu, prior_sigma=args.prior_sigma, sampling=args.sampling, seed=args.seed,
+        prior_mu=args.prior_mu, prior_sigma=args.prior_sigma, seed=args.seed,
         ell_prior=args.ell_prior, agent_type=args.agent_type, ell_bounds=tuple(args.ell_bounds),
         init_t=args.init_t, n_jobs=args.n_jobs,
         target=args.target, temp_info=args.temp_info,
