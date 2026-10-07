@@ -452,6 +452,9 @@ def plot_arm_curves(
     info_seeker=False,
     ML=False,
     save = True,
+    show_glyph=False,
+    glyph_labels=False,
+    action_colors=None,
 ):
     """Plot Q-value (or softmax-prob) curves across ell for each (history, t)
     in `df_curves` (output of `enumerate_curves`). Returns one figure per
@@ -469,6 +472,11 @@ def plot_arm_curves(
     sampled ell, plot a `|` marker at the arm slot of every action whose Q
     is within `eps_tie` of the max for that ell. Match `eps_tie` to the
     value used when building `df_tip` to make the two strips agree.
+
+    With `show_glyph`, each panel has its history drawn as a glyph above it
+    (see `history_glyph_artists`) in place of the history-string title;
+    `glyph_labels` keeps the string as well. Glyph tokens are coloured by
+    `action_colors`, defaulting to `arm_colors`.
 
     Returns a dict mapping t -> (fig, main_axes) where main_axes is a 2D
     numpy array of main axes for that trial's grid.
@@ -496,11 +504,15 @@ def plot_arm_curves(
         arm_colors = {a: default_cycle[a % len(default_cycle)] for a in range(n_arms)}
         if termination_arm:
             arm_colors[n_arms] = 'tab:grey'
+    if action_colors is None:
+        action_colors = arm_colors
 
     ell_lo = df_curves['ell'].min()
     ell_hi = df_curves['ell'].max()
 
-    panel_h = panel_size[1] * 1.25
+    ## glyph row height, in the same units as the (4, 1.2) curve / strip rows
+    glyph_h = 2.2 if show_glyph else 0.
+    panel_h = panel_size[1] * (1.25 + glyph_h / 4)
     figs_by_t = {}
 
     for t in ts:
@@ -513,17 +525,26 @@ def plot_arm_curves(
         outer = fig.add_gridspec(nr, ncols, hspace=0.55, wspace=0.3)
         main_axes = np.empty((nr, ncols), dtype=object)
         strip_axes = np.empty((nr, ncols), dtype=object)
+        glyph_axes = np.empty((nr, ncols), dtype=object)
         for i in range(nr):
             for j in range(ncols):
-                inner = outer[i, j].subgridspec(
-                    2, 1, height_ratios=[4, 1.2], hspace=0.08)
-                ax_main = fig.add_subplot(inner[0])
-                ax_strip = fig.add_subplot(inner[1], sharex=ax_main)
+                if show_glyph:
+                    inner = outer[i, j].subgridspec(
+                        3, 1, height_ratios=[glyph_h, 4, 1.2], hspace=0.08)
+                    glyph_axes[i, j] = fig.add_subplot(inner[0])
+                    main_spec, strip_spec = inner[1], inner[2]
+                else:
+                    inner = outer[i, j].subgridspec(
+                        2, 1, height_ratios=[4, 1.2], hspace=0.08)
+                    main_spec, strip_spec = inner[0], inner[1]
+                ax_main = fig.add_subplot(main_spec)
+                ax_strip = fig.add_subplot(strip_spec, sharex=ax_main)
                 main_axes[i, j] = ax_main
                 strip_axes[i, j] = ax_strip
 
         ax_flat = main_axes.flat
         strip_flat = strip_axes.flat
+        glyph_flat = glyph_axes.flat
 
         for i, history_str in enumerate(histories):
             ax = ax_flat[i]
@@ -541,7 +562,13 @@ def plot_arm_curves(
                 decades = np.log10(ell_hi) - np.log10(ell_lo)
                 log_ticks = np.logspace(np.ceil(np.log10(ell_lo)), np.floor(np.log10(ell_hi)), num=int(decades) + 1)
                 ax.set_xticks(log_ticks)
-            if ML:
+            if show_glyph:
+                plot_history_glyph(history_str, ax=glyph_flat[i],
+                                   action_colors=action_colors,
+                                   title=history_str if glyph_labels else None)
+                if ML:
+                    ax.set_title(f'ML = {sub["ML"].iloc[0]:.3f}', fontsize=9)
+            elif ML:
                 ax.set_title(f'{history_str}\nML = {sub["ML"].iloc[0]:.3f}', fontsize=9)
             else:
                 ax.set_title(history_str, fontsize=9)
@@ -626,6 +653,8 @@ def plot_arm_curves(
         for j in range(n_p, nr * ncols):
             ax_flat[j].set_visible(False)
             strip_flat[j].set_visible(False)
+            if show_glyph:
+                glyph_flat[j].set_visible(False)
 
         handles, labels = main_axes.flat[0].get_legend_handles_labels()
         fig.legend(handles, labels, loc='upper right',
@@ -797,7 +826,7 @@ def history_glyph_legend(ax, histories, colors, action_colors=None,
 
 def plot_emp_curves(df_curves, y='emp', temp=1.0, log_x=True, figsize=(7, 4.5),
                     cmap='viridis', suptitle=None, history_repr='text',
-                    action_colors=None, glyph_labels=False):
+                    action_colors=None, glyph_labels=False, show_info=True):
     """Plot a per-history quantity vs ell for every history in `df_curves`
     on one axis, one line per history, coloured by history (ordered by t,
     then history_str, along `cmap`). Returns (fig, ax).
@@ -808,6 +837,11 @@ def plot_emp_curves(df_curves, y='emp', temp=1.0, log_x=True, figsize=(7, 4.5),
     of choosing each history if its empowerment were its value. The softmax
     runs over exactly the histories in `df_curves`, so filter it to the set
     being compared (and to a single alpha / horizon / cost) first.
+
+    With `show_info` (and a `current_info` column), each history's
+    ell-independent info value is drawn as a dashed horizontal line in its
+    curve colour -- raw for `y='emp'`, and softmax(info / temp) across the
+    same histories for `y='p'`.
 
     `history_repr` sets how histories are identified: 'text' (history strings
     in the legend), 'glyph' (legend of line sample + history glyph) or 'inset'
@@ -838,6 +872,12 @@ def plot_emp_curves(df_curves, y='emp', temp=1.0, log_x=True, figsize=(7, 4.5),
     else:
         vals, y_label = emp, 'emp'
 
+    info = None
+    if show_info and 'current_info' in df_curves.columns:
+        info = df_curves.groupby('history_str')['current_info'].first()[histories]
+        if y == 'p':
+            info = pd.Series(softmax(info.values / temp), index=info.index)
+
     if history_repr == 'inset':
         ## side panel of glyphs, roughly as tall as the main axis
         n = len(histories)
@@ -862,8 +902,11 @@ def plot_emp_curves(df_curves, y='emp', temp=1.0, log_x=True, figsize=(7, 4.5),
     for color, history_str in zip(colors, histories):
         ax.plot(vals.index, vals[history_str], '-', color=color,
                 label=history_str, alpha=0.9)
+        if info is not None:
+            ax.axhline(info[history_str], color=color, linestyle='--',
+                       linewidth=1.2, alpha=0.9)
     if y == 'p':
-        ax.axhline(1 / len(histories), color='k', linestyle='--',
+        ax.axhline(1 / len(histories), color='0.4', linestyle=':',
                    linewidth=1, zorder=1.5)
     if log_x:
         ax.set_xscale('log')
@@ -897,7 +940,7 @@ def _heatmap_metric_spec(metric, cmap):
     `build_heat(pivot, cols)` turns a pivot (with a column level matching
     `cols`) into the 2D heat array.
     """
-    if metric == 'p_diff':
+    if metric in ('arms', 'p_diff'):
         value_cols = ['p_0', 'p_1']
         info_cols = ['info_p_0', 'info_p_1']
         cbar_label = 'p₀ − p₁'
@@ -915,20 +958,48 @@ def _heatmap_metric_spec(metric, cmap):
 
         def build_heat(pivot, cols):
             return pivot[cols[0]].values
+    elif metric == 'rooms':
+        ## columns added by _add_room_softmax
+        value_cols = ['p_room']
+        info_cols = ['info_p_room']
+        cbar_label = 'p(room)'
+        symmetric = False
+        cmap = 'viridis' if cmap is None else cmap
+
+        def build_heat(pivot, cols):
+            return pivot[cols[0]].values
     else:
-        raise ValueError(f"unknown metric {metric!r}; expected 'p_diff' or 'p_terminate'")
+        raise ValueError(f"unknown metric {metric!r}; expected 'arms' (or 'p_diff'), "
+                         "'p_terminate' or 'rooms'")
     return value_cols, info_cols, build_heat, cbar_label, symmetric, cmap
 
 
-def _heatmap_limits(heat, symmetric):
+def _add_room_softmax(df_curves, y_axis, temp):
+    """Add `p_room` = softmax(current_emp / temp) across all histories
+    ("rooms") sharing a (y_axis, ell) cell, and `info_p_room` = the same
+    softmax of current_info (ell-independent) when that column exists."""
+    if df_curves.duplicated([y_axis, 'ell', 'history_str']).any():
+        raise ValueError(f'df_curves has several rows per ({y_axis}, ell, history_str); '
+                         'filter it to a single horizon / cost first')
+    df_curves = df_curves.copy()
+    sm = lambda v: softmax(v.values / temp)
+    df_curves['p_room'] = (df_curves.groupby([y_axis, 'ell'])['current_emp']
+                           .transform(sm))
+    if 'current_info' in df_curves.columns:
+        df_curves['info_p_room'] = (df_curves.groupby([y_axis, 'ell'])['current_info']
+                                    .transform(sm))
+    return df_curves
+
+
+def _heatmap_limits(heat, symmetric, center=0.):
     """Per-array (vmin, vmax) for a heat panel. Symmetric metrics centre on
-    zero with a small floor so a near-flat panel doesn't blow up the scale;
+    `center` with a small floor so a near-flat panel doesn't blow up the scale;
     asymmetric metrics use the data range (with a small floor)."""
     if symmetric:
-        vmax_abs = max(abs(np.nanmin(heat)), abs(np.nanmax(heat)))
+        vmax_abs = max(abs(np.nanmin(heat) - center), abs(np.nanmax(heat) - center))
         if vmax_abs < 1e-3:
             vmax_abs = 1e-3
-        return -vmax_abs, vmax_abs
+        return center - vmax_abs, center + vmax_abs
     vmin = float(np.nanmin(heat))
     vmax = float(np.nanmax(heat))
     if vmax - vmin < 1e-3:
@@ -936,10 +1007,28 @@ def _heatmap_limits(heat, symmetric):
     return vmin, vmax
 
 
+def _draw_room_pair_glyphs(ax, rooms, cmap, action_colors=None, labels=False):
+    """Both rooms' glyphs side by side on `ax` ('left' = rooms[0], whose
+    probability is plotted), each underlined in the colour of its end of
+    `cmap` (high p(left) -> top of cmap)."""
+    cm = plt.get_cmap(cmap)
+    for room, x, c in [(rooms[0], -2.1, cm(1.0)), (rooms[1], 2.1, cm(0.0))]:
+        draw_history_glyph(ax, room, center=(x, 0.), action_colors=action_colors)
+        ax.plot([x - 1.2, x + 1.2], [-1.75, -1.75], color=c, lw=2.5,
+                solid_capstyle='butt')
+        if labels:
+            ax.text(x, 1.7, room, ha='center', va='bottom', fontsize=6)
+    ax.text(0., 0., 'vs', ha='center', va='center', fontsize=8)
+    ax.set_xlim(-3.7, 3.7)
+    ax.set_ylim(-1.9, 2.1 if labels else 1.55)
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+
 def plot_heatmap(
     df_curves,
     y_axis='alpha',
-    metric='p_diff',
+    metric='arms',
     fixed_k=None,
     fixed_alpha=None,
     max_n_cols=4,
@@ -948,6 +1037,10 @@ def plot_heatmap(
     suptitle=None,
     shared_colorbar=True,
     plot_info_seeker=True,
+    temp=1.0,
+    show_glyph=False,
+    glyph_labels=False,
+    action_colors=None,
 ):
     """Plot 2D heatmaps of a per-(history, t) metric over an (ell, y_axis) grid.
     Returns one figure per trial t; each figure has a grid of panels for that
@@ -964,8 +1057,23 @@ def plot_heatmap(
     smallest value, so the pivot never silently averages over it.
 
     `metric` chooses the heat:
-      - 'p_diff' (default): p_0 - p_1, symmetric diverging scale.
+      - 'arms' (default; 'p_diff' is an alias): p_0 - p_1, symmetric
+        diverging scale.
       - 'p_terminate': P(terminate), sequential scale.
+      - 'rooms': each history's softmax(current_emp / temp) across all the
+        histories in `df_curves` sharing that (y, ell) cell -- the choice
+        between rooms, as in `plot_emp_curves(y='p')`. The info-seeker strip
+        shows softmax(current_info / temp). Filter `df_curves` to the rooms
+        being compared (and one horizon / cost) first. With exactly two
+        rooms, p(second) = 1 - p(first), so a single panel shows p(first)
+        on a diverging scale centred on 0.5 (default cmap 'RdBu'); with
+        `show_glyph` both rooms are drawn above it, the plotted ('left') one
+        first, each underlined in the colour of its end of the colormap.
+
+    With `show_glyph`, each panel has its history drawn as a glyph above it
+    (see `history_glyph_artists`) in place of the history-string title;
+    `glyph_labels` keeps the string as well, and `action_colors` colours the
+    glyph tokens by action.
 
     Expected input: df_curves from enumerate_curves with ell, alpha and (for
     the k-sweep / cost slicing) k columns.
@@ -980,9 +1088,12 @@ def plot_heatmap(
     if y_axis not in df_curves.columns:
         raise ValueError(f"df_curves missing {y_axis!r} column")
 
+    user_cmap = cmap
     value_cols, info_cols, build_heat, cbar_label, symmetric, cmap = \
         _heatmap_metric_spec(metric, cmap)
-    if plot_info_seeker:
+    center = 0.
+    ## ('rooms' info columns are only added below, by _add_room_softmax)
+    if plot_info_seeker and metric != 'rooms':
         plot_info_seeker = all(c in df_curves.columns for c in info_cols)
 
     ## the variable NOT on the y-axis is fixed to a single slice so the pivot
@@ -1002,18 +1113,44 @@ def plot_heatmap(
     else:
         slice_note = None
 
+    if metric == 'rooms':
+        df_curves = _add_room_softmax(df_curves, y_axis, temp)
+        if plot_info_seeker:
+            plot_info_seeker = 'info_p_room' in df_curves.columns
+
+    ## two rooms: p(B) = 1 - p(A), so plot a single panel of p(A) on a
+    ## diverging scale centred on 0.5 (each end of the colormap is a room)
+    room_pair = None
+    if metric == 'rooms':
+        rooms = (df_curves[['t', 'history_str']].drop_duplicates()
+                 .sort_values(['t', 'history_str'])['history_str'].tolist())
+        if len(rooms) == 2:
+            room_pair = rooms
+            df_curves = df_curves[df_curves['history_str'] == rooms[0]]
+            symmetric, center = True, 0.5
+            cmap = 'RdBu' if user_cmap is None else user_cmap
+            cbar_label = 'p(left room)' if show_glyph else f'p({rooms[0]})'
+
     y_label = 'α' if y_axis == 'alpha' else 'k'
 
+    ## 'arms' / 'p_terminate' compare arms within a history, so get one
+    ## figure per trial; 'rooms' compares across histories (possibly from
+    ## different trials), so all of them share one figure (key None)
     panels_by_t = {}
     for t, history_str in (df_curves[['t', 'history_str']]
                            .drop_duplicates()
                            .sort_values(['t', 'history_str'])
                            .itertuples(index=False, name=None)):
-        panels_by_t.setdefault(int(t), []).append(history_str)
+        key = None if metric == 'rooms' else int(t)
+        panels_by_t.setdefault(key, []).append(history_str)
 
-    ts = sorted(panels_by_t.keys())
+    ts = list(panels_by_t) if metric == 'rooms' else sorted(panels_by_t)
 
-    panel_h = panel_size[1]
+    ## glyph row height as a fraction of the heat panel height
+    glyph_frac = 0.45 if show_glyph else 0.
+    ## gap between heat panel and info-seeker strip (fraction of mean axis width)
+    info_gap = 0.06
+    panel_h = panel_size[1] * (1 + glyph_frac)
     figs_by_t = {}
 
     for t in ts:
@@ -1021,10 +1158,10 @@ def plot_heatmap(
 
         # Calculate vmin/vmax based on shared_colorbar setting
         if shared_colorbar:
-            # Shared colorbar: normalize across all histories in this trial.
+            # Shared colorbar: normalize across all histories in this figure.
             # build_heat works on the raw trial frame too (plain column access).
-            df_t = df_curves[df_curves['t'] == t]
-            vmin, vmax = _heatmap_limits(build_heat(df_t, value_cols), symmetric)
+            df_t = df_curves if t is None else df_curves[df_curves['t'] == t]
+            vmin, vmax = _heatmap_limits(build_heat(df_t, value_cols), symmetric, center)
         else:
             # Per-history colorbars: will compute for each history in the loop
             vmin = None
@@ -1033,28 +1170,55 @@ def plot_heatmap(
         histories = panels_by_t[t]
         n_p = len(histories)
         nr = (n_p + ncols - 1) // ncols
-        figsize = (panel_size[0] * ncols, nr * panel_h)
+        ## fixed margins (inches), with room on the right for a shared
+        ## colorbar, so every panel gets the same size
+        m_left, m_right, m_bottom, m_top = 0.7, (1.1 if shared_colorbar else 0.3), 0.6, 0.7
+        figsize = (panel_size[0] * ncols + m_left + m_right,
+                   nr * panel_h + m_bottom + m_top)
 
         fig = plt.figure(figsize=figsize, constrained_layout=False)
-        outer = fig.add_gridspec(nr, ncols)
+        outer = fig.add_gridspec(
+            nr, ncols,
+            left=m_left / figsize[0], right=1 - m_right / figsize[0],
+            bottom=m_bottom / figsize[1], top=1 - m_top / figsize[1],
+            wspace=0.35 if shared_colorbar else 0.6, hspace=0.45)
         axes = np.empty((nr, ncols), dtype=object)
         info_axes = np.empty((nr, ncols), dtype=object)
+        glyph_axes = np.empty((nr, ncols), dtype=object)
         for i in range(nr):
             for j in range(ncols):
-                inner = outer[i, j].subgridspec(1, 2, width_ratios=[20, 1], wspace=0)
-                ax_main = fig.add_subplot(inner[0])
-                ax_info = fig.add_subplot(inner[1], sharey=ax_main)
+                if show_glyph:
+                    inner = outer[i, j].subgridspec(
+                        2, 2, width_ratios=[20, 1], height_ratios=[glyph_frac, 1],
+                        wspace=info_gap, hspace=0.12 if glyph_labels else 0.05)
+                    glyph_axes[i, j] = fig.add_subplot(inner[0, 0])
+                    ax_main = fig.add_subplot(inner[1, 0])
+                    ax_info = fig.add_subplot(inner[1, 1], sharey=ax_main)
+                else:
+                    inner = outer[i, j].subgridspec(1, 2, width_ratios=[20, 1], wspace=info_gap)
+                    ax_main = fig.add_subplot(inner[0])
+                    ax_info = fig.add_subplot(inner[1], sharey=ax_main)
                 axes[i, j] = ax_main
                 info_axes[i, j] = ax_info
 
         ax_flat = axes.flat
         info_flat = info_axes.flat
+        glyph_flat = glyph_axes.flat
 
         for i, history_str in enumerate(histories):
             ax = ax_flat[i]
             ax_info = info_flat[i]
-            sub = (df_curves[(df_curves['history_str'] == history_str)
-                           & (df_curves['t'] == t)])
+            if show_glyph and room_pair is not None:
+                _draw_room_pair_glyphs(glyph_flat[i], room_pair, cmap,
+                                       action_colors=action_colors,
+                                       labels=glyph_labels)
+            elif show_glyph:
+                plot_history_glyph(history_str, ax=glyph_flat[i],
+                                   action_colors=action_colors,
+                                   title=history_str if glyph_labels else None)
+            sub = df_curves[df_curves['history_str'] == history_str]
+            if t is not None:
+                sub = sub[sub['t'] == t]
 
             if len(sub) == 0:
                 ax.text(0.5, 0.5, 'no data', ha='center', va='center',
@@ -1079,7 +1243,7 @@ def plot_heatmap(
 
             # Compute per-history vmin/vmax if not using shared colorbar
             if not shared_colorbar:
-                hist_vmin, hist_vmax_final = _heatmap_limits(heat, symmetric)
+                hist_vmin, hist_vmax_final = _heatmap_limits(heat, symmetric, center)
             else:
                 hist_vmin = vmin
                 hist_vmax_final = vmax
@@ -1089,7 +1253,9 @@ def plot_heatmap(
             ax.set_xscale('log')
             # Set x-axis ticks to show each decade
             ax.xaxis.set_major_locator(LogLocator(base=10, numticks=15))
-            ax.set_title(history_str, fontsize=8)
+            if not show_glyph:
+                ax.set_title(history_str if room_pair is None
+                             else f'{room_pair[0]}  vs  {room_pair[1]}', fontsize=8)
 
             if i % ncols == 0:
                 ax.set_ylabel(y_label)
@@ -1106,7 +1272,7 @@ def plot_heatmap(
                                     extent=[0, 1, ys[0], ys[-1]], origin='lower', interpolation='none')
                 ax_info.tick_params(labelleft=False, labelbottom=False)
                 if i // ncols == nr - 1:
-                    ax_info.set_xlabel('info-seeker', fontsize=7)
+                    ax_info.set_xlabel('info-seeker', fontsize=7, rotation=90, labelpad=5)
 
                 # Add per-panel colorbar if not using shared colorbar
                 if not shared_colorbar:
@@ -1120,24 +1286,22 @@ def plot_heatmap(
         for j in range(n_p, nr * ncols):
             ax_flat[j].set_visible(False)
             info_flat[j].set_visible(False)
+            if show_glyph:
+                glyph_flat[j].set_visible(False)
 
-        # Apply tight layout before adding colorbar to prevent width adjustments
-        # Reserve space at the top for the suptitle
-        plt.tight_layout(rect=[0, 0, 1, 0.96])
-
-        # Add a single shared colorbar for the entire trial (only when shared_colorbar=True)
+        # Add a single shared colorbar for the entire trial in its own axis in
+        # the reserved right margin, spanning the heat panels' vertical extent
         if shared_colorbar:
             norm = plt.Normalize(vmin=vmin, vmax=vmax)
             sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
             sm.set_array([])
-            # Attach colorbar to info axis if plotting info-seeker, otherwise to main axis
-            cbar_ax = info_axes[0, -1] if plot_info_seeker else axes[0, -1]
-            cbar_kwargs = {'label': cbar_label, 'pad': 0.08}
-            if plot_info_seeker:
-                cbar_kwargs['aspect'] = 20  # Make it taller when attached to narrow info axis
-            fig.colorbar(sm, ax=cbar_ax, **cbar_kwargs)
+            top = axes[0, -1].get_position().y1
+            bottom = axes[-1, 0].get_position().y0
+            x0 = 1 - (m_right - 0.25) / figsize[0]
+            cax = fig.add_axes([x0, bottom, 0.15 / figsize[0], top - bottom])
+            fig.colorbar(sm, cax=cax, label=cbar_label)
 
-        title_bits = [f't = {t}']
+        title_bits = ['rooms' if t is None else f't = {t}']
         if slice_note is not None:
             title_bits.append(slice_note)
         title = '  |  '.join(title_bits)
@@ -1146,4 +1310,6 @@ def plot_heatmap(
         fig.suptitle(title, fontsize=12, fontweight='bold')
         figs_by_t[t] = (fig, axes)
 
+    if metric == 'rooms':
+        return figs_by_t[None]
     return figs_by_t
