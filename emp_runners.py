@@ -9,7 +9,7 @@ from scipy.special import logsumexp
 from joblib import Parallel, delayed, effective_n_jobs
 import warnings
 from tqdm_joblib import tqdm_joblib
-from scipy.stats import lognorm
+from scipy.stats import lognorm, truncnorm
 
 from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canon_to_concrete
 from emp_models import make_agent
@@ -610,37 +610,66 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
 
 ### Diagnosticity of an observation history: I(A; ell | h) - How much does observing the chosen action tell us about the agent's ell?
 
+## truncated-normal prior on ell, (loc, scale) per empowerment agent type --
+## the same prior parameter recovery samples generative ells from
+ELL_TRUNCNORM = {'emp': (0.0, 5.0), 'emp_lo': (0.5, 1.0), 'emp_hi': (1.0, 2.0)}
+
+
+def _ell_prior_dist(prior, mu, sigma, agent_type, ell_bounds):
+    """The frozen scipy prior over ell, and its (lo, hi) support."""
+    if prior == 'lognormal':
+        return lognorm(sigma, scale=np.exp(mu)), (np.exp(mu - 4 * sigma), np.exp(mu + 4 * sigma))
+    if prior == 'truncnorm':
+        lo, hi = emp_ell_bounds(agent_type, ell_bounds)
+        loc, scale = ELL_TRUNCNORM[agent_type]
+        return truncnorm((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale), (lo, hi)
+    raise ValueError(f"prior must be 'lognormal' or 'truncnorm', got {prior!r}")
+
+
 ## generate samples
-def ell_prior_samples(n_samples=200, mu=0.0, sigma=1.0, sampling='grid', seed=None):
-    """Equal-weight sample of ell from the lognormal LN(mu, sigma).
+def ell_prior_samples(n_samples=200, mu=0.0, sigma=1.0, sampling='grid', seed=None,
+                      prior='lognormal', agent_type='emp', ell_bounds=(0.01, 10.0)):
+    """Sample of ell from the prior, with the weight each sample carries.
 
-    Support is (0, inf) already, so no truncation is needed. LN(0,1) has median
-    1, mean exp(0.5) = 1.649, and a heavy right tail (99.5th pct ~ 13).
+    `prior='lognormal'` is LN(mu, sigma): median exp(mu), heavy right tail.
+    `prior='truncnorm'` is the truncated normal over `agent_type`'s slice of
+    `ell_bounds` (see `emp_ell_bounds`), with (loc, scale) from `ELL_TRUNCNORM`.
 
-    `sampling='quantile'` (default) returns the stratified midpoint quantiles
-    ppf((m + 0.5)/M): deterministic, reproducible, and far lower variance than
-    i.i.d. draws at the same M because p(a|h,ell) is smooth in ell -- a couple of
-    hundred quantiles buy what many thousands of random draws would.
-    `sampling='random'` draws i.i.d. (use `seed`), kept for MC-error checks.
+    `sampling='grid'` (default) spaces ells evenly in log ell -- over
+    mu +/- 4 sigma for the lognormal, over the support for the truncnorm -- and
+    weights each by the prior mass of its log-ell cell (see `ell_weights`).
+    `sampling='quantile'` returns the stratified midpoint quantiles
+    ppf((m + 0.5)/M): deterministic and low-variance because p(a|h,ell) is
+    smooth in ell. `sampling='random'` draws i.i.d. (use `seed`), kept for
+    MC-error checks. Quantile and random samples are already distributed as
+    the prior, so they are EQUAL WEIGHT.
 
-    Both are EQUAL WEIGHT, so every downstream estimator is a plain mean.
+    Returns (ells, weights), weights normalised to sum to 1.
     """
     n_samples = int(n_samples)
+    dist, (lo, hi) = _ell_prior_dist(prior, mu, sigma, agent_type, ell_bounds)
+    if sampling == 'grid':
+        ells = np.geomspace(lo, hi, n_samples)
+        return ells, ell_weights(ells, dist)
     if sampling == 'quantile':
         q = (np.arange(n_samples) + 0.5) / n_samples
-        return lognorm.ppf(q, sigma, scale=np.exp(mu))
+        ells = dist.ppf(q)
     elif sampling == 'random':
-        return lognorm.rvs(sigma, scale=np.exp(mu), size=n_samples,
-                           random_state=seed)
-    elif sampling =='grid':
-        z = np.linspace(-4, 4, n_samples)
-        ells = np.exp(z)
-        return ells
+        ells = dist.rvs(size=n_samples, random_state=seed)
+    else:
+        raise ValueError(f"sampling must be 'grid', 'quantile' or 'random', got {sampling!r}")
+    return ells, np.full(n_samples, 1.0 / n_samples)
 
-## (normalised) lognormal prior weights for a given array of ells
-def ell_weights(ells):
-    z = np.log(ells)
-    log_pi = scipy.stats.norm.logpdf(z)
+
+## (normalised) prior weights for a grid of ells evenly spaced in log ell
+def ell_weights(ells, dist):
+    """Prior mass of each ell's cell on a log-spaced grid.
+
+    A cell of fixed width dz in z = log ell covers d(ell) = ell * dz, so its
+    mass is p_ell(ell) * ell * dz -- i.e. the prior density over log ell. The
+    dz is common to every cell and cancels on normalising.
+    """
+    log_pi = dist.logpdf(ells) + np.log(ells)
     log_pi -= scipy.special.logsumexp(log_pi)
     return np.exp(log_pi)
 
@@ -774,12 +803,14 @@ def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s=
 def _diag_emp_row(t, counts_array, canon_counts, history_str,
                           ell_samples, n_arms, n_outcomes, n_trials, alpha,
                           termination_arm, horizon, cost, temp,
-                          tie_tol=None, agent=None,
+                          tie_tol=None, agent=None, ell_w0s=None,
                           ):
     """Per-canonical-history diagnosticity row.
 
     `agent` is the emp agent over `ell_samples`: pass one to share its memo
     across histories (see `_diag_rows`), else a fresh one is built for this row.
+    `ell_w0s` are the prior weights on `ell_samples` (from `ell_prior_samples`);
+    None means equal weight.
 
     TIES: a hard argmax makes an ell whose top two Q's differ by 1e-9 look fully
     committed to the winner, and on a symmetric history (`init`, `a0o0:1-a1o0:1`)
@@ -840,7 +871,7 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
 
     ## grid sampling of ells
     n_ell = len(ell_samples)
-    ell_w0s = ell_weights(ell_samples)
+    ell_w0s = np.full(n_ell, 1.0 / n_ell) if ell_w0s is None else np.asarray(ell_w0s, dtype=float)
 
     ## memoised agent over every sampled ell
     if agent is None:
@@ -937,7 +968,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
                     ell_samples, n_arms, n_outcomes, n_trials, alpha,
                     termination_arm, horizon, cost, temp_emp,
                     temp_info, p_model=(0.5, 0.5), tie_tol=None,
-                    emp_agent=None, info_agent=None):
+                    emp_agent=None, info_agent=None, ell_w0s=None):
     """Per-canonical-history MODEL diagnosticity I(A;M|h), M in {emp, info}.
 
     The counterpart to `_diag_emp_row`: where that asks how much the next action
@@ -1002,7 +1033,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
 
     ## grid sampling of ells
     n_ell = len(ell_samples)
-    ell_w0s = ell_weights(ell_samples)
+    ell_w0s = np.full(n_ell, 1.0 / n_ell) if ell_w0s is None else np.asarray(ell_w0s, dtype=float)
 
 
     ## memoised agents
@@ -1173,7 +1204,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     return row
 
 
-def _diag_rows(target, states, args):
+def _diag_rows(target, states, args, ell_w0s=None):
     """Diagnosticity rows for a batch of canonical histories, sharing one set of agents.
 
     The task unit of `enumerate_diagnosticity`, module-level so joblib can pickle
@@ -1184,10 +1215,11 @@ def _diag_rows(target, states, args):
     ell_samples, n_arms, n_outcomes, _, alpha, termination_arm, _, cost = args[:8]
     emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
     if target == 'ell':
-        return [_diag_emp_row(t, C, cc, hs, *args, agent=emp_agent)
+        return [_diag_emp_row(t, C, cc, hs, *args, agent=emp_agent, ell_w0s=ell_w0s)
                 for (t, C, cc, hs, _) in states]
     info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost)
-    return [_diag_model_row(t, C, cc, hs, *args, emp_agent=emp_agent, info_agent=info_agent)
+    return [_diag_model_row(t, C, cc, hs, *args, emp_agent=emp_agent, info_agent=info_agent,
+                            ell_w0s=ell_w0s)
             for (t, C, cc, hs, _) in states]
 
 
@@ -1196,6 +1228,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             horizons=None, costs=(0.0,),
                             n_ell_samples=200, prior_mu=0.0, prior_sigma=1.0,
                             sampling='grid', seed=None,
+                            ell_prior='lognormal', agent_type='emp', ell_bounds=(0.01, 10.0),
                             init_t=0, n_jobs=1,
                             target='ell', p_model=(0.5, 0.5), tie_tol=None,
                             expt='arms', n_AFC=2, n_room_samples=None):
@@ -1243,6 +1276,10 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                 `models_agree` is reading argmax noise.
     Both emit `target` and `expt` columns and a comparable `mi`, so the frames concat.
 
+    The ell prior is `ell_prior`: 'lognormal' is LN(prior_mu, prior_sigma);
+    'truncnorm' is the truncated normal over `agent_type`'s slice of
+    `ell_bounds`, as in parameter recovery (see `ell_prior_samples`).
+
     The ell sample is drawn ONCE and reused across every history, alpha, horizon
     and cost -- common random numbers, so the resulting mi values are directly
     comparable between histories, which is the point of the score.
@@ -1263,9 +1300,10 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     if expt not in ('arms', 'rooms'):
         raise ValueError(f"expt must be 'arms' or 'rooms', got {expt!r}")
 
-    ## shared ell sample from the truncated-normal prior
-    ell_samples = ell_prior_samples(n_ell_samples, mu=prior_mu, sigma=prior_sigma,
-                                    sampling=sampling, seed=seed)
+    ## shared ell sample from the prior, with its weights
+    ell_samples, ell_w0s = ell_prior_samples(n_ell_samples, mu=prior_mu, sigma=prior_sigma,
+                                             sampling=sampling, seed=seed, prior=ell_prior,
+                                             agent_type=agent_type, ell_bounds=ell_bounds)
 
     ## canonical histories, optionally skipping the first init_t trials
     states = canonical_states(n_arms, n_outcomes, n_trials)
@@ -1292,7 +1330,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                         termination_arm, horizon, cost, temp_emp)
                 args = args + ((temp_info, p_model, tie_tol) if target == 'model'
                                else (tie_tol,))
-                block = _run_diag_rows(target, states, args, n_jobs, desc)
+                block = _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s)
 
                 ## rooms: index the tuples, and carry each room's orbit size
                 if expt == 'rooms':
@@ -1305,8 +1343,14 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     df = pd.DataFrame(rows)
     df['target'] = target
     df['expt'] = expt
-    df['prior_mu'] = prior_mu
-    df['prior_sigma'] = prior_sigma
+    df['ell_prior'] = ell_prior
+    if ell_prior == 'truncnorm':
+        df['agent_type'] = agent_type
+        df['ell_lo'], df['ell_hi'] = emp_ell_bounds(agent_type, ell_bounds)
+        df['prior_loc'], df['prior_scale'] = ELL_TRUNCNORM[agent_type]
+    else:
+        df['prior_mu'] = prior_mu
+        df['prior_sigma'] = prior_sigma
     return df
 
 
@@ -1331,16 +1375,16 @@ def _room_tuples(states, n_AFC, n_room_samples=None, seed=None):
     return [(ts, np.stack(Cs), ccs, hss, os_) for (ts, Cs, ccs, hss, os_) in tuples]
 
 
-def _run_diag_rows(target, states, args, n_jobs, desc):
+def _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s=None):
     """`_diag_rows` over `states`, serially or in `n_jobs` parallel batches, in the order of `states`."""
     if n_jobs == 1:
-        return _diag_rows(target, tqdm(states, desc=desc), args)
+        return _diag_rows(target, tqdm(states, desc=desc), args, ell_w0s)
 
     ## several batches per worker, interleaved so each mixes early (deep) and late histories
     n_batches = min(len(states), 4 * effective_n_jobs(n_jobs))
     with tqdm_joblib(tqdm(total=n_batches, desc=desc)):
         batch_rows = Parallel(n_jobs=n_jobs)(
-            delayed(_diag_rows)(target, states[b::n_batches], args)
+            delayed(_diag_rows)(target, states[b::n_batches], args, ell_w0s)
             for b in range(n_batches)
         )
 
@@ -1356,6 +1400,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
                              termination_arm=True, temp_emp=1.0, temp_info=1.0, horizon=None, cost=0.0,
                              n_samples=200, prior_mu=0.0, prior_sigma=1.0,
                              sampling='quantile', seed=None,
+                             ell_prior='lognormal', agent_type='emp', ell_bounds=(0.01, 10.0),
                              target='ell', p_model=(0.5, 0.5), tie_tol=None):
     """Diagnosticity for ONE arbitrary (non-canonical) count matrix.
 
@@ -1368,7 +1413,8 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
     `n_trials` and `horizon` both default to "t pulls already taken, t more to
     come"; pass them explicitly to match a particular task design.
 
-    `target` ('ell' or 'model'), `temp_info` and `p_model` behave exactly as in
+    `target` ('ell' or 'model'), `temp_info`, `p_model` and the ell prior
+    (`ell_prior`, `agent_type`, `ell_bounds`) behave exactly as in
     `enumerate_diagnosticity`.
 
     Returns the row dict.
@@ -1387,21 +1433,28 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
         horizon = n_trials
 
 
-    ell_samples = ell_prior_samples(n_samples, mu=prior_mu, sigma=prior_sigma,
-                                    sampling=sampling, seed=seed)
+    ell_samples, ell_w0s = ell_prior_samples(n_samples, mu=prior_mu, sigma=prior_sigma,
+                                             sampling=sampling, seed=seed, prior=ell_prior,
+                                             agent_type=agent_type, ell_bounds=ell_bounds)
     args = (ell_samples, n_arms, n_outcomes, n_trials, alpha,
             termination_arm, horizon, cost, temp_emp)
     if target == 'ell':
         row = _diag_emp_row(t, counts_array, canon_counts, history_str, *args,
-                            tie_tol=tie_tol)
+                            tie_tol=tie_tol, ell_w0s=ell_w0s)
     else:
         row = _diag_model_row(t, counts_array, canon_counts, history_str, *args,
                               temp_info=temp_info, p_model=p_model,
-                              tie_tol=tie_tol)
+                              tie_tol=tie_tol, ell_w0s=ell_w0s)
     row['target'] = target
     row['orbit_size'] = orbit_sequence_count(counts_array)
-    row['prior_mu'] = prior_mu
-    row['prior_sigma'] = prior_sigma
+    row['ell_prior'] = ell_prior
+    if ell_prior == 'truncnorm':
+        row['agent_type'] = agent_type
+        row['ell_lo'], row['ell_hi'] = emp_ell_bounds(agent_type, ell_bounds)
+        row['prior_loc'], row['prior_scale'] = ELL_TRUNCNORM[agent_type]
+    else:
+        row['prior_mu'] = prior_mu
+        row['prior_sigma'] = prior_sigma
     return row
 
     
