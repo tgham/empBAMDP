@@ -5,6 +5,7 @@ import numpy as np
 from tqdm import tqdm
 from joblib import Parallel, delayed
 from tqdm_joblib import tqdm_joblib
+from scipy.stats import truncnorm
 import argparse
 import ast
 import os
@@ -168,15 +169,30 @@ def main():
         # Define the worker function
         def _gen_single_sim(sim_id, args, agent_type):
             
-            ## Sample parameters 
+            ## Sample parameters from log uniform
+            # if agent_type == 'info':
+            #     ell = None
+            # else:
+            #     ## ell from a log-uniform distribution over this type's slice
+            #     ## of the bounds (the whole range for 'emp', ell=1 for 'emp_1')
+            #     lo, hi = emp_ell_bounds(agent_type, args.ell_bounds)
+            #     ell = lo if lo == hi else float(np.exp(np.random.uniform(np.log(lo), np.log(hi))))
+            # temp = np.random.uniform(*args.temp_bounds)
+
+            ## or, from trunc normal
             if agent_type == 'info':
                 ell = None
             else:
-                ## ell from a log-uniform distribution over this type's slice
-                ## of the bounds (the whole range for 'emp', ell=1 for 'emp_1')
                 lo, hi = emp_ell_bounds(agent_type, args.ell_bounds)
-                ell = lo if lo == hi else float(np.exp(np.random.uniform(np.log(lo), np.log(hi))))
+                if agent_type == 'emp_lo':
+                    loc = 0.5
+                    scale = 1
+                elif agent_type == 'emp_hi':
+                    loc = 1
+                    scale = 2
+                ell = lo if lo == hi else truncnorm.rvs((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale)
             temp = np.random.uniform(*args.temp_bounds)
+
 
             # Generate data
             if rooms:
