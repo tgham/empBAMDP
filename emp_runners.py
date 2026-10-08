@@ -1315,7 +1315,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
         # horizons = [n_trials]
         horizons = [1]
 
-
+    print('enumerating over ',len(states), 'trials')
     costs = [costs] if np.isscalar(costs) else list(costs)
 
     rows = []
