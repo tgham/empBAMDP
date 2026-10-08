@@ -8,6 +8,8 @@ from matplotlib.patches import Rectangle, Circle
 from matplotlib.lines import Line2D
 from matplotlib.legend_handler import HandlerBase
 from scipy.special import softmax
+from matplotlib.colors import LogNorm
+
 
 def _split_counts_str(h):
     if h in ('', 'init'):
@@ -1313,3 +1315,21 @@ def plot_heatmap(
     if metric == 'rooms':
         return figs_by_t[None]
     return figs_by_t
+
+def plot_pareto(x,y,idx):
+    fx, fy = x[idx], y[idx]
+    o = np.argsort(fx)                        # left to right for plotting
+    fx, fy = fx[o], fy[o]
+
+    fig, ax = plt.subplots(figsize=(7,6))
+    h = ax.hist2d(x, y, bins=500, norm=LogNorm(), cmap="viridis")
+    fig.colorbar(h[3], ax=ax, label="points per bin")
+
+    ax.plot(fx, fy, drawstyle="steps-pre", color="red", lw=1.5, label="Pareto front")
+    ax.scatter(fx, fy, color="red", s=15, zorder=3)
+
+    ax.set_xlabel("mi")
+    ax.set_ylabel("mi_emp")
+    ax.set_title(f"Pareto front ({len(fx)} points of {len(x):,})")
+    ax.legend()
+    plt.show()

@@ -487,3 +487,24 @@ def ao_sequences(n_arms, n_outcomes, n_trials, termination_arm=False):
     seqs.extend(list(s) for s in                      # never terminate
                 itertools.product(steps, repeat=n_trials))
     return seqs
+
+
+## pareto functions
+def pareto_front_idx(x, y):
+    order = np.lexsort((-y, -x))          # x desc, then y desc
+    ys = y[order]
+    running_max = np.maximum.accumulate(ys)
+    prev_max = np.empty_like(running_max)
+    prev_max[0] = -np.inf
+    prev_max[1:] = running_max[:-1]
+    return order[ys > prev_max]
+
+def get_pareto(df, x_col, y_col, plot=False):
+    """Return the pareto front of a dataframe with respect to two columns."""
+    x = df[x_col].values
+    y = df[y_col].values
+    idx = pareto_front_idx(x, y)
+    if plot:
+        plot_pareto(x, y, idx)
+    # return idx
+    return df.iloc[idx].sort_values(by=[x_col, y_col], ascending=[False, False]).reset_index(drop=True)
