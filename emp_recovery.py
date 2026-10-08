@@ -1,5 +1,5 @@
 from emp_runners import gen_arms, gen_rooms, fit_emp, emp_ell_bounds, ELL_TRUNCNORM
-from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canonicalise_histories, top_n_pareto
+from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canonicalise_histories, top_n_pareto, pareto_front_idx
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
@@ -54,14 +54,21 @@ def load_diag_histories(args, term):
         raise ValueError(f'{path} has no column(s) {missing} (available: {list(sel.columns)})')
     sel = sel.sort_values(args.diag_cols[0], ascending=False).drop_duplicates(key)
 
-    ## the top_n most diagnostic by Pareto rank over diag_cols, cycled until n_rooms is reached
-    top_n = args.top_n or args.n_rooms
-    if len(sel) < top_n:
-        raise ValueError(
-            f'{path} only has {len(sel)} distinct histories for this condition, '
-            f'but --top_n={top_n} were requested'
-        )
-    sel = top_n_pareto(sel, n=top_n, cols=args.diag_cols)
+    ## the top_n most diagnostic by Pareto rank over diag_cols (or, by default, just the
+    ## first Pareto layer), cycled until n_rooms is reached
+    if args.top_n is None:
+        if len(args.diag_cols) == 1:
+            raise ValueError('--top_n is required with a single --diag_cols objective '
+                             '(its first Pareto layer is just the tied maxima)')
+        sel = sel.dropna(subset=args.diag_cols)
+        sel = sel.iloc[pareto_front_idx(*(sel[c].to_numpy() for c in args.diag_cols))]
+    else:
+        if len(sel) < args.top_n:
+            raise ValueError(
+                f'{path} only has {len(sel)} distinct histories for this condition, '
+                f'but --top_n={args.top_n} were requested'
+            )
+        sel = top_n_pareto(sel, n=args.top_n, cols=args.diag_cols)
     sel = sel.iloc[np.arange(args.n_rooms) % len(sel)].reset_index(drop=True)
 
     if rooms:
@@ -118,11 +125,12 @@ def main():
     parser.add_argument('--n_AFC', type=int, default=2)
 
     parser.add_argument('--diag_target', choices=['model', 'ell'], default='model')
-    parser.add_argument('--diag_cols', nargs='+', default=['mi'],
+    parser.add_argument('--diag_cols', nargs='+', default=['mi_emp'],
                         help='Diagnosticity columns to maximise jointly (Pareto layers) when picking preset histories.')
     parser.add_argument('--top_n', type=int, default=None,
-                        help='Number of distinct preset histories to pick; repeated cyclically up to --n_rooms '
-                             '(default: --n_rooms, i.e. no repeats).')
+                        help='Number of distinct preset histories to pick, by Pareto rank; repeated cyclically '
+                             'up to --n_rooms. Required for a single objective; with several, '
+                             'defaults to the whole first Pareto layer.')
 
     args = parser.parse_args()
 
@@ -145,8 +153,8 @@ def main():
                 f'{args.alpha}alpha_{args.cost}cost_{term}')
         if args.preset_histories:
             stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq_{args.diag_target}target'
-    if args.preset_histories and args.top_n is not None:
-        stem += f'_top{args.top_n}_{"-".join(args.diag_cols)}'
+    if args.preset_histories:
+        stem += f'_top{args.top_n or "front"}_{"-".join(args.diag_cols)}'
     stem += f'_{args.ell_prior}'
 
     if args.gen_data:
@@ -172,8 +180,9 @@ def main():
         if args.preset_histories:
             diag_histories = load_diag_histories(args, term)
             print(f'  - Diagnosticity target: {args.diag_target}')
-            print(f'  - Pareto objectives: {args.diag_cols}, top {args.top_n or args.n_rooms} '
-                  f'cycled to {args.n_rooms} rooms')
+            print(f'  - Pareto objectives: {args.diag_cols}, '
+                  f'{f"top {args.top_n}" if args.top_n else "first layer"} '
+                  f'({len(set(diag_histories))} distinct) cycled to {args.n_rooms} rooms')
             if rooms:
                 print(f'  - Loaded {len(diag_histories)} diagnostic {args.n_AFC}-AFC tuples '
                       f'(lengths {sorted({sum(c for _, c in h) for hs in diag_histories for h in hs})})')
