@@ -47,12 +47,12 @@ def main():
     tag = ["noTermination", "Termination"][args.termination_arm]
     stem = (f'useful_saves/diag/{args.expt}/{args.n_arms}arms_{args.n_outcomes}outcomes_'
             f'{args.n_trials}trials_{tag}')
+    if args.expt=='rooms':
+        stem += f'_{args.n_AFC}AFC'
     stem += f'_{args.target}'
-    ## lognormal is the default, so it leaves older file names unchanged
-    if args.ell_prior != 'lognormal':
-        stem += f'_{args.ell_prior}'
-        if args.emp_type != 'emp':
-            stem += f'_{args.emp_type}'
+    stem += f'_{args.ell_prior}'
+    if args.emp_type != 'emp':
+        stem += f'_{args.emp_type}'
     os.makedirs('useful_saves/diag', exist_ok=True)
 
     ## run expt
