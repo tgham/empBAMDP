@@ -615,26 +615,26 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
 ELL_TRUNCNORM = {'emp': (0.0, 5.0), 'emp_lo': (0.5, 1.0), 'emp_hi': (1.0, 2.0)}
 
 
-def _ell_prior_dist(prior, mu, sigma, agent_type, ell_bounds):
+def _ell_prior_dist(prior, mu, sigma, emp_type, ell_bounds):
     """The frozen scipy prior over ell, and its (lo, hi) support."""
     if prior == 'lognormal':
 
         ## i.e. LN(mu, sigma), with bounds at +/- 4 sigma in log space
         return lognorm(sigma, scale=np.exp(mu)), (np.exp(mu - 4 * sigma), np.exp(mu + 4 * sigma))
     if prior == 'truncnorm':
-        lo, hi = emp_ell_bounds(agent_type, ell_bounds)
-        loc, scale = ELL_TRUNCNORM[agent_type]
+        lo, hi = emp_ell_bounds(emp_type, ell_bounds)
+        loc, scale = ELL_TRUNCNORM[emp_type]
         return truncnorm((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale), (lo, hi)
     raise ValueError(f"prior must be 'lognormal' or 'truncnorm', got {prior!r}")
 
 
 ## generate samples
 def ell_prior_samples(n_samples=200, mu=0.0, sigma=1.0, seed=None,
-                      prior='lognormal', agent_type='emp', ell_bounds=(0.01, 10.0)):
+                      prior='lognormal', emp_type='emp', ell_bounds=(0.01, 10.0)):
     """Sample of ell from the prior, with the weight each sample carries.
 
     `prior='lognormal'` is LN(mu, sigma): median exp(mu), heavy right tail.
-    `prior='truncnorm'` is the truncated normal over `agent_type`'s slice of
+    `prior='truncnorm'` is the truncated normal over `emp_type`'s slice of
     `ell_bounds` (see `emp_ell_bounds`), with (loc, scale) from `ELL_TRUNCNORM`.
 
     `sampling='grid'` (default) spaces ells evenly in log ell -- over
@@ -651,7 +651,7 @@ def ell_prior_samples(n_samples=200, mu=0.0, sigma=1.0, seed=None,
     n_samples = int(n_samples)
 
     ## get the prior distr
-    dist, (lo, hi) = _ell_prior_dist(prior, mu, sigma, agent_type, ell_bounds)
+    dist, (lo, hi) = _ell_prior_dist(prior, mu, sigma, emp_type, ell_bounds)
 
     ## evenly spaced in log ell, weighted by prior mass of each cell
     ells = np.geomspace(lo, hi, n_samples)
@@ -1226,7 +1226,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             horizons=None, costs=(0.0,),
                             n_ell_samples=200, prior_mu=0.0, prior_sigma=1.0,
                             seed=None,
-                            ell_prior='lognormal', agent_type='emp', ell_bounds=(0.01, 10.0),
+                            ell_prior='lognormal', emp_type='emp', ell_bounds=(0.01, 10.0),
                             init_t=0, n_jobs=1,
                             target='ell', p_model=(0.5, 0.5), tie_tol=None,
                             expt='arms', n_AFC=2, n_room_samples=None):
@@ -1275,7 +1275,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     Both emit `target` and `expt` columns and a comparable `mi`, so the frames concat.
 
     The ell prior is `ell_prior`: 'lognormal' is LN(prior_mu, prior_sigma);
-    'truncnorm' is the truncated normal over `agent_type`'s slice of
+    'truncnorm' is the truncated normal over `emp_type`'s slice of
     `ell_bounds`, as in parameter recovery (see `ell_prior_samples`).
 
     The ell sample is drawn ONCE and reused across every history, alpha, horizon
@@ -1301,7 +1301,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     ## shared ell sample from the prior, with its weights
     ell_samples, ell_w0s = ell_prior_samples(n_ell_samples, mu=prior_mu, sigma=prior_sigma,
                                              seed=seed, prior=ell_prior,
-                                             agent_type=agent_type, ell_bounds=ell_bounds)
+                                             emp_type=emp_type, ell_bounds=ell_bounds)
 
     ## canonical histories, optionally skipping the first init_t trials
     states = canonical_states(n_arms, n_outcomes, n_trials)
@@ -1343,9 +1343,9 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     df['expt'] = expt
     df['ell_prior'] = ell_prior
     if ell_prior == 'truncnorm':
-        df['agent_type'] = agent_type
-        df['ell_lo'], df['ell_hi'] = emp_ell_bounds(agent_type, ell_bounds)
-        df['prior_loc'], df['prior_scale'] = ELL_TRUNCNORM[agent_type]
+        df['emp_type'] = emp_type
+        df['ell_lo'], df['ell_hi'] = emp_ell_bounds(emp_type, ell_bounds)
+        df['prior_loc'], df['prior_scale'] = ELL_TRUNCNORM[emp_type]
     else:
         df['prior_mu'] = prior_mu
         df['prior_sigma'] = prior_sigma
@@ -1398,7 +1398,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
                              termination_arm=True, temp_emp=1.0, temp_info=1.0, horizon=None, cost=0.0,
                              n_samples=200, prior_mu=0.0, prior_sigma=1.0,
                              seed=None,
-                             ell_prior='lognormal', agent_type='emp', ell_bounds=(0.01, 10.0),
+                             ell_prior='lognormal', emp_type='emp', ell_bounds=(0.01, 10.0),
                              target='ell', p_model=(0.5, 0.5), tie_tol=None):
     """Diagnosticity for ONE arbitrary (non-canonical) count matrix.
 
@@ -1412,7 +1412,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
     come"; pass them explicitly to match a particular task design.
 
     `target` ('ell' or 'model'), `temp_info`, `p_model` and the ell prior
-    (`ell_prior`, `agent_type`, `ell_bounds`) behave exactly as in
+    (`ell_prior`, `emp_type`, `ell_bounds`) behave exactly as in
     `enumerate_diagnosticity`.
 
     Returns the row dict.
@@ -1433,7 +1433,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
 
     ell_samples, ell_w0s = ell_prior_samples(n_samples, mu=prior_mu, sigma=prior_sigma,
                                              seed=seed, prior=ell_prior,
-                                             agent_type=agent_type, ell_bounds=ell_bounds)
+                                             emp_type=emp_type, ell_bounds=ell_bounds)
     args = (ell_samples, n_arms, n_outcomes, n_trials, alpha,
             termination_arm, horizon, cost, temp_emp)
     if target == 'ell':
@@ -1447,9 +1447,9 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
     row['orbit_size'] = orbit_sequence_count(counts_array)
     row['ell_prior'] = ell_prior
     if ell_prior == 'truncnorm':
-        row['agent_type'] = agent_type
-        row['ell_lo'], row['ell_hi'] = emp_ell_bounds(agent_type, ell_bounds)
-        row['prior_loc'], row['prior_scale'] = ELL_TRUNCNORM[agent_type]
+        row['emp_type'] = emp_type
+        row['ell_lo'], row['ell_hi'] = emp_ell_bounds(emp_type, ell_bounds)
+        row['prior_loc'], row['prior_scale'] = ELL_TRUNCNORM[emp_type]
     else:
         row['prior_mu'] = prior_mu
         row['prior_sigma'] = prior_sigma
@@ -1469,8 +1469,8 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
 EMP_AGENT_TYPES = ('emp', 'emp_lo', 'emp_1', 'emp_hi')
 
 
-def emp_ell_bounds(agent_type, ell_bounds, eps=1e-3):
-    """Restrict `ell_bounds` to the slice of ell that `agent_type` occupies.
+def emp_ell_bounds(emp_type, ell_bounds, eps=1e-3):
+    """Restrict `ell_bounds` to the slice of ell that `emp_type` occupies.
 
     'emp' keeps the full range, as before. The split types carve it at ell=1:
     'emp_lo' takes the compressive region (ell<1, breadth of reachable
@@ -1482,20 +1482,20 @@ def emp_ell_bounds(agent_type, ell_bounds, eps=1e-3):
     Returns (lo, hi); lo == hi for the pinned type.
     """
     lo, hi = float(ell_bounds[0]), float(ell_bounds[1])
-    if agent_type == 'emp':
+    if emp_type == 'emp':
         return (lo, hi)
-    if agent_type == 'emp_1':
+    if emp_type == 'emp_1':
         return (1.0, 1.0)
-    if agent_type == 'emp_lo':
+    if emp_type == 'emp_lo':
         bounds = (lo, min(hi, 1.0 - eps))
-    elif agent_type == 'emp_hi':
+    elif emp_type == 'emp_hi':
         bounds = (max(lo, 1.0 + eps), hi)
     else:
-        raise ValueError(f"unknown empowerment agent type {agent_type!r}; "
+        raise ValueError(f"unknown empowerment agent type {emp_type!r}; "
                          f"expected one of {EMP_AGENT_TYPES}")
     if bounds[0] >= bounds[1]:
         raise ValueError(f"ell_bounds {tuple(ell_bounds)} leave no room for "
-                         f"'{agent_type}'")
+                         f"'{emp_type}'")
     return bounds
 
 

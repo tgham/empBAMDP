@@ -28,8 +28,8 @@ def main():
     parser.add_argument('--ell_prior', type=str, default='lognormal',
                         choices=['lognormal', 'truncnorm'],
                         help="'truncnorm' uses the parameter-recovery prior over "
-                             "--agent_type's slice of --ell_bounds, ignoring --prior_mu/--prior_sigma.")
-    parser.add_argument('--agent_type', type=str, default='emp',
+                             "--emp_type's slice of --ell_bounds, ignoring --prior_mu/--prior_sigma.")
+    parser.add_argument('--emp_type', type=str, default='emp',
                         choices=['emp', 'emp_lo', 'emp_hi'])
     parser.add_argument('--ell_bounds', type=float, nargs=2, default=(0.01, 10))
     parser.add_argument('--target', type=str, default='ell',
@@ -51,8 +51,8 @@ def main():
     ## lognormal is the default, so it leaves older file names unchanged
     if args.ell_prior != 'lognormal':
         stem += f'_{args.ell_prior}'
-        if args.agent_type != 'emp':
-            stem += f'_{args.agent_type}'
+        if args.emp_type != 'emp':
+            stem += f'_{args.emp_type}'
     os.makedirs('useful_saves/diag', exist_ok=True)
 
     ## run expt
@@ -67,7 +67,7 @@ def main():
         horizons=args.horizons, costs=args.costs,
         n_ell_samples=args.n_ell_samples,
         prior_mu=args.prior_mu, prior_sigma=args.prior_sigma, seed=args.seed,
-        ell_prior=args.ell_prior, agent_type=args.agent_type, ell_bounds=tuple(args.ell_bounds),
+        ell_prior=args.ell_prior, emp_type=args.emp_type, ell_bounds=tuple(args.ell_bounds),
         init_t=args.init_t, n_jobs=args.n_jobs,
         target=args.target, temp_info=args.temp_info,
         p_model=tuple(args.p_model),
