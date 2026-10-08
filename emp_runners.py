@@ -618,6 +618,8 @@ ELL_TRUNCNORM = {'emp': (0.0, 5.0), 'emp_lo': (0.5, 1.0), 'emp_hi': (1.0, 2.0)}
 def _ell_prior_dist(prior, mu, sigma, agent_type, ell_bounds):
     """The frozen scipy prior over ell, and its (lo, hi) support."""
     if prior == 'lognormal':
+
+        ## i.e. LN(mu, sigma), with bounds at +/- 4 sigma in log space
         return lognorm(sigma, scale=np.exp(mu)), (np.exp(mu - 4 * sigma), np.exp(mu + 4 * sigma))
     if prior == 'truncnorm':
         lo, hi = emp_ell_bounds(agent_type, ell_bounds)
@@ -653,7 +655,8 @@ def ell_prior_samples(n_samples=200, mu=0.0, sigma=1.0, seed=None,
 
     ## evenly spaced in log ell, weighted by prior mass of each cell
     ells = np.geomspace(lo, hi, n_samples)
-    return ells, ell_weights(ells, dist)
+    weights = ell_weights(ells, dist)
+    return ells, weights
 
 
 ## (normalised) prior weights for a grid of ells evenly spaced in log ell
@@ -664,8 +667,8 @@ def ell_weights(ells, dist):
     mass is p_ell(ell) * ell * dz -- i.e. the prior density over log ell. The
     dz is common to every cell and cancels on normalising.
     """
-    log_pi = dist.logpdf(ells) + np.log(ells)
-    log_pi -= scipy.special.logsumexp(log_pi)
+    log_pi = dist.logpdf(ells) + np.log(ells) # i.e. (log) prior mass * cell width log(d(ell)/dz) = log(ells), as per change of variables
+    log_pi -= scipy.special.logsumexp(log_pi) # normalise
     return np.exp(log_pi)
 
 ## quick helper for computing H(p) = -sum p log p
@@ -1143,7 +1146,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         'target': 'model',
         'p_model_emp': p_m[0],
         'H_A_h': H_marg_model,
-        'mi': mi_model,
+        'mi_model': mi_model,
         'mi_bits': mi_model / np.log(2.0),
         'mi_norm': mi_norm,
         'mi_emp': mi_emp,        # I(A;ell|h,emp) -- the _diag_emp_row quantity
