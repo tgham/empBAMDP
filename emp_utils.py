@@ -490,8 +490,14 @@ def ao_sequences(n_arms, n_outcomes, n_trials, termination_arm=False):
 
 
 ## pareto functions
-def pareto_front_idx(x, y):
-    order = np.lexsort((-y, -x))          # x desc, then y desc
+def pareto_front_idx(*arrays):
+    """Indices of the Pareto front, maximising every input. Takes 1 or 2 arrays."""
+    if len(arrays) == 1:
+        x = arrays[0]
+        return np.flatnonzero(x == x.max())     # all points tied for the max
+
+    x, y = arrays
+    order = np.lexsort((-y, -x))
     ys = y[order]
     running_max = np.maximum.accumulate(ys)
     prev_max = np.empty_like(running_max)
@@ -504,7 +510,58 @@ def get_pareto(df, x_col, y_col, plot=False):
     x = df[x_col].values
     y = df[y_col].values
     idx = pareto_front_idx(x, y)
-    if plot:
-        plot_pareto(x, y, idx)
-    # return idx
     return df.iloc[idx].sort_values(by=[x_col, y_col], ascending=[False, False]).reset_index(drop=True)
+
+def top_n_pareto(df, n=None, cols=("mi", "mi_emp"), verbose=False, plot=False):
+    cols = list(cols)
+    df = df.dropna(subset=cols)
+    arrays = [df[c].to_numpy() for c in cols]
+
+    ## if n is None, return the entire pareto front
+    if n is None:
+        idx = pareto_front_idx(*arrays)
+        out = df.iloc[idx].copy()
+        out["pareto_rank"] = 1
+        if verbose:
+            print(f"Selected {len(out)} points by {cols}")
+        if plot:
+            plot_pareto(*arrays, idx)
+        return out
+
+    if len(arrays) == 1:                          # layers are just sorted order
+        idx = np.argsort(-arrays[0], kind="stable")[:n]
+        out = df.iloc[idx].copy()
+        out["pareto_rank"] = np.arange(1, len(out) + 1)
+        if verbose:
+            print(f"Selected top {len(out)} points by {cols[0]}")
+        return out
+    
+    ## multi-objective
+    remaining = np.arange(len(df))
+    chosen, rank, r = [], [], 1
+    while len(remaining) and sum(map(len, chosen)) < n:
+        idx = pareto_front_idx(*(a[remaining] for a in arrays))
+        layer = remaining[idx]
+        chosen.append(layer)
+        rank.append(np.full(len(layer), r))
+        keep = np.ones(len(remaining), bool)
+        keep[idx] = False
+        remaining = remaining[keep]
+        
+        ## prevent overshoot
+        if sum(map(len, chosen)) > n:
+            excess = sum(map(len, chosen)) - n
+            chosen[-1] = layer[:-excess]
+            rank[-1] = np.full(len(layer) - excess, r)
+            if verbose:
+                print(f"Pareto layer {r}: {len(layer)} points, total chosen: {sum(map(len, chosen))}")
+            break
+        if verbose:
+            print(f"Pareto layer {r}: {len(layer)} points, total chosen: {sum(map(len, chosen))}")
+        r += 1
+        if plot:
+            plot_pareto(*(a[remaining] for a in arrays), idx)
+
+    out = df.iloc[np.concatenate(chosen)].copy()
+    out["pareto_rank"] = np.concatenate(rank)
+    return out

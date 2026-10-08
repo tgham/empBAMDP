@@ -1,5 +1,5 @@
 from emp_runners import gen_arms, gen_rooms, fit_emp, emp_ell_bounds, ELL_TRUNCNORM
-from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canonicalise_histories
+from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canonicalise_histories, top_n_pareto
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
@@ -47,19 +47,22 @@ def load_diag_histories(args, term):
                 )
             sel = match
 
-    ## one row per history (or tuple of histories), then the most diagnostic n_rooms of them
+    ## one row per history (or tuple of histories), keeping its best score on the first objective
     key = 'pair_str' if rooms else 'history'
-    sel = sel.sort_values('mi', ascending=False).drop_duplicates(key)
-    if len(sel) < args.n_rooms:
+    missing = [c for c in args.diag_cols if c not in sel.columns]
+    if missing:
+        raise ValueError(f'{path} has no column(s) {missing} (available: {list(sel.columns)})')
+    sel = sel.sort_values(args.diag_cols[0], ascending=False).drop_duplicates(key)
+
+    ## the top_n most diagnostic by Pareto rank over diag_cols, cycled until n_rooms is reached
+    top_n = args.top_n or args.n_rooms
+    if len(sel) < top_n:
         raise ValueError(
             f'{path} only has {len(sel)} distinct histories for this condition, '
-            f'but --n_rooms={args.n_rooms} were requested'
+            f'but --top_n={top_n} were requested'
         )
-
-    ## or: just keep the n_rooms/2 best, and then repeat each 2 times
-    n_repeats = 4
-    sel = sel.head(args.n_rooms // n_repeats)
-    sel = pd.concat([sel] * n_repeats, ignore_index=True)
+    sel = top_n_pareto(sel, n=top_n, cols=args.diag_cols)
+    sel = sel.iloc[np.arange(args.n_rooms) % len(sel)].reset_index(drop=True)
 
     if rooms:
         n_AFC = sum(c.startswith('history_') and c[len('history_'):].isdigit() for c in sel.columns)
@@ -114,7 +117,12 @@ def main():
     ## room task
     parser.add_argument('--n_AFC', type=int, default=2)
 
-    parser.add_argument('--diag_target', choices=['model', 'ell'], default='ell')
+    parser.add_argument('--diag_target', choices=['model', 'ell'], default='model')
+    parser.add_argument('--diag_cols', nargs='+', default=['mi'],
+                        help='Diagnosticity columns to maximise jointly (Pareto layers) when picking preset histories.')
+    parser.add_argument('--top_n', type=int, default=None,
+                        help='Number of distinct preset histories to pick; repeated cyclically up to --n_rooms '
+                             '(default: --n_rooms, i.e. no repeats).')
 
     args = parser.parse_args()
 
@@ -137,6 +145,8 @@ def main():
                 f'{args.alpha}alpha_{args.cost}cost_{term}')
         if args.preset_histories:
             stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq_{args.diag_target}target'
+    if args.preset_histories and args.top_n is not None:
+        stem += f'_top{args.top_n}_{"-".join(args.diag_cols)}'
     stem += f'_{args.ell_prior}'
 
     if args.gen_data:
@@ -162,6 +172,8 @@ def main():
         if args.preset_histories:
             diag_histories = load_diag_histories(args, term)
             print(f'  - Diagnosticity target: {args.diag_target}')
+            print(f'  - Pareto objectives: {args.diag_cols}, top {args.top_n or args.n_rooms} '
+                  f'cycled to {args.n_rooms} rooms')
             if rooms:
                 print(f'  - Loaded {len(diag_histories)} diagnostic {args.n_AFC}-AFC tuples '
                       f'(lengths {sorted({sum(c for _, c in h) for hs in diag_histories for h in hs})})')
