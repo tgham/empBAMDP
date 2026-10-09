@@ -30,7 +30,7 @@ def load_diag_histories(args, term):
     """
     rooms = args.expt == 'rooms'
     path = (f'useful_saves/diag/{args.expt}/{args.n_arms}arms_{args.n_outcomes}outcomes_'
-            f'{args.n_trials}trials_{term}_{args.diag_target}_diag.csv')
+            f'{args.n_trials}trials_{args.n_AFC}AFC_{term}_{args.diag_target}_{args.ell_prior}_diag.csv')
     df_diag = pd.read_csv(path)
 
     ## keep only the rows generated under this run's design (rooms are valued at their leaf, so no horizon)
