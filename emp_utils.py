@@ -513,9 +513,22 @@ def get_pareto(df, x_col, y_col, plot=False):
     return df.iloc[idx].sort_values(by=[x_col, y_col], ascending=[False, False]).reset_index(drop=True)
 
 def top_n_pareto(df, n=None, cols=("mi", "mi_emp"), verbose=False, plot=False):
+    if isinstance(cols, str):
+        cols = (cols,)
     cols = list(cols)
     df = df.dropna(subset=cols)
     arrays = [df[c].to_numpy() for c in cols]
+    
+    ## if only one column, just sort and take the top n
+    if len(arrays) == 1:
+        if n is None:
+            raise ValueError("n must be specified when cols has length 1")
+        idx = np.argsort(-arrays[0], kind="stable")[:n]
+        out = df.iloc[idx].copy()
+        out["pareto_rank"] = np.arange(1, len(out) + 1)
+        if verbose:
+            print(f"Selected top {len(out)} points by {cols[0]}")
+        return out
 
     ## if n is None, return the entire pareto front
     if n is None:
@@ -528,13 +541,6 @@ def top_n_pareto(df, n=None, cols=("mi", "mi_emp"), verbose=False, plot=False):
             plot_pareto(*arrays, idx)
         return out
 
-    if len(arrays) == 1:                          # layers are just sorted order
-        idx = np.argsort(-arrays[0], kind="stable")[:n]
-        out = df.iloc[idx].copy()
-        out["pareto_rank"] = np.arange(1, len(out) + 1)
-        if verbose:
-            print(f"Selected top {len(out)} points by {cols[0]}")
-        return out
     
     ## multi-objective
     remaining = np.arange(len(df))
