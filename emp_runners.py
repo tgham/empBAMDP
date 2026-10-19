@@ -1109,7 +1109,9 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     ### I(A;M|h) = H(M|h) - E_a[H(M|h,a)]
 
     ## H(M|h) = -sum_m p(m|h) log p(m|h) = H(M) because the prior is independent of h
-    p_m = np.asarray(p_model, dtype=float)
+    p_m = np.asarray((0.5, 0.5) if p_model is None else p_model, dtype=float) # None = uniform
+    if p_m.shape != (2,):
+        raise ValueError(f"p_model must be a pair (p_emp, p_info), got {p_model!r}")
     p_m = p_m / p_m.sum()
     H_M = float(_neg_p_log_p(p_m))
 
