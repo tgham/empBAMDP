@@ -1,4 +1,4 @@
-from emp_runners import gen_arms, gen_rooms, fit_emp, emp_ell_bounds, ELL_TRUNCNORM
+from emp_runners import gen_arms, gen_rooms, fit_emp, emp_ell_bounds, LOG_ELL_PRIOR
 from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canonicalise_histories, top_n_pareto, pareto_front_idx
 import pandas as pd
 import numpy as np
@@ -90,9 +90,16 @@ def main():
     parser.add_argument('--n_trials', type=int, default=8)
     parser.add_argument('--n_rooms', type=int, default=25)
     parser.add_argument('--alpha', type=float, default=0.4)
-    parser.add_argument('--ell_bounds', type=float, default=(0.01, 10), nargs=2)
+    parser.add_argument('--log_ell_bounds', type=float, default=None, nargs=2,
+                        help='bounds on generative and fitted log ell (default: unbounded)')
     parser.add_argument('--ell_prior', choices=['loguniform', 'truncnorm'], default='truncnorm',
-                        help="Distribution to sample generative ells from, within --ell_bounds.")
+                        help="Distribution to sample generative log ells from, within --log_ell_bounds: "
+                             "uniform (needs finite bounds), or N(0, 2) truncated to the agent type's slice.")
+    parser.add_argument('--optimizer', choices=['lbfgsb', 'de'], default='lbfgsb',
+                        help="'lbfgsb': multi-start L-BFGS-B, allows open --log_ell_bounds; "
+                             "'de': differential evolution, needs finite bounds.")
+    parser.add_argument('--n_starts', type=int, default=10,
+                        help='starting points for --optimizer lbfgsb')
     parser.add_argument('--temp_bounds', type=float, default=(0.001, 0.2), nargs=2)
     parser.add_argument('--cost', type=float, default=0.0)
     parser.add_argument('--horizon', type=int, default=1)
@@ -195,21 +202,24 @@ def main():
         # Define the worker function
         def _gen_single_sim(sim_id, args, agent_type, rng):
             
-            ## Sample ell over this type's slice of the bounds (the whole
-            ## range for 'emp', ell=1 for 'emp_1')
+            ## Sample log ell over this type's slice of the bounds (the whole
+            ## range for 'emp', log ell=0 for 'emp_1')
             if agent_type == 'info':
                 ell = None
             else:
-                lo, hi = emp_ell_bounds(agent_type, args.ell_bounds)
+                lo, hi = emp_ell_bounds(agent_type, args.log_ell_bounds)
                 if lo == hi:
-                    ell = lo
+                    log_ell = lo
                 elif args.ell_prior == 'loguniform':
-                    ell = float(np.exp(rng.uniform(np.log(lo), np.log(hi))))
+                    if not np.isfinite([lo, hi]).all():
+                        raise ValueError('--ell_prior loguniform needs finite --log_ell_bounds')
+                    log_ell = rng.uniform(lo, hi)
                 else:
-                    ## truncated normal, (loc, scale) per agent type
-                    loc, scale = ELL_TRUNCNORM[agent_type]
-                    ell = float(truncnorm.rvs((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale,
-                                              random_state=rng))
+                    ## N(0, 2) over log ell, truncated to the type's slice
+                    loc, scale = LOG_ELL_PRIOR
+                    log_ell = truncnorm.rvs((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale,
+                                            random_state=rng)
+                ell = float(np.exp(log_ell))
             temp = rng.uniform(*args.temp_bounds)
 
 
@@ -308,7 +318,7 @@ def main():
     ## fit data
     if not args.skip_recovery:
         param_bounds = [
-            args.ell_bounds,
+            args.log_ell_bounds,
             args.temp_bounds
         ]
         print('fitting')
@@ -319,6 +329,9 @@ def main():
             horizon=args.horizon,
             init_t=init_t,
             n_jobs=args.n_jobs,
+            optimizer=args.optimizer,
+            n_starts=args.n_starts,
+            seed=args.seed,
             verbose=True
         )
 
@@ -327,6 +340,7 @@ def main():
             df_fits.loc[df_fits['subject_id']==sim, 'gen_agent_type'] = df_sim.loc[df_sim['subject_id']==sim, 'agent_type'].iloc[0]
             df_fits.loc[df_fits['subject_id']==sim, 'gen_ell'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_ell'].iloc[0]
             df_fits.loc[df_fits['subject_id']==sim, 'gen_temp'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_temp'].iloc[0]
+        df_fits['gen_log_ell'] = np.log(df_fits['gen_ell'].astype(float))
 
         ## save fits
         path = f'{stem}_fits.csv'

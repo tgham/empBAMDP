@@ -27,15 +27,19 @@ def main():
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--ell_prior', type=str, default='lognormal',
                         choices=['lognormal', 'truncnorm'],
-                        help="'truncnorm' uses the parameter-recovery prior over "
-                             "--emp_type's slice of --ell_bounds, ignoring --prior_mu/--prior_sigma.")
-    parser.add_argument('--emp_type', type=str, default='emp',
-                        choices=['emp', 'emp_lo', 'emp_hi'])
-    parser.add_argument('--ell_bounds', type=float, nargs=2, default=(0.01, 10))
+                        help="'truncnorm' uses the parameter-recovery prior, log ell ~ N(0, 2) over "
+                             "--emp_type's slice of --log_ell_bounds, ignoring --prior_mu/--prior_sigma.")
+    parser.add_argument('--emp_type', type=str, nargs='+', default=['emp'],
+                        choices=['emp', 'emp_lo', 'emp_1', 'emp_hi'],
+                        help="Several types (e.g. emp_lo emp_1 emp_hi) split emp into "
+                             "one model per type; --target model only.")
+    parser.add_argument('--log_ell_bounds', type=float, nargs=2, default=None,
+                        help='truncation of the truncnorm prior (default: none; the grid stops at +/- 4 sigma)')
     parser.add_argument('--target', type=str, default='ell',
                         choices=['ell', 'model'])
-    parser.add_argument('--p_model', type=float, nargs=2, default=[0.5, 0.5],
-                        metavar=('P_EMP', 'P_INFO'))
+    parser.add_argument('--p_model', type=float, nargs='+', default=None,
+                        help="Prior over the models: one per --emp_type, then info. "
+                             "Default uniform.")
     
     parser.add_argument('--expt', type=str, default='arms', choices=['arms','rooms'])
     if parser.parse_known_args()[0].expt == 'rooms':
@@ -51,8 +55,8 @@ def main():
         stem += f'_{args.n_AFC}AFC'
     stem += f'_{args.target}'
     stem += f'_{args.ell_prior}'
-    if args.emp_type != 'emp':
-        stem += f'_{args.emp_type}'
+    if args.emp_type != ['emp']:
+        stem += '_' + '_'.join(args.emp_type)
     os.makedirs('useful_saves/diag', exist_ok=True)
 
     ## run expt
@@ -67,11 +71,14 @@ def main():
         horizons=args.horizons, costs=args.costs,
         n_ell_samples=args.n_ell_samples,
         prior_mu=args.prior_mu, prior_sigma=args.prior_sigma, seed=args.seed,
-        ell_prior=args.ell_prior, emp_type=args.emp_type, ell_bounds=tuple(args.ell_bounds),
+        ell_prior=args.ell_prior,
+        emp_type=args.emp_type[0] if len(args.emp_type) == 1 else tuple(args.emp_type),
+        log_ell_bounds=args.log_ell_bounds and tuple(args.log_ell_bounds),
         init_t=args.init_t, n_jobs=args.n_jobs,
         target=args.target, temp_info=args.temp_info,
-        p_model=tuple(args.p_model),
-        expt=args.expt, n_AFC=args.n_AFC, n_room_samples=args.n_room_samples
+        p_model=None if args.p_model is None else tuple(args.p_model),
+        expt=args.expt, n_AFC=getattr(args, 'n_AFC', 2),
+        n_room_samples=getattr(args, 'n_room_samples', None)
     )
 
     ## save

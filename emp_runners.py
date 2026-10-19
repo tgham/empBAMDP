@@ -9,7 +9,7 @@ from scipy.special import logsumexp
 from joblib import Parallel, delayed, effective_n_jobs
 import warnings
 from tqdm_joblib import tqdm_joblib
-from scipy.stats import lognorm, truncnorm
+from scipy.stats import norm, truncnorm
 
 from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canon_to_concrete
 from emp_models import make_agent
@@ -610,64 +610,62 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
 
 ### Diagnosticity of an observation history: I(A; ell | h) - How much does observing the chosen action tell us about the agent's ell?
 
-## truncated-normal prior on ell, (loc, scale) per empowerment agent type --
-## the same prior parameter recovery samples generative ells from
-ELL_TRUNCNORM = {'emp': (0.0, 5.0), 'emp_lo': (0.5, 1.0), 'emp_hi': (1.0, 2.0)}
+## prior over log ell: N(0, 2), truncated to each empowerment agent type's
+## slice of log ell (see `emp_ell_bounds`) -- the same prior parameter recovery
+## samples generative ells from
+LOG_ELL_PRIOR = (0.0, np.sqrt(2.0))
 
 
-def _ell_prior_dist(prior, mu, sigma, emp_type, ell_bounds):
-    """The frozen scipy prior over ell, and its (lo, hi) support."""
+def _log_ell_prior_dist(prior, mu, sigma, emp_type, log_ell_bounds):
+    """The frozen scipy prior over log ell, and its (lo, hi) support in log ell."""
     if prior == 'lognormal':
 
-        ## i.e. LN(mu, sigma), with bounds at +/- 4 sigma in log space
-        return lognorm(sigma, scale=np.exp(mu)), (np.exp(mu - 4 * sigma), np.exp(mu + 4 * sigma))
+        ## i.e. log ell ~ N(mu, sigma), with bounds at +/- 4 sigma
+        return norm(mu, sigma), (mu - 4 * sigma, mu + 4 * sigma)
     if prior == 'truncnorm':
-        lo, hi = emp_ell_bounds(emp_type, ell_bounds)
-        loc, scale = ELL_TRUNCNORM[emp_type]
-        return truncnorm((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale), (lo, hi)
+        lo, hi = emp_ell_bounds(emp_type, log_ell_bounds)
+        loc, scale = LOG_ELL_PRIOR
+        dist = truncnorm((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale)
+
+        ## the grid needs a finite support: open sides stop at +/- 4 sigma
+        return dist, (max(lo, loc - 4 * scale), min(hi, loc + 4 * scale))
     raise ValueError(f"prior must be 'lognormal' or 'truncnorm', got {prior!r}")
 
 
 ## generate samples
 def ell_prior_samples(n_samples=200, mu=0.0, sigma=1.0, seed=None,
-                      prior='lognormal', emp_type='emp', ell_bounds=(0.01, 10.0)):
+                      prior='lognormal', emp_type='emp', log_ell_bounds=(-5.0, 5.0)):
     """Sample of ell from the prior, with the weight each sample carries.
 
-    `prior='lognormal'` is LN(mu, sigma): median exp(mu), heavy right tail.
-    `prior='truncnorm'` is the truncated normal over `emp_type`'s slice of
-    `ell_bounds` (see `emp_ell_bounds`), with (loc, scale) from `ELL_TRUNCNORM`.
+    `prior='lognormal'` is log ell ~ N(mu, sigma): median exp(mu), heavy right tail.
+    `prior='truncnorm'` is log ell ~ N(LOG_ELL_PRIOR), truncated to `emp_type`'s
+    slice of `log_ell_bounds` (see `emp_ell_bounds`).
 
-    `sampling='grid'` (default) spaces ells evenly in log ell -- over
-    mu +/- 4 sigma for the lognormal, over the support for the truncnorm -- and
-    weights each by the prior mass of its log-ell cell (see `ell_weights`).
-    `sampling='quantile'` returns the stratified midpoint quantiles
-    ppf((m + 0.5)/M): deterministic and low-variance because p(a|h,ell) is
-    smooth in ell. `sampling='random'` draws i.i.d. (use `seed`), kept for
-    MC-error checks. Quantile and random samples are already distributed as
-    the prior, so they are EQUAL WEIGHT.
+    The ells are evenly spaced in log ell -- over mu +/- 4 sigma for the
+    lognormal, over the support for the truncnorm -- and each is weighted by
+    the prior mass of its log-ell cell (see `ell_weights`).
 
     Returns (ells, weights), weights normalised to sum to 1.
     """
     n_samples = int(n_samples)
 
     ## get the prior distr
-    dist, (lo, hi) = _ell_prior_dist(prior, mu, sigma, emp_type, ell_bounds)
+    dist, (lo, hi) = _log_ell_prior_dist(prior, mu, sigma, emp_type, log_ell_bounds)
 
     ## evenly spaced in log ell, weighted by prior mass of each cell
-    ells = np.geomspace(lo, hi, n_samples)
-    weights = ell_weights(ells, dist)
-    return ells, weights
+    log_ells = np.linspace(lo, hi, n_samples)
+    weights = ell_weights(log_ells, dist)
+    return np.exp(log_ells), weights
 
 
-## (normalised) prior weights for a grid of ells evenly spaced in log ell
-def ell_weights(ells, dist):
-    """Prior mass of each ell's cell on a log-spaced grid.
+## (normalised) prior weights for a grid of log ells
+def ell_weights(log_ells, dist):
+    """Prior mass of each cell on an evenly spaced grid in log ell.
 
-    A cell of fixed width dz in z = log ell covers d(ell) = ell * dz, so its
-    mass is p_ell(ell) * ell * dz -- i.e. the prior density over log ell. The
-    dz is common to every cell and cancels on normalising.
+    `dist` is the prior over log ell, so a cell's mass is its density times the
+    cell width, which is common to every cell and cancels on normalising.
     """
-    log_pi = dist.logpdf(ells) + np.log(ells) # i.e. (log) prior mass * cell width log(d(ell)/dz) = log(ells), as per change of variables
+    log_pi = dist.logpdf(log_ells)
     log_pi -= scipy.special.logsumexp(log_pi) # normalise
     return np.exp(log_pi)
 
@@ -1226,7 +1224,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             horizons=None, costs=(0.0,),
                             n_ell_samples=200, prior_mu=0.0, prior_sigma=1.0,
                             seed=None,
-                            ell_prior='lognormal', emp_type='emp', ell_bounds=(0.01, 10.0),
+                            ell_prior='truncnormal', emp_type='emp', log_ell_bounds=(-5.0, 5.0),
                             init_t=0, n_jobs=1,
                             target='ell', p_model=(0.5, 0.5), tie_tol=None,
                             expt='arms', n_AFC=2, n_room_samples=None):
@@ -1274,9 +1272,9 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                 `models_agree` is reading argmax noise.
     Both emit `target` and `expt` columns and a comparable `mi`, so the frames concat.
 
-    The ell prior is `ell_prior`: 'lognormal' is LN(prior_mu, prior_sigma);
-    'truncnorm' is the truncated normal over `emp_type`'s slice of
-    `ell_bounds`, as in parameter recovery (see `ell_prior_samples`).
+    The ell prior is `ell_prior`: 'lognormal' is log ell ~ N(prior_mu, prior_sigma);
+    'truncnorm' is log ell ~ N(LOG_ELL_PRIOR) truncated to `emp_type`'s slice of
+    `log_ell_bounds`, as in parameter recovery (see `ell_prior_samples`).
 
     The ell sample is drawn ONCE and reused across every history, alpha, horizon
     and cost -- common random numbers, so the resulting mi values are directly
@@ -1301,7 +1299,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     ## shared ell sample from the prior, with its weights
     ell_samples, ell_w0s = ell_prior_samples(n_ell_samples, mu=prior_mu, sigma=prior_sigma,
                                              seed=seed, prior=ell_prior,
-                                             emp_type=emp_type, ell_bounds=ell_bounds)
+                                             emp_type=emp_type, log_ell_bounds=log_ell_bounds)
 
     ## canonical histories, optionally skipping the first init_t trials
     states = canonical_states(n_arms, n_outcomes, n_trials)
@@ -1344,8 +1342,8 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     df['ell_prior'] = ell_prior
     if ell_prior == 'truncnorm':
         df['emp_type'] = emp_type
-        df['ell_lo'], df['ell_hi'] = emp_ell_bounds(emp_type, ell_bounds)
-        df['prior_loc'], df['prior_scale'] = ELL_TRUNCNORM[emp_type]
+        df['log_ell_lo'], df['log_ell_hi'] = emp_ell_bounds(emp_type, log_ell_bounds)
+        df['prior_loc'], df['prior_scale'] = LOG_ELL_PRIOR
     else:
         df['prior_mu'] = prior_mu
         df['prior_sigma'] = prior_sigma
@@ -1398,7 +1396,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
                              termination_arm=True, temp_emp=1.0, temp_info=1.0, horizon=None, cost=0.0,
                              n_samples=200, prior_mu=0.0, prior_sigma=1.0,
                              seed=None,
-                             ell_prior='lognormal', emp_type='emp', ell_bounds=(0.01, 10.0),
+                             ell_prior='lognormal', emp_type='emp', log_ell_bounds=(-5.0, 5.0),
                              target='ell', p_model=(0.5, 0.5), tie_tol=None):
     """Diagnosticity for ONE arbitrary (non-canonical) count matrix.
 
@@ -1412,7 +1410,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
     come"; pass them explicitly to match a particular task design.
 
     `target` ('ell' or 'model'), `temp_info`, `p_model` and the ell prior
-    (`ell_prior`, `emp_type`, `ell_bounds`) behave exactly as in
+    (`ell_prior`, `emp_type`, `log_ell_bounds`) behave exactly as in
     `enumerate_diagnosticity`.
 
     Returns the row dict.
@@ -1433,7 +1431,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
 
     ell_samples, ell_w0s = ell_prior_samples(n_samples, mu=prior_mu, sigma=prior_sigma,
                                              seed=seed, prior=ell_prior,
-                                             emp_type=emp_type, ell_bounds=ell_bounds)
+                                             emp_type=emp_type, log_ell_bounds=log_ell_bounds)
     args = (ell_samples, n_arms, n_outcomes, n_trials, alpha,
             termination_arm, horizon, cost, temp_emp)
     if target == 'ell':
@@ -1448,8 +1446,8 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
     row['ell_prior'] = ell_prior
     if ell_prior == 'truncnorm':
         row['emp_type'] = emp_type
-        row['ell_lo'], row['ell_hi'] = emp_ell_bounds(emp_type, ell_bounds)
-        row['prior_loc'], row['prior_scale'] = ELL_TRUNCNORM[emp_type]
+        row['log_ell_lo'], row['log_ell_hi'] = emp_ell_bounds(emp_type, log_ell_bounds)
+        row['prior_loc'], row['prior_scale'] = LOG_ELL_PRIOR
     else:
         row['prior_mu'] = prior_mu
         row['prior_sigma'] = prior_sigma
@@ -1469,43 +1467,50 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
 EMP_AGENT_TYPES = ('emp', 'emp_lo', 'emp_1', 'emp_hi')
 
 
-def emp_ell_bounds(emp_type, ell_bounds, eps=1e-3):
-    """Restrict `ell_bounds` to the slice of ell that `emp_type` occupies.
+def emp_ell_bounds(emp_type, log_ell_bounds, eps=1e-3):
+    """Restrict `log_ell_bounds` to the slice of log ell that `emp_type` occupies.
 
-    'emp' keeps the full range, as before. The split types carve it at ell=1:
-    'emp_lo' takes the compressive region (ell<1, breadth of reachable
-    outcomes), 'emp_hi' the expansive one (ell>1, control over individual
-    outcomes), and 'emp_1' pins ell=1 so only temp is free. `eps` keeps the two
-    open types strictly off 1, so a fit that runs to the boundary stays
-    distinguishable from 'emp_1'.
+    'emp' keeps the full range, as before. The split types carve it at log
+    ell=0 (ell=1): 'emp_lo' takes the compressive region (ell<1, breadth of
+    reachable outcomes), 'emp_hi' the expansive one (ell>1, control over
+    individual outcomes), and 'emp_1' pins log ell=0 so only temp is free.
+    `eps` keeps the two open types strictly off 0, so a fit that runs to the
+    boundary stays distinguishable from 'emp_1'.
 
-    Returns (lo, hi); lo == hi for the pinned type.
+    `log_ell_bounds=None` (or a None on either side) leaves log ell unbounded
+    there, so e.g. 'emp_hi' becomes (eps, inf).
+
+    Returns (lo, hi) in log ell, with +/-inf for open sides; lo == hi for the
+    pinned type.
     """
-    lo, hi = float(ell_bounds[0]), float(ell_bounds[1])
+    if log_ell_bounds is None:
+        log_ell_bounds = (None, None)
+    lo = -np.inf if log_ell_bounds[0] is None else float(log_ell_bounds[0])
+    hi = np.inf if log_ell_bounds[1] is None else float(log_ell_bounds[1])
     if emp_type == 'emp':
         return (lo, hi)
     if emp_type == 'emp_1':
-        return (1.0, 1.0)
+        return (0.0, 0.0)
     if emp_type == 'emp_lo':
-        bounds = (lo, min(hi, 1.0 - eps))
+        bounds = (lo, min(hi, -eps))
     elif emp_type == 'emp_hi':
-        bounds = (max(lo, 1.0 + eps), hi)
+        bounds = (max(lo, eps), hi)
     else:
         raise ValueError(f"unknown empowerment agent type {emp_type!r}; "
                          f"expected one of {EMP_AGENT_TYPES}")
     if bounds[0] >= bounds[1]:
-        raise ValueError(f"ell_bounds {tuple(ell_bounds)} leave no room for "
+        raise ValueError(f"log_ell_bounds {tuple(log_ell_bounds)} leave no room for "
                          f"'{emp_type}'")
     return bounds
 
 
 ## parallelised fitting
 def fit_emp(df_ppt,
-            # ell_bounds=(0.1, 5.0), temp_bounds=(0.1, 10.0),
             param_bounds, agent_types=['emp', 'info'],
                            horizon=None, init_t=0,
                            maxiter=200, tol=1e-6, n_jobs=-1,
-                           ell_eps=1e-3, verbose=True):
+                           ell_eps=1e-3, optimizer='lbfgsb', n_starts=10,
+                           seed=None, verbose=True):
     """
     Parallelized version of fit_emp_model using joblib.
 
@@ -1513,11 +1518,14 @@ def fit_emp(df_ppt,
     -----------
     df_ppt : pd.DataFrame
         Participant data
-    param_bounds : (ell_bounds, temp_bounds)
-        Parameter bounds, each a (lo, hi) tuple.
+    param_bounds : (log_ell_bounds, temp_bounds)
+        Parameter bounds, each a (lo, hi) tuple. The empowerment agent's free
+        parameter is log ell, so its bounds are in log ell. `log_ell_bounds`
+        may be None (or have a None side) for no bound, with
+        optimizer='lbfgsb'; `temp_bounds` must be finite.
     agent_types : list of str
         Models to fit, one row per subject each. 'info' is the info-seeking
-        agent (temp only); 'emp' the empowerment agent over the full ell range.
+        agent (temp only); 'emp' the empowerment agent over the full log-ell range.
         Passing 'emp_lo' / 'emp_1' / 'emp_hi' instead of 'emp' splits it into
         three types by ell<1, ell=1 (a one-parameter model) and ell>1; see
         `emp_ell_bounds`.
@@ -1532,20 +1540,32 @@ def fit_emp(df_ppt,
     n_jobs : int
         Number of parallel jobs (-1 = all cores)
     ell_eps : float
-        Margin keeping 'emp_lo'/'emp_hi' off ell=1.
+        Margin (in log ell) keeping 'emp_lo'/'emp_hi' off ell=1.
+    optimizer : 'lbfgsb' or 'de'
+        'lbfgsb' (default): multi-start L-BFGS-B, which allows open bounds.
+        'de': differential evolution, which needs finite bounds throughout.
+    n_starts : int
+        Starting points for 'lbfgsb': log ell from the N(0, 2) prior over the
+        type's slice, temp uniform over `temp_bounds`.
+    seed : int or None
+        Seeds the starting points / DE population; each subject gets its own
+        stream.
     verbose : bool
 
     Returns:
     --------
     pd.DataFrame with fitted parameters per subject
     """
+    if optimizer not in ('lbfgsb', 'de'):
+        raise ValueError(f"optimizer must be 'lbfgsb' or 'de', got {optimizer!r}")
     pids = df_ppt['subject_id'].unique()
+    seeds = np.random.SeedSequence(seed).spawn(len(agent_types) * len(pids))
     df_fits = pd.DataFrame()
-    for agent_type in agent_types:
+    for i_type, agent_type in enumerate(agent_types):
         if agent_type == 'info':
-            ell_bounds, temp_bounds = (None, None), param_bounds[1]
+            log_ell_bounds, temp_bounds = None, param_bounds[1]
         else:
-            ell_bounds = emp_ell_bounds(agent_type, param_bounds[0], eps=ell_eps)
+            log_ell_bounds = emp_ell_bounds(agent_type, param_bounds[0], eps=ell_eps)
             temp_bounds = param_bounds[1]
         with tqdm_joblib(tqdm(total=len(pids), desc=f"Fitting {agent_type}",
                               disable=not verbose)):
@@ -1553,27 +1573,36 @@ def fit_emp(df_ppt,
                 delayed(_fit_ppt)(
                     pid=pid,
                     df_ppt=df_ppt.loc[df_ppt['subject_id'] == pid],
-                    ell_bounds=ell_bounds,
+                    log_ell_bounds=log_ell_bounds,
                     temp_bounds=temp_bounds,
                     horizon=horizon,
                     init_t=init_t,
                     maxiter=maxiter,
                     tol=tol,
                     verbose=False,
-                    agent_type=agent_type
+                    agent_type=agent_type,
+                    optimizer=optimizer,
+                    n_starts=n_starts,
+                    seed=np.random.default_rng(seeds[i_type * len(pids) + i_pid])
                 )
-                for pid in pids
+                for i_pid, pid in enumerate(pids)
             )
         if df_fits.empty:
             df_fits = pd.DataFrame(results)
         else:
             df_fits = pd.concat([df_fits, pd.DataFrame(results)], ignore_index=True)
     return df_fits
-def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
+def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
              init_t, maxiter, tol, verbose, agent_type=None,
+             optimizer='lbfgsb', n_starts=10,
              popsize=15, mutation=(0.5, 1), recombination=0.7, seed=None):
     """
-    Fit model for a single subject using differential evolution.
+    Fit model for a single subject, by multi-start L-BFGS-B ('lbfgsb') or
+    differential evolution ('de').
+
+    The empowerment agent is optimised over log ell (bounds `log_ell_bounds`,
+    +/-inf where open -- 'lbfgsb' only); the agent itself is run at
+    ell = exp(log ell). `log_ell_bounds=None` marks the info-seeking agent.
     """
     
     ## hoist the data out of the DataFrame
@@ -1585,47 +1614,73 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
 
     ## emp vs info agent, and which parameters the optimiser actually searches
     if agent_type is None:
-        agent_type = 'info' if ell_bounds[0] is None else 'emp'
-    fixed_ell = None
+        agent_type = 'info' if log_ell_bounds is None else 'emp'
+    fixed_log_ell = None
     if agent_type == 'info':
         bounds = [temp_bounds]
-    elif ell_bounds[0] == ell_bounds[1]: ## ell pinned, e.g. 'emp_1'
-        fixed_ell = float(ell_bounds[0])
+    elif log_ell_bounds[0] == log_ell_bounds[1]: ## ell pinned, e.g. 'emp_1'
+        fixed_log_ell = float(log_ell_bounds[0])
         bounds = [temp_bounds]
     else:
-        bounds = [ell_bounds, temp_bounds]
+        bounds = [log_ell_bounds, temp_bounds]
+    fixed_ell = None if fixed_log_ell is None else np.exp(fixed_log_ell)
 
     def compute_nll(params):
         if len(params) == 1: ## info-seeking agent, or emp with ell pinned
             ell = fixed_ell
             temp = params[0]
         else: ## empowerment agent
-            ell, temp = params
+            log_ell, temp = params
+            ell = np.exp(log_ell)
 
         if design['expt'] == 'rooms':
             return _nll_from_rooms(rooms, design, ell, temp)
         elif design['expt'] == 'arms':
             return _nll_from_arms(arms, design, ell, temp, horizon, init_t)
 
-    res = differential_evolution(
-        func=compute_nll,
-        bounds=bounds,
-        maxiter=maxiter,
-        tol=tol,
-        popsize=popsize,
-        mutation=mutation,
-        recombination=recombination,
-        seed=seed,
-        polish=True,    
-        workers=1,      
-        updating='deferred',
-        disp=False
-    )
+    rng = np.random.default_rng(seed)
+    if optimizer == 'de':
+        if not np.all(np.isfinite(bounds)):
+            raise ValueError(f"optimizer='de' needs finite bounds, got {bounds}; "
+                             f"use optimizer='lbfgsb' for open bounds")
+        res = differential_evolution(
+            func=compute_nll,
+            bounds=bounds,
+            maxiter=maxiter,
+            tol=tol,
+            popsize=popsize,
+            mutation=mutation,
+            recombination=recombination,
+            seed=rng,
+            polish=True,
+            workers=1,
+            updating='deferred',
+            disp=False
+        )
+    else:
+        ## starting points: log ell from its (truncated) prior, temp uniform
+        starts = rng.uniform(*temp_bounds, size=(n_starts, 1))
+        if len(bounds) == 2:
+            lo, hi = bounds[0]
+            loc, scale = LOG_ELL_PRIOR
+            log_ell_0 = truncnorm.rvs((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale,
+                                      size=n_starts, random_state=rng)
+            starts = np.column_stack([log_ell_0, starts])
+
+        ## L-BFGS-B from each, keeping the best; open sides go in as None
+        lbfgsb_bounds = [tuple(None if np.isinf(b) else b for b in bd) for bd in bounds]
+        res = None
+        for x0 in starts:
+            r = minimize(compute_nll, x0, method='L-BFGS-B', bounds=lbfgsb_bounds,
+                         tol=tol, options={'maxiter': maxiter})
+            if res is None or r.fun < res.fun:
+                res = r
     if len(res.x) == 1:
-        ell_hat = fixed_ell
+        log_ell_hat = fixed_log_ell
         temp_hat = res.x[0]
     else:
-        ell_hat, temp_hat = res.x
+        log_ell_hat, temp_hat = res.x
+    ell_hat = None if log_ell_hat is None else float(np.exp(log_ell_hat))
     nll = res.fun
     success = res.success
 
@@ -1639,6 +1694,7 @@ def _fit_ppt(pid, df_ppt, ell_bounds, temp_bounds, horizon,
 
     return {
         'subject_id': pid,
+        'log_ell': log_ell_hat,
         'ell': ell_hat,
         'temp': temp_hat,
         'nll': nll,

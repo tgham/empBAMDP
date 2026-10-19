@@ -19,8 +19,8 @@ import argparse
 import os
 
 
-def fit_data(df, agent_types, ell_bounds, temp_bounds, horizon=3, init_t=1,
-             n_jobs=-1, verbose=True):
+def fit_data(df, agent_types, log_ell_bounds, temp_bounds, horizon=3, init_t=1,
+             n_jobs=-1, optimizer='lbfgsb', n_starts=10, verbose=True):
     """Fit `agent_types` to one dataframe of participant trials.
 
     `df` must already carry the design columns fit_emp reads off the first row
@@ -30,16 +30,18 @@ def fit_data(df, agent_types, ell_bounds, temp_bounds, horizon=3, init_t=1,
     df_fits = fit_emp(
         df_ppt=df,
         agent_types=agent_types,
-        param_bounds=[ell_bounds, temp_bounds],
+        param_bounds=[log_ell_bounds, temp_bounds],
         horizon=horizon,
         init_t=init_t,
         n_jobs=n_jobs,
+        optimizer=optimizer,
+        n_starts=n_starts,
         verbose=verbose,
     )
 
     ## the info-seeking agent has no ell, so don't leave the optimiser's
     ## placeholder in the column
-    df_fits.loc[df_fits['agent_type'] == 'info', 'ell'] = None
+    df_fits.loc[df_fits['agent_type'] == 'info', ['log_ell', 'ell']] = None
 
     return df_fits
 
@@ -57,7 +59,13 @@ def main():
     parser.add_argument('--alpha', type=float, default=None,
                         help='override the Dirichlet alpha logged per participant')
     parser.add_argument('--termination_arm', action='store_true')
-    parser.add_argument('--ell_bounds', type=float, default=(0.01, 10), nargs=2)
+    parser.add_argument('--log_ell_bounds', type=float, default=None, nargs=2,
+                        help='bounds on the fitted log ell (default: unbounded)')
+    parser.add_argument('--optimizer', choices=['lbfgsb', 'de'], default='lbfgsb',
+                        help="'lbfgsb': multi-start L-BFGS-B, allows open --log_ell_bounds; "
+                             "'de': differential evolution, needs finite bounds.")
+    parser.add_argument('--n_starts', type=int, default=10,
+                        help='starting points for --optimizer lbfgsb')
     parser.add_argument('--temp_bounds', type=float, default=(0.001, 0.1), nargs=2)
     parser.add_argument('--horizon', type=int, default=1)
     parser.add_argument('--init_t', type=int, default=1,
@@ -106,13 +114,15 @@ def main():
     df_fits = fit_emp(
         df_ppt=df,
         agent_types=args.agent_types,
-        param_bounds=[tuple(args.ell_bounds), tuple(args.temp_bounds)],
+        param_bounds=[args.log_ell_bounds and tuple(args.log_ell_bounds), tuple(args.temp_bounds)],
         horizon=args.horizon,
         init_t=args.init_t,
         n_jobs=args.n_jobs,
+        optimizer=args.optimizer,
+        n_starts=args.n_starts,
         verbose=True,
     )
-    df_fits.loc[df_fits['agent_type'] == 'info', 'ell'] = None
+    df_fits.loc[df_fits['agent_type'] == 'info', ['log_ell', 'ell']] = None
 
     ## save
     if os.path.dirname(out):
