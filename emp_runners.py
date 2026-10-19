@@ -9,7 +9,7 @@ from scipy.special import logsumexp
 from joblib import Parallel, delayed, effective_n_jobs
 import warnings
 from tqdm_joblib import tqdm_joblib
-from scipy.stats import truncnorm
+from scipy.stats import truncnorm, uniform
 
 from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canon_to_concrete
 from emp_models import make_agent
@@ -614,22 +614,31 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
 ## split type's slice of log ell (see `emp_ell_bounds`) -- the same prior
 ## parameter recovery samples generative ells from
 LOG_ELL_PRIOR = (0.0, np.sqrt(2.0))
+ELL_PRIORS = ('lognormal', 'loguniform')
 
 
-def log_ell_prior(emp_type='emp', log_ell_bounds=None):
+def log_ell_prior(emp_type='emp', log_ell_bounds=None, prior='lognormal'):
     """The frozen scipy prior over log ell for `emp_type`, and its (lo, hi) support.
 
-    N(LOG_ELL_PRIOR) truncated to `emp_type`'s slice of `log_ell_bounds`: the
-    full normal for 'emp' with no bounds, its lower / upper half for
-    'emp_lo' / 'emp_hi'. Open sides of the support come back as +/-inf.
+    Both priors live on `emp_type`'s slice of `log_ell_bounds`:
+      - 'lognormal' (default): N(LOG_ELL_PRIOR) truncated to the slice -- the full
+        normal (i.e. ell lognormal) for 'emp' with no bounds, its lower / upper
+        half for 'emp_lo' / 'emp_hi'. Open sides come back as +/-inf.
+      - 'loguniform': uniform over the slice, so it needs finite bounds.
     """
     lo, hi = emp_ell_bounds(emp_type, log_ell_bounds)
-    loc, scale = LOG_ELL_PRIOR
-    return truncnorm((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale), (lo, hi)
+    if prior == 'lognormal':
+        loc, scale = LOG_ELL_PRIOR
+        return truncnorm((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale), (lo, hi)
+    if prior == 'loguniform':
+        if not np.isfinite([lo, hi]).all():
+            raise ValueError(f"prior='loguniform' needs finite log_ell_bounds, got {log_ell_bounds!r}")
+        return uniform(loc=lo, scale=hi - lo), (lo, hi)
+    raise ValueError(f"prior must be one of {ELL_PRIORS}, got {prior!r}")
 
 
 ## generate samples
-def ell_prior_samples(n_samples=200, emp_type='emp', log_ell_bounds=None):
+def ell_prior_samples(n_samples=200, emp_type='emp', log_ell_bounds=None, prior='lognormal'):
     """Grid of ells over the prior (`log_ell_prior`), with the weight each carries.
 
     The ells are evenly spaced in log ell over the prior's support -- open
@@ -641,7 +650,7 @@ def ell_prior_samples(n_samples=200, emp_type='emp', log_ell_bounds=None):
     n_samples = int(n_samples)
 
     ## get the prior distr, with a finite support for the grid
-    dist, (lo, hi) = log_ell_prior(emp_type, log_ell_bounds)
+    dist, (lo, hi) = log_ell_prior(emp_type, log_ell_bounds, prior)
     loc, scale = LOG_ELL_PRIOR
     lo, hi = max(lo, loc - 4 * scale), min(hi, loc + 4 * scale)
 
@@ -1218,7 +1227,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             termination_arm=True, temp_emp=1.0, temp_info=1.0,
                             horizons=None, costs=(0.0,),
                             n_ell_samples=200, seed=None,
-                            emp_type='emp', log_ell_bounds=None,
+                            emp_type='emp', log_ell_bounds=None, ell_prior='lognormal',
                             init_t=0, n_jobs=1,
                             target='ell', p_model=(0.5, 0.5), tie_tol=None,
                             expt='arms', n_AFC=2, n_room_samples=None):
@@ -1266,8 +1275,10 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                 `models_agree` is reading argmax noise.
     Both emit `target` and `expt` columns and a comparable `mi`, so the frames concat.
 
-    The ell prior is log ell ~ N(LOG_ELL_PRIOR), truncated to `emp_type`'s slice
-    of `log_ell_bounds`, as in parameter recovery (see `log_ell_prior`).
+    The ell prior is `ell_prior` over `emp_type`'s slice of `log_ell_bounds`:
+    'lognormal' is log ell ~ N(LOG_ELL_PRIOR) truncated to the slice, 'loguniform'
+    uniform over it (finite bounds only), as in parameter recovery (see
+    `log_ell_prior`).
 
     The ell sample is drawn ONCE and reused across every history, alpha, horizon
     and cost -- common random numbers, so the resulting mi values are directly
@@ -1291,7 +1302,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
 
     ## shared ell sample from the prior, with its weights
     ell_samples, ell_w0s = ell_prior_samples(n_ell_samples, emp_type=emp_type,
-                                             log_ell_bounds=log_ell_bounds)
+                                             log_ell_bounds=log_ell_bounds, prior=ell_prior)
 
     ## canonical histories, optionally skipping the first init_t trials
     states = canonical_states(n_arms, n_outcomes, n_trials)
@@ -1331,9 +1342,11 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     df = pd.DataFrame(rows)
     df['target'] = target
     df['expt'] = expt
+    df['ell_prior'] = ell_prior
     df['emp_type'] = emp_type
     df['log_ell_lo'], df['log_ell_hi'] = emp_ell_bounds(emp_type, log_ell_bounds)
-    df['prior_loc'], df['prior_scale'] = LOG_ELL_PRIOR
+    if ell_prior == 'lognormal':
+        df['prior_loc'], df['prior_scale'] = LOG_ELL_PRIOR
     return df
 
 
@@ -1382,7 +1395,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
                              alpha=0.1,
                              termination_arm=True, temp_emp=1.0, temp_info=1.0, horizon=None, cost=0.0,
                              n_samples=200,
-                             emp_type='emp', log_ell_bounds=None,
+                             emp_type='emp', log_ell_bounds=None, ell_prior='lognormal',
                              target='ell', p_model=(0.5, 0.5), tie_tol=None):
     """Diagnosticity for ONE arbitrary (non-canonical) count matrix.
 
@@ -1396,7 +1409,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
     come"; pass them explicitly to match a particular task design.
 
     `target` ('ell' or 'model'), `temp_info`, `p_model` and the ell prior
-    (`emp_type`, `log_ell_bounds`) behave exactly as in
+    (`ell_prior`, `emp_type`, `log_ell_bounds`) behave exactly as in
     `enumerate_diagnosticity`.
 
     Returns the row dict.
@@ -1416,7 +1429,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
 
 
     ell_samples, ell_w0s = ell_prior_samples(n_samples, emp_type=emp_type,
-                                             log_ell_bounds=log_ell_bounds)
+                                             log_ell_bounds=log_ell_bounds, prior=ell_prior)
     args = (ell_samples, n_arms, n_outcomes, n_trials, alpha,
             termination_arm, horizon, cost, temp_emp)
     if target == 'ell':
@@ -1428,9 +1441,11 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
                               tie_tol=tie_tol, ell_w0s=ell_w0s)
     row['target'] = target
     row['orbit_size'] = orbit_sequence_count(counts_array)
+    row['ell_prior'] = ell_prior
     row['emp_type'] = emp_type
     row['log_ell_lo'], row['log_ell_hi'] = emp_ell_bounds(emp_type, log_ell_bounds)
-    row['prior_loc'], row['prior_scale'] = LOG_ELL_PRIOR
+    if ell_prior == 'lognormal':
+        row['prior_loc'], row['prior_scale'] = LOG_ELL_PRIOR
     return row
 
     

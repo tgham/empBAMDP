@@ -29,7 +29,7 @@ def load_diag_histories(args, term):
     """
     rooms = args.expt == 'rooms'
     path = (f'useful_saves/diag/{args.expt}/{args.n_arms}arms_{args.n_outcomes}outcomes_'
-            f'{args.n_trials}trials_{term}_{args.n_AFC}AFC_{args.diag_target}_diag.csv')
+            f'{args.n_trials}trials_{term}_{args.n_AFC}AFC_{args.diag_target}_{args.ell_prior}_diag.csv')
     df_diag = pd.read_csv(path)
 
     ## keep only the rows generated under this run's design (rooms are valued at their leaf, so no horizon)
@@ -91,7 +91,7 @@ def main():
     parser.add_argument('--alpha', type=float, default=0.4)
     parser.add_argument('--log_ell_bounds', type=float, default=None, nargs=2,
                         help='bounds on generative and fitted log ell (default: unbounded)')
-    parser.add_argument('--ell_prior', choices=['normal', 'loguniform'], default='normal',
+    parser.add_argument('--ell_prior', choices=['lognormal', 'loguniform'], default='lognormal',
                         help="Distribution to sample generative log ells from: N(0, 2) truncated to the "
                              "agent type's slice of --log_ell_bounds, or uniform over it (needs finite bounds).")
     parser.add_argument('--optimizer', choices=['lbfgsb', 'de'], default='lbfgsb',
@@ -161,8 +161,7 @@ def main():
             stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq_{args.diag_target}target'
     if args.preset_histories:
         stem += f'_top{args.top_n or "front"}_{"-".join(args.diag_cols)}'
-    if args.ell_prior != 'normal':
-        stem += f'_{args.ell_prior}'
+    stem += f'_{args.ell_prior}'
 
     if args.gen_data:
         print('EMP RECOVERY')
@@ -210,13 +209,10 @@ def main():
                 lo, hi = emp_ell_bounds(agent_type, args.log_ell_bounds)
                 if lo == hi:
                     log_ell = lo
-                elif args.ell_prior == 'loguniform':
-                    if not np.isfinite([lo, hi]).all():
-                        raise ValueError('--ell_prior loguniform needs finite --log_ell_bounds')
-                    log_ell = rng.uniform(lo, hi)
                 else:
-                    ## N(0, 2) over log ell, truncated to the type's slice
-                    log_ell = log_ell_prior(agent_type, args.log_ell_bounds)[0].rvs(random_state=rng)
+                    ## N(0, 2) truncated to the type's slice, or uniform over it
+                    dist = log_ell_prior(agent_type, args.log_ell_bounds, args.ell_prior)[0]
+                    log_ell = dist.rvs(random_state=rng)
                 ell = float(np.exp(log_ell))
             temp = rng.uniform(*args.temp_bounds)
 

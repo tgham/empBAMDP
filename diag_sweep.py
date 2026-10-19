@@ -27,9 +27,12 @@ def main():
                         choices=['emp', 'emp_lo', 'emp_1', 'emp_hi'],
                         help="Several types (e.g. emp_lo emp_1 emp_hi) split emp into "
                              "one model per type; --target model only.")
+    parser.add_argument('--ell_prior', type=str, default='lognormal', choices=['lognormal', 'loguniform'],
+                        help="Prior over log ell on --emp_type's slice of --log_ell_bounds: "
+                             "N(0, 2) truncated to it, or uniform over it (needs --log_ell_bounds).")
     parser.add_argument('--log_ell_bounds', type=float, nargs=2, default=None,
-                        help="truncation of the log ell ~ N(0, 2) prior, on top of --emp_type's "
-                             "slice (default: none; the grid stops at +/- 4 sd)")
+                        help="bounds on log ell, on top of --emp_type's slice (default: none; "
+                             "the lognormal prior's grid stops at +/- 4 sd)")
     parser.add_argument('--target', type=str, default='ell',
                         choices=['ell', 'model'])
     parser.add_argument('--p_model', type=float, nargs='+', default=None,
@@ -49,6 +52,7 @@ def main():
     if args.expt=='rooms':
         stem += f'_{args.n_AFC}AFC'
     stem += f'_{args.target}'
+    stem += f'_{args.ell_prior}'
     if args.emp_type != ['emp']:
         stem += '_' + '_'.join(args.emp_type)
     os.makedirs('useful_saves/diag', exist_ok=True)
@@ -67,6 +71,7 @@ def main():
         seed=args.seed,
         emp_type=args.emp_type[0] if len(args.emp_type) == 1 else tuple(args.emp_type),
         log_ell_bounds=args.log_ell_bounds and tuple(args.log_ell_bounds),
+        ell_prior=args.ell_prior,
         init_t=args.init_t, n_jobs=args.n_jobs,
         target=args.target, temp_info=args.temp_info,
         p_model=None if args.p_model is None else tuple(args.p_model),
