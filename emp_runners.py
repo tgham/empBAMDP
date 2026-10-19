@@ -660,6 +660,36 @@ def ell_prior_samples(n_samples=200, emp_type='emp', log_ell_bounds=None, prior=
     return np.exp(log_ells), weights
 
 
+## one shared ell grid for several emp models, e.g. emp_lo / emp_1 / emp_hi
+def model_ell_grid(n_samples=200, emp_types=('emp',), log_ell_bounds=None, prior='lognormal'):
+    """Shared ell grid for several emp models, with each model's prior weights on it.
+
+    Each type in `emp_types` contributes its own `ell_prior_samples` grid --
+    except 'emp_1', which is the single point ell=1 -- and the grids are
+    concatenated, so one memoised agent over the result serves every model, and
+    each model's `mi_{m}` matches `target='ell'` with `emp_type=m`. The cost is
+    the total grid size, n_samples per open type.
+
+    Returns (ells, {emp_type: weights}), each weight vector over the full grid,
+    zero outside that type's block and summing to 1 -- the `ell_w0s` dict that
+    `_diag_model_row` takes.
+    """
+    if len(set(emp_types)) != len(emp_types):
+        raise ValueError(f"emp_types must be distinct, got {emp_types!r}")
+    grids = [(np.ones(1), np.ones(1)) if m == 'emp_1'
+             else ell_prior_samples(n_samples, emp_type=m, log_ell_bounds=log_ell_bounds, prior=prior)
+             for m in emp_types]
+    ells = np.concatenate([e for e, _ in grids])
+
+    ## pad each type's weights with zeros onto the shared grid
+    weights, start = {}, 0
+    for m, (e, w) in zip(emp_types, grids):
+        weights[m] = np.zeros(len(ells))
+        weights[m][start:start + len(e)] = w
+        start += len(e)
+    return ells, weights
+
+
 ## (normalised) prior weights for a grid of log ells
 def ell_weights(log_ells, dist):
     """Prior mass of each cell on an evenly spaced grid in log ell.
@@ -734,24 +764,25 @@ def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s=
     as in `gen_arms`. Every sequence is enumerated, so time and memory grow as
     (n_arms * n_outcomes) ** h_remaining.
     """
+    log_seq_Ps = _log_seq_probs(agent, counts_array, t, n_trials, horizon, temp)
+    return _mi_from_log_seq(log_seq_Ps, ell_w0s)
+
+
+def _log_seq_probs(agent, counts_array, t, n_trials, horizon, temp):
+    """log p(seq|h,ell) for every (action, outcome) sequence that can follow h: (n_seqs, n_ell).
+
+    The policy half of `_mi_from_sequences`, split out so several priors over
+    the same agent's ells (the emp sub-models of `_diag_model_row`) can share it.
+    """
     n_arms, n_outcomes = agent.n_arms, agent.n_outcomes
     h_remaining = int(min(horizon, n_trials - t))
-
-    ## emp agent 
-    if ell_w0s is not None:
-        n_ell = len(ell_w0s)
-        ell_log_w0s = np.log(ell_w0s + 1e-12)
-    ## info agent (no ell, so just single dummy ell with weight 1)
-    else:
-        n_ell = 1
-        ell_log_w0s = np.log([1.0])
 
     ## every sequence of h_remaining (action, outcome) steps, or fewer if it terminates
     seqs = ao_sequences(n_arms, n_outcomes, h_remaining, termination_arm=agent.termination_arm)
     n_seqs = len(seqs)
 
-    ## log p(seq|h,ell) for every sequence, all ells at once: (n_seqs, n_ell)
-    log_seq_Ps = np.zeros((n_seqs, n_ell))
+    ## log p(seq|h,ell) for every sequence, all ells at once: (n_seqs, n_ell), sized on the first policy
+    log_seq_Ps = None
     for s, seq in enumerate(seqs):
 
         ## start from current history counts
@@ -762,6 +793,8 @@ def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s=
 
             ## log p(a|h,ell) for every ell (retrieved from the agent's memo)
             logP = agent.log_policy(seq_counts, min(horizon, n_trials - t - subseq_t), temp)
+            if log_seq_Ps is None:
+                log_seq_Ps = np.zeros((n_seqs, logP.shape[0]))
             log_seq_Ps[s] += logP[:, at]
 
             ## outcome only relevant if no termination
@@ -776,6 +809,19 @@ def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s=
             else:
                 ## terminate action has no outcome, so this should be the end of the sequence
                 pass
+
+    return log_seq_Ps
+
+
+def _mi_from_log_seq(log_seq_Ps, ell_w0s=None):
+    """(H_ell, H_ell_cond, mi, p(seq|h)) from `_log_seq_probs` output and prior weights.
+
+    `ell_w0s=None` is the info agent: a single dummy ell with weight 1. Zero
+    weights are exact -- those ells drop out of the marginal and the posterior.
+    """
+    ell_w0s = np.ones(1) if ell_w0s is None else np.asarray(ell_w0s, dtype=float)
+    with np.errstate(divide='ignore'):
+        ell_log_w0s = np.log(ell_w0s)
 
     ## entropy of prior weights: H(ell|h) = -sum_g w_0^g log w_0^g
     H_ell = float(_neg_p_log_p(ell_w0s))
@@ -965,51 +1011,68 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
 def _diag_model_row(t, counts_array, canon_counts, history_str,
                     ell_samples, n_arms, n_outcomes, n_trials, alpha,
                     termination_arm, horizon, cost, temp_emp,
-                    temp_info, p_model=(0.5, 0.5), tie_tol=None,
+                    temp_info, p_model=None, tie_tol=None,
                     emp_agent=None, info_agent=None, ell_w0s=None):
-    """Per-canonical-history MODEL diagnosticity I(A;M|h), M in {emp, info}.
+    """Per-canonical-history MODEL diagnosticity I(A;M|h), M in {emp models..., info}.
 
     The counterpart to `_diag_emp_row`: where that asks how much the next action
     reveals about ell WITHIN the empowerment model, this asks how much it reveals
     about WHICH MODEL is generating the choices.
 
-        I(A;M|h) = H(A|h) - sum_m p(m) H(A|h,m)
+        I(A;M|h) = H(M) - sum_a p(a|h) H(M|h,a)
 
-    with p(a|h,emp) = E_ell[p(a|h,ell)] the ell-MARGINALISED emp policy (the
-    nuisance parameter is integrated out, not conditioned on) and p(a|h,info) the
-    single info-seeking policy. Using E_ell[H(A|h,ell)] here instead would give
-    I(A;M,ell|h), which double-counts the ell-diagnosticity; that quantity is
-    still reported as `mi_joint` for reference, and satisfies
+    EMP MODELS: `ell_w0s` sets them. An array (or None, for equal weight) is the
+    single 'emp' model, M in {emp, info}. A dict {emp_type: weights}, e.g. from
+    `model_ell_grid(..., emp_types=('emp_lo', 'emp_1', 'emp_hi'))`, gives one
+    model per key, each a prior over the shared `ell_samples` grid (zero off its
+    slice), so M in {emp_lo, emp_1, emp_hi, info}. `p_model` is the prior over
+    M in that order (emp models, then info); None is uniform.
 
-        mi_joint = mi + p(emp) * mi_ell.
+    For each emp model m, p(a|h,m) = E_{ell~m}[p(a|h,ell)] is the ell-MARGINALISED
+    policy (the nuisance parameter is integrated out, not conditioned on), and
+    p(a|h,info) the single info-seeking policy. Using E_ell[H(A|h,ell)] here
+    instead would give I(A;M,ell|h), which double-counts the ell-diagnosticity;
+    that per-model quantity is reported as `mi_{m}` (e.g. `mi_emp`, `mi_emp_lo`),
+    and the joint satisfies mi_joint = mi_model + sum_m p(m) * mi_{m}.
+
+    FAMILY SPLIT: grouping the emp models into one family F = emp vs info, the
+    chain rule splits the score into
+        mi_model = mi_family + p(F=emp) * mi_emp_type,
+    `mi_family` = I(A;F|h) -- emp (the p_model-weighted mixture of the emp
+    models) vs info -- and `mi_emp_type` = I(A;M|h,F=emp) -- which emp model,
+    among the emp models alone. With a single emp model mi_family = mi_model and
+    mi_emp_type = 0. Rank on `mi_emp_type` for histories that tell emp_lo / emp_1
+    / emp_hi apart, regardless of info.
 
     PRIOR vs POSTERIOR: both p(ell) and p(m) are PRIORS, not beliefs updated on h.
     This is a design-time score -- "if I showed a participant this history, how
     much would their next choice tell me?" -- not an observer's running belief.
 
-    TIES: `mi` itself is tie-robust (it is a Jensen-Shannon divergence between
-    the two softmax policies -- exactly JSD when p_model = (0.5, 0.5)), but any
-    argmax READING of this row is not, so the margins are reported on all three
-    fronts. `tie_tol` is a log-odds threshold, default log(2) ~ 0.693 (winner
-    at least 2:1 over the runner-up), and applies to each:
+    TIES: `mi` itself is tie-robust (with two models it is a Jensen-Shannon
+    divergence between their softmax policies -- exactly JSD when p_model is
+    uniform), but any argmax READING of this row is not, so the margins are
+    reported on all three fronts. `tie_tol` is a log-odds threshold, default
+    log(2) ~ 0.693 (winner at least 2:1 over the runner-up), and applies to each.
+    `{m}` below is each emp model's name, e.g. `gap_mean_emp` or `gap_mean_emp_hi`:
 
-      - WITHIN emp, across ell: `gap_*_emp`, `tie_frac_emp`, `p_best_mean_emp`
-        and `best_a_frac[_dec]_emp_{a}` -- the `_diag_emp_row` diagnostics for
-        the ell-split that `mi_ell` scores. Q gaps here are divided by `temp`.
-        As there, `best_a_frac_emp_{a}` counts ells where a is AMONG the best
+      - WITHIN each emp model, across its ells: `gap_*_{m}`, `tie_frac_{m}` and
+        `best_a_frac[_dec]_{m}_{a}` -- the `_diag_emp_row` diagnostics for the
+        ell-split that `mi_{m}` scores. Q gaps here are divided by `temp`.
+        As there, `best_a_frac_{m}_{a}` counts ells where a is AMONG the best
         (it does not sum to 1) and `_dec_` where it is uniquely best.
       - WITHIN info: `gap_info` (raw) and `gap_info_temp` = gap/`temp_info`,
         which IS the log-odds of the info agent's top two actions; `info_tie`
         flags gap_info_temp <= tie_tol, i.e. an info policy with no real
-        preference. `p_best_info` is its max probability.
-      - BETWEEN models: `best_a_emp` / `best_a_info` / `models_agree` is the
-        hard read -- "the two models want different actions" -- and it is the
-        one to distrust. The emp marginal has no single Q, so its margin is in
-        probability units: `logodds_emp_marg` = log(p_top1/p_top2), with
-        `emp_marg_tie` flagging it. `model_tie` is True when EITHER side is
+        preference.
+      - BETWEEN models: `best_a_{m}` / `best_a_info` / `models_agree` (all
+        models want the same action) is the hard read, and it is the one to
+        distrust. An emp marginal has no single Q, so its margin is in
+        probability units: `logodds_{m}_marg` = log(p_top1/p_top2), with
+        `{m}_marg_tie` flagging it. `model_tie` is True when ANY model is
         indifferent, in which case `models_agree` is reading argmax noise.
-        `tvd_emp_info` = 0.5*sum_a |p(a|h,emp) - p(a|h,info)| is the scale-free
-        0-1 companion: how far apart the two policies actually are.
+        `tvd_{m}_{m'}` = 0.5*sum_a |p(a|h,m) - p(a|h,m')|, for every pair of
+        models, is the scale-free 0-1 companion: how far apart two policies
+        actually are.
 
     The Q scales of the two agents are unrelated (see TEMPERATURE), so there is
     no meaningful cross-model gap in Q units -- every between-model quantity
@@ -1029,17 +1092,23 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     n_actions = n_arms + int(termination_arm) if not room_selection else counts_array.shape[0]
     tie_tol = float(np.log(2.0)) if tie_tol is None else float(tie_tol)
 
-    ## grid sampling of ells
+    ## grid sampling of ells, and each emp model's prior weights over it
     n_ell = len(ell_samples)
-    ell_w0s = np.full(n_ell, 1.0 / n_ell) if ell_w0s is None else np.asarray(ell_w0s, dtype=float)
-
+    if ell_w0s is None:
+        ell_w0s = np.full(n_ell, 1.0 / n_ell)
+    if not isinstance(ell_w0s, dict):
+        ell_w0s = {'emp': ell_w0s}
+    emp_names = list(ell_w0s)
+    W = np.stack([np.asarray(ell_w0s[m], dtype=float) for m in emp_names]) # (n_emp, n_ell)
+    n_emp = len(emp_names)
+    models = emp_names + ['info']
 
     ## memoised agents
     if emp_agent is None:
         emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
     if info_agent is None:
         info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost)
-    
+
     ## Q-values in sampling task
     if not room_selection:
         Qs_emp = emp_agent.Q(counts_array, h_remaining)             # (n_ell, n_actions)
@@ -1055,18 +1124,18 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         for r in range(n_AFC):
             Q_info[r] = info_agent.leaf_value(counts_array[r])[0] # (n_AFC,)
 
-    ### p(a|h,m) for each model
-    
+    ### p(a|h,m) for each model -- every emp model reads the same per-ell policy, under its own weights
+
     ## if just single action, MI is taken over single step
     if h_remaining == 1:
 
-        ## empowerment agent: marginalise over ell
+        ## empowerment agents: marginalise over ell
         if not room_selection:
             P_emp = np.exp(emp_agent.log_policy(counts_array, h_remaining, temp_emp))
         else:
             ## softmax over the rooms, for each ell
             P_emp = _softmax(Qs_emp / temp_emp, axis=1)
-        H_ell, H_cond_ell, mi_emp, p_marg_emp = _mi_from_step(P_emp, ell_w0s)
+        emp_terms = [_mi_from_step(P_emp, w) for w in W]
 
         ## info-seeking agent: not parameterised by ell, so a single policy
         if not room_selection:
@@ -1077,68 +1146,74 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
 
         _, _, _, p_marg_info = _mi_from_step(P_info, None) ## don't need mi_info - trivially 0, because no ell-dependence
 
-    
+
     ## else need to marginalise over sequences resulting from h
     else:
 
         ## emp terms
-        _, _, mi_emp, p_marg_emp = _mi_from_sequences(emp_agent, counts_array, t, n_trials, horizon, temp_emp, ell_w0s)
+        log_seq_emp = _log_seq_probs(emp_agent, counts_array, t, n_trials, horizon, temp_emp)
+        emp_terms = [_mi_from_log_seq(log_seq_emp, w) for w in W]
 
         ## info-seeker terms
         _, _, _, p_marg_info = _mi_from_sequences(info_agent, counts_array, t, n_trials, horizon, temp_info, None)
 
+    mi_ell = [mi for (_, _, mi, _) in emp_terms]                                 # I(A;ell|h,m), per emp model
+    P_m = np.stack([p for (_, _, _, p) in emp_terms] + [p_marg_info], axis=0)   # p(a|h,m): (M, A)
+
 
     ### margins -- see TIES. tie_tol is a log-odds threshold throughout.
 
-    ## within emp, across ell: the same diagnostics `_diag_emp_row` reports --
-    ## `best_a_frac_emp_{a}` counts ells where a is AMONG the best (so it does
-    ## not sum to 1), `_dec_` where it is uniquely best.
-    near_best_emp = Qs_emp >= Qs_emp.max(axis=1, keepdims=True) - tie_tol * temp_emp
-    decisive_emp = near_best_emp.sum(axis=1) == 1
-    frac_emp = near_best_emp.mean(axis=0)
-    frac_dec_emp = (near_best_emp & decisive_emp[:, None]).mean(axis=0)
-    gap_emp = _top2_gap(Qs_emp)
-    gap_emp_temp = gap_emp / temp_emp
+    ## within each emp model, across its ells: the same diagnostics `_diag_emp_row`
+    ## reports -- `best_a_frac_{m}_{a}` counts ells where a is AMONG the best (so
+    ## it does not sum to 1), `_dec_` where it is uniquely best.
+    within_emp = {}
+    for m, w in zip(emp_names, W):
+        Qs_m = Qs_emp[w > 0]
+        near_best = Qs_m >= Qs_m.max(axis=1, keepdims=True) - tie_tol * temp_emp
+        decisive = near_best.sum(axis=1) == 1
+        within_emp[m] = dict(frac=near_best.mean(axis=0),
+                             frac_dec=(near_best & decisive[:, None]).mean(axis=0),
+                             tie_frac=float(1.0 - decisive.mean()),
+                             gap=_top2_gap(Qs_m))
 
     ## within info: one policy, so gap/temp_info IS its top-two log-odds
     gap_info = float(_top2_gap(Q_info)[0])
     gap_info_temp = gap_info / temp_info
+    info_tie = bool(gap_info_temp <= tie_tol)
 
     ## between models: probability space, the only common currency
-    best_a_emp = int(np.argmax(p_marg_emp))
-    best_a_info = int(np.argmax(p_marg_info))
-    p_emp_sorted = np.sort(p_marg_emp)
-    logodds_emp_marg = float(np.log(p_emp_sorted[-1] / p_emp_sorted[-2])
-                             if n_actions > 1 and p_emp_sorted[-2] > 0 else 0.0)
-    emp_marg_tie = bool(logodds_emp_marg <= tie_tol)
-    info_tie = bool(gap_info_temp <= tie_tol)
-    tvd = float(0.5 * np.abs(p_marg_emp - p_marg_info).sum())
+    best_a = {m: int(np.argmax(P_m[k])) for k, m in enumerate(models)}
+    logodds_marg = {}
+    for k, m in enumerate(emp_names):
+        p_sorted = np.sort(P_m[k])
+        logodds_marg[m] = float(np.log(p_sorted[-1] / p_sorted[-2])
+                                if n_actions > 1 and p_sorted[-2] > 0 else 0.0)
+    marg_tie = {m: bool(lo <= tie_tol) for m, lo in logodds_marg.items()}
 
 
     ### I(A;M|h) = H(M|h) - E_a[H(M|h,a)]
 
-    ## H(M|h) = -sum_m p(m|h) log p(m|h) = H(M) because the prior is independent of h
-    p_m = np.asarray((0.5, 0.5) if p_model is None else p_model, dtype=float) # None = uniform
-    if p_m.shape != (2,):
-        raise ValueError(f"p_model must be a pair (p_emp, p_info), got {p_model!r}")
+    ## p(m), over the emp models then info; H(M|h) = H(M) because the prior is independent of h
+    n_models = len(models)
+    p_m = np.full(n_models, 1.0 / n_models) if p_model is None else np.asarray(p_model, dtype=float) # None = uniform
+    if p_m.shape != (n_models,):
+        raise ValueError(f"p_model must give one prior per model {tuple(models)}, got {p_model!r}")
     p_m = p_m / p_m.sum()
-    H_M = float(_neg_p_log_p(p_m))
 
-    ## H(M|h,a) = -sum_m p(m|h,a) log p(m|h,a),
-    ## p(m|h,a)  = p(a|h,m) p(m) / sum_m' p(a|h,m') p(m')
-    p_marg_model = p_m[0] * p_marg_emp + p_m[1] * p_marg_info # p(a|h)
+    ## the same computation as I(A;ell|h), with the models in place of the ells:
+    ## p(m|h,a) = p(a|h,m) p(m) / p(a|h), and p(a|h) = sum_m p(m) p(a|h,m)
+    H_M, _, mi_model, p_marg_model = _mi_from_step(P_m, p_m)
     H_marg_model = float(_neg_p_log_p(p_marg_model))
-    p_m_emp = p_marg_emp * p_m[0] / p_marg_model
-    p_m_info = p_marg_info * p_m[1] / p_marg_model
-    p_m_post = np.stack([p_m_emp, p_m_info], axis=0) # (M, A)
-    H_M_cond = _neg_p_log_p(p_m_post.T) # transpose puts a on the last axis
-
-    ## E_a[H(M|h,a)] = sum_a p(a|h) H(M|h,a)
-    E_a_H_M_cond = float(p_marg_model @ H_M_cond) 
-    mi_model = max(H_M - E_a_H_M_cond, 0.0)
 
     ## normalise by H(M): I(A;M|h) <= min(H(A), H(M))
     mi_norm = mi_model / H_M if H_M > 0 else 0.0
+
+    ## family split, mi_model = mi_family + p(F=emp) mi_emp_type -- see FAMILY SPLIT
+    p_emp_family = p_m[:n_emp].sum()
+    p_m_emp = p_m[:n_emp] / p_emp_family # p(m|F=emp)
+    P_family = np.stack([p_m_emp @ P_m[:n_emp], P_m[-1]], axis=0)
+    _, _, mi_family, _ = _mi_from_step(P_family, np.array([p_emp_family, p_m[-1]]))
+    H_emp_type, _, mi_emp_type, _ = _mi_from_step(P_m[:n_emp], p_m_emp)
 
 
     row = {
@@ -1146,34 +1221,42 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         'horizon': horizon, 'cost': cost, 'temp_emp': temp_emp, 'temp_info': temp_info,
         **({} if room_selection else {'t': t, 'history_str': history_str, 'history': canon_counts}),
         'target': 'model',
-        'p_model_emp': p_m[0],
+        **{f'p_model_{m}': p_m[k] for k, m in enumerate(models)},
         'H_A_h': H_marg_model,
         'mi_model': mi_model,
         'mi_bits': mi_model / np.log(2.0),
         'mi_norm': mi_norm,
-        'mi_emp': mi_emp,        # I(A;ell|h,emp) -- the _diag_emp_row quantity
+        'mi_family': mi_family,       # I(A;F|h), F = emp family vs info
+        'mi_emp_type': mi_emp_type,   # I(A;M|h,F=emp), between the emp models
+        'mi_emp_type_norm': mi_emp_type / H_emp_type if H_emp_type > 0 else 0.0,
+        **{f'mi_{m}': mi for m, mi in zip(emp_names, mi_ell)}, # I(A;ell|h,m) -- the _diag_emp_row quantity
         'n_ell_samples': n_ell,
-        ## tie diagnostics -- within emp (across ell)
         'tie_tol': tie_tol,
-        'tie_frac_emp': float(1.0 - decisive_emp.mean()),
-        'gap_mean_emp': float(gap_emp.mean()),
-        'gap_median_emp': float(np.median(gap_emp)),
-        'gap_min_emp': float(gap_emp.min()),
-        'gap_mean_temp_emp': float(gap_emp_temp.mean()),
-        'gap_median_temp_emp': float(np.median(gap_emp_temp)),
-        ## -- within info
-        'gap_info': gap_info,
-        'gap_info_temp': gap_info_temp,
-        'info_tie': info_tie,
-        ## -- between models
-        'best_a_emp': best_a_emp,
-        'best_a_info': best_a_info,
-        'models_agree': bool(best_a_emp == best_a_info),
-        'logodds_emp_marg': logodds_emp_marg,
-        'emp_marg_tie': emp_marg_tie,
-        'model_tie': bool(emp_marg_tie or info_tie),
-        'tvd_emp_info': tvd,
     }
+
+    ## tie diagnostics -- within each emp model (across its ells)
+    for m, d in within_emp.items():
+        row[f'tie_frac_{m}'] = d['tie_frac']
+        row[f'gap_mean_{m}'] = float(d['gap'].mean())
+        row[f'gap_median_{m}'] = float(np.median(d['gap']))
+        row[f'gap_min_{m}'] = float(d['gap'].min())
+        row[f'gap_mean_temp_{m}'] = float(d['gap'].mean() / temp_emp)
+        row[f'gap_median_temp_{m}'] = float(np.median(d['gap']) / temp_emp)
+    ## -- within info
+    row['gap_info'] = gap_info
+    row['gap_info_temp'] = gap_info_temp
+    row['info_tie'] = info_tie
+    ## -- between models
+    for m in models:
+        row[f'best_a_{m}'] = best_a[m]
+    row['models_agree'] = len(set(best_a.values())) == 1
+    for m in emp_names:
+        row[f'logodds_{m}_marg'] = logodds_marg[m]
+        row[f'{m}_marg_tie'] = marg_tie[m]
+    row['model_tie'] = bool(info_tie or any(marg_tie.values()))
+    for i, j in itertools.combinations(range(n_models), 2):
+        row[f'tvd_{models[i]}_{models[j]}'] = float(0.5 * np.abs(P_m[i] - P_m[j]).sum())
+
     ## room selection: t, history and LML are per room, and the "actions" are the rooms
     if room_selection:
         row['pair_str'] = ' | '.join(history_str)
@@ -1183,24 +1266,21 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
             row[f'history_{r}'] = canon_counts[r]
             row[f'LML_{r}'] = emp_agent.marginal_likelihood(counts_array[r]) # belief-model property, shared by both agents
             row[f'p_marg_{r}'] = p_marg_model[r]
-            row[f'p_marg_emp_{r}'] = p_marg_emp[r]
-            row[f'p_marg_info_{r}'] = p_marg_info[r]
-            row[f'best_room_frac_emp_{r}'] = frac_emp[r]
-            row[f'best_room_frac_dec_emp_{r}'] = frac_dec_emp[r]
+            for k, m in enumerate(models):
+                row[f'p_marg_{m}_{r}'] = P_m[k, r]
+            for m, d in within_emp.items():
+                row[f'best_room_frac_{m}_{r}'] = d['frac'][r]
+                row[f'best_room_frac_dec_{m}_{r}'] = d['frac_dec'][r]
     else:
         row['LML'] = emp_agent.marginal_likelihood(counts_array) # belief-model property, shared by both agents
-        for a in range(n_arms):
-            row[f'p_marg_{a}'] = p_marg_model[a]
-            row[f'p_marg_emp_{a}'] = p_marg_emp[a]
-            row[f'p_marg_info_{a}'] = p_marg_info[a]
-            row[f'best_a_frac_emp_{a}'] = frac_emp[a]
-            row[f'best_a_frac_dec_emp_{a}'] = frac_dec_emp[a]
-        if termination_arm:
-            row['p_marg_terminate'] = p_marg_model[-1]
-            row['p_marg_emp_terminate'] = p_marg_emp[-1]
-            row['p_marg_info_terminate'] = p_marg_info[-1]
-            row['best_a_frac_emp_terminate'] = frac_emp[-1]
-            row['best_a_frac_dec_emp_terminate'] = frac_dec_emp[-1]
+        labels = [(a, a) for a in range(n_arms)] + ([(-1, 'terminate')] if termination_arm else [])
+        for a, lab in labels:
+            row[f'p_marg_{lab}'] = p_marg_model[a]
+            for k, m in enumerate(models):
+                row[f'p_marg_{m}_{lab}'] = P_m[k, a]
+            for m, d in within_emp.items():
+                row[f'best_a_frac_{m}_{lab}'] = d['frac'][a]
+                row[f'best_a_frac_dec_{m}_{lab}'] = d['frac_dec'][a]
     return row
 
 
@@ -1229,7 +1309,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             n_ell_samples=200, seed=None,
                             emp_type='emp', log_ell_bounds=None, ell_prior='lognormal',
                             init_t=0, n_jobs=1,
-                            target='ell', p_model=(0.5, 0.5), tie_tol=None,
+                            target='ell', p_model=None, tie_tol=None,
                             expt='arms', n_AFC=2, n_room_samples=None):
     """Diagnosticity of every canonical history, for one of two targets.
 
@@ -1269,13 +1349,20 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
       - 'model':           I(A;M|h) with M in {emp, info} -- which model, with ell
                 marginalised out of the emp policy (`_diag_model_row`). Takes the
                 extra `temp_info` (info agent's softmax temperature, defaults to
-                `temp`) and `p_model` (prior over the two models). `tie_tol`
+                `temp`) and `p_model` (prior over the models; None is uniform).
+                `emp_type` may here be a tuple, e.g. ('emp_lo', 'emp_1',
+                'emp_hi'), splitting emp into one model per type, so M in
+                {emp_lo, emp_1, emp_hi, info}; `p_model` then gives one prior per
+                type, then info. `mi_emp_type` scores the split among the emp
+                types alone, `mi_family` emp-vs-info (see FAMILY SPLIT). `tie_tol`
                 applies here too, as a log-odds threshold on each model's own
                 top-two margin: `model_tie` flags the histories where
                 `models_agree` is reading argmax noise.
     Both emit `target` and `expt` columns and a comparable `mi`, so the frames concat.
 
-    The ell prior is `ell_prior` over `emp_type`'s slice of `log_ell_bounds`:
+    The ell prior is `ell_prior` over `emp_type`'s slice of `log_ell_bounds`
+    (each type's own slice, on a shared grid, when `emp_type` is a tuple -- see
+    `model_ell_grid`):
     'lognormal' is log ell ~ N(LOG_ELL_PRIOR) truncated to the slice, 'loguniform'
     uniform over it (finite bounds only), as in parameter recovery (see
     `log_ell_prior`).
@@ -1301,8 +1388,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
         raise ValueError(f"expt must be 'arms' or 'rooms', got {expt!r}")
 
     ## shared ell sample from the prior, with its weights
-    ell_samples, ell_w0s = ell_prior_samples(n_ell_samples, emp_type=emp_type,
-                                             log_ell_bounds=log_ell_bounds, prior=ell_prior)
+    ell_samples, ell_w0s = _diag_ell_grid(target, emp_type, n_ell_samples, log_ell_bounds, ell_prior)
 
     ## canonical histories, optionally skipping the first init_t trials
     states = canonical_states(n_arms, n_outcomes, n_trials)
@@ -1343,11 +1429,39 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     df['target'] = target
     df['expt'] = expt
     df['ell_prior'] = ell_prior
-    df['emp_type'] = emp_type
-    df['log_ell_lo'], df['log_ell_hi'] = emp_ell_bounds(emp_type, log_ell_bounds)
+    for k, v in _emp_type_cols(emp_type, log_ell_bounds).items():
+        df[k] = v
     if ell_prior == 'lognormal':
         df['prior_loc'], df['prior_scale'] = LOG_ELL_PRIOR
     return df
+
+
+def _diag_ell_grid(target, emp_type, n_samples, log_ell_bounds, ell_prior):
+    """(ell_samples, ell_w0s) for a diagnosticity run.
+
+    target='ell' takes a single `emp_type` and gives its weight array; 'model'
+    takes one or a tuple of types and gives the {emp_type: weights} dict of
+    `model_ell_grid`, one emp model per type.
+    """
+    emp_types = (emp_type,) if isinstance(emp_type, str) else tuple(emp_type)
+    if target == 'model':
+        return model_ell_grid(n_samples, emp_types, log_ell_bounds, ell_prior)
+    if len(emp_types) != 1:
+        raise ValueError(f"target='ell' takes a single emp_type, got {emp_type!r}")
+    return ell_prior_samples(n_samples, emp_type=emp_types[0],
+                             log_ell_bounds=log_ell_bounds, prior=ell_prior)
+
+
+def _emp_type_cols(emp_type, log_ell_bounds):
+    """`emp_type` and its log-ell slice as output columns; per type when there are several."""
+    emp_types = (emp_type,) if isinstance(emp_type, str) else tuple(emp_type)
+    if len(emp_types) == 1:
+        lo, hi = emp_ell_bounds(emp_types[0], log_ell_bounds)
+        return {'emp_type': emp_types[0], 'log_ell_lo': lo, 'log_ell_hi': hi}
+    cols = {'emp_type': '+'.join(emp_types)}
+    for m in emp_types:
+        cols[f'log_ell_lo_{m}'], cols[f'log_ell_hi_{m}'] = emp_ell_bounds(m, log_ell_bounds)
+    return cols
 
 
 def _room_tuples(states, n_AFC, n_room_samples=None, seed=None):
@@ -1396,7 +1510,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
                              termination_arm=True, temp_emp=1.0, temp_info=1.0, horizon=None, cost=0.0,
                              n_samples=200,
                              emp_type='emp', log_ell_bounds=None, ell_prior='lognormal',
-                             target='ell', p_model=(0.5, 0.5), tie_tol=None):
+                             target='ell', p_model=None, tie_tol=None):
     """Diagnosticity for ONE arbitrary (non-canonical) count matrix.
 
     For scoring a real participant's history (`run_emp`) or a simulated one
@@ -1409,8 +1523,8 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
     come"; pass them explicitly to match a particular task design.
 
     `target` ('ell' or 'model'), `temp_info`, `p_model` and the ell prior
-    (`ell_prior`, `emp_type`, `log_ell_bounds`) behave exactly as in
-    `enumerate_diagnosticity`.
+    (`ell_prior`, `emp_type` -- a tuple of types for 'model' -- and
+    `log_ell_bounds`) behave exactly as in `enumerate_diagnosticity`.
 
     Returns the row dict.
     """
@@ -1428,8 +1542,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
         horizon = n_trials
 
 
-    ell_samples, ell_w0s = ell_prior_samples(n_samples, emp_type=emp_type,
-                                             log_ell_bounds=log_ell_bounds, prior=ell_prior)
+    ell_samples, ell_w0s = _diag_ell_grid(target, emp_type, n_samples, log_ell_bounds, ell_prior)
     args = (ell_samples, n_arms, n_outcomes, n_trials, alpha,
             termination_arm, horizon, cost, temp_emp)
     if target == 'ell':
@@ -1442,8 +1555,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
     row['target'] = target
     row['orbit_size'] = orbit_sequence_count(counts_array)
     row['ell_prior'] = ell_prior
-    row['emp_type'] = emp_type
-    row['log_ell_lo'], row['log_ell_hi'] = emp_ell_bounds(emp_type, log_ell_bounds)
+    row.update(_emp_type_cols(emp_type, log_ell_bounds))
     if ell_prior == 'lognormal':
         row['prior_loc'], row['prior_scale'] = LOG_ELL_PRIOR
     return row
