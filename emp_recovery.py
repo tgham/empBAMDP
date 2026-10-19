@@ -1,11 +1,10 @@
-from emp_runners import gen_arms, gen_rooms, fit_emp, emp_ell_bounds, LOG_ELL_PRIOR
+from emp_runners import gen_arms, gen_rooms, fit_emp, emp_ell_bounds, log_ell_prior
 from emp_utils import canonical_states, canonical_count_matrix, array_to_hist, canonicalise_histories, top_n_pareto, pareto_front_idx
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from joblib import Parallel, delayed
 from tqdm_joblib import tqdm_joblib
-from scipy.stats import truncnorm
 import argparse
 import ast
 import os
@@ -30,7 +29,7 @@ def load_diag_histories(args, term):
     """
     rooms = args.expt == 'rooms'
     path = (f'useful_saves/diag/{args.expt}/{args.n_arms}arms_{args.n_outcomes}outcomes_'
-            f'{args.n_trials}trials_{term}_{args.n_AFC}AFC_{args.diag_target}_{args.ell_prior}_diag.csv')
+            f'{args.n_trials}trials_{term}_{args.n_AFC}AFC_{args.diag_target}_diag.csv')
     df_diag = pd.read_csv(path)
 
     ## keep only the rows generated under this run's design (rooms are valued at their leaf, so no horizon)
@@ -92,9 +91,9 @@ def main():
     parser.add_argument('--alpha', type=float, default=0.4)
     parser.add_argument('--log_ell_bounds', type=float, default=None, nargs=2,
                         help='bounds on generative and fitted log ell (default: unbounded)')
-    parser.add_argument('--ell_prior', choices=['loguniform', 'truncnorm'], default='truncnorm',
-                        help="Distribution to sample generative log ells from, within --log_ell_bounds: "
-                             "uniform (needs finite bounds), or N(0, 2) truncated to the agent type's slice.")
+    parser.add_argument('--ell_prior', choices=['normal', 'loguniform'], default='normal',
+                        help="Distribution to sample generative log ells from: N(0, 2) truncated to the "
+                             "agent type's slice of --log_ell_bounds, or uniform over it (needs finite bounds).")
     parser.add_argument('--optimizer', choices=['lbfgsb', 'de'], default='lbfgsb',
                         help="'lbfgsb': multi-start L-BFGS-B, allows open --log_ell_bounds; "
                              "'de': differential evolution, needs finite bounds.")
@@ -162,7 +161,8 @@ def main():
             stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq_{args.diag_target}target'
     if args.preset_histories:
         stem += f'_top{args.top_n or "front"}_{"-".join(args.diag_cols)}'
-    stem += f'_{args.ell_prior}'
+    if args.ell_prior != 'normal':
+        stem += f'_{args.ell_prior}'
 
     if args.gen_data:
         print('EMP RECOVERY')
@@ -216,9 +216,7 @@ def main():
                     log_ell = rng.uniform(lo, hi)
                 else:
                     ## N(0, 2) over log ell, truncated to the type's slice
-                    loc, scale = LOG_ELL_PRIOR
-                    log_ell = truncnorm.rvs((lo - loc) / scale, (hi - loc) / scale, loc=loc, scale=scale,
-                                            random_state=rng)
+                    log_ell = log_ell_prior(agent_type, args.log_ell_bounds)[0].rvs(random_state=rng)
                 ell = float(np.exp(log_ell))
             temp = rng.uniform(*args.temp_bounds)
 

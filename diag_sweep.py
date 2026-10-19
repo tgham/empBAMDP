@@ -22,19 +22,14 @@ def main():
     parser.add_argument('--n_ell_samples', type=int, default=200)
     parser.add_argument('--temp_emp', type=float, default=1.0)
     parser.add_argument('--temp_info', type=float, default=1.0)
-    parser.add_argument('--prior_mu', type=float, default=0.0)
-    parser.add_argument('--prior_sigma', type=float, default=1.0)
     parser.add_argument('--seed', type=int, default=None)
-    parser.add_argument('--ell_prior', type=str, default='lognormal',
-                        choices=['lognormal', 'truncnorm'],
-                        help="'truncnorm' uses the parameter-recovery prior, log ell ~ N(0, 2) over "
-                             "--emp_type's slice of --log_ell_bounds, ignoring --prior_mu/--prior_sigma.")
     parser.add_argument('--emp_type', type=str, nargs='+', default=['emp'],
                         choices=['emp', 'emp_lo', 'emp_1', 'emp_hi'],
                         help="Several types (e.g. emp_lo emp_1 emp_hi) split emp into "
                              "one model per type; --target model only.")
     parser.add_argument('--log_ell_bounds', type=float, nargs=2, default=None,
-                        help='truncation of the truncnorm prior (default: none; the grid stops at +/- 4 sigma)')
+                        help="truncation of the log ell ~ N(0, 2) prior, on top of --emp_type's "
+                             "slice (default: none; the grid stops at +/- 4 sd)")
     parser.add_argument('--target', type=str, default='ell',
                         choices=['ell', 'model'])
     parser.add_argument('--p_model', type=float, nargs='+', default=None,
@@ -54,7 +49,6 @@ def main():
     if args.expt=='rooms':
         stem += f'_{args.n_AFC}AFC'
     stem += f'_{args.target}'
-    stem += f'_{args.ell_prior}'
     if args.emp_type != ['emp']:
         stem += '_' + '_'.join(args.emp_type)
     os.makedirs('useful_saves/diag', exist_ok=True)
@@ -70,8 +64,7 @@ def main():
         termination_arm=args.termination_arm, temp_emp=args.temp_emp,
         horizons=args.horizons, costs=args.costs,
         n_ell_samples=args.n_ell_samples,
-        prior_mu=args.prior_mu, prior_sigma=args.prior_sigma, seed=args.seed,
-        ell_prior=args.ell_prior,
+        seed=args.seed,
         emp_type=args.emp_type[0] if len(args.emp_type) == 1 else tuple(args.emp_type),
         log_ell_bounds=args.log_ell_bounds and tuple(args.log_ell_bounds),
         init_t=args.init_t, n_jobs=args.n_jobs,
