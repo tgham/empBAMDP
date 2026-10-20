@@ -676,7 +676,9 @@ def plot_arm_curves(
 ## is a token in that cell, coloured by action.
 ## ---------------------------------------------------------------------------
 
-HISTORY_OUTCOME_DIRS = {0: (0, 1), 1: (1, 0), 2: (0, -1), 3: (-1, 0)}  # up, right, down, left
+HISTORY_OUTCOME_DIRS = {0: (0, 1), 1: (1, 0), 2: (0, -1), 3: (-1, 0), # up, right, down, left
+                        # 4: (-1, 1) # , upper left??
+                        }  
 HISTORY_ACTION_COLORS = ['tab:blue', 'tab:red', 'tab:green', 'tab:orange',
                          'tab:purple', 'tab:brown']
 
@@ -1316,7 +1318,7 @@ def plot_heatmap(
         return figs_by_t[None]
     return figs_by_t
 
-def plot_pareto(x,y,idx):
+def plot_pareto(x,y,idx, axis_labels):
     fx, fy = x[idx], y[idx]
     o = np.argsort(fx)                        # left to right for plotting
     fx, fy = fx[o], fy[o]
@@ -1325,11 +1327,11 @@ def plot_pareto(x,y,idx):
     h = ax.hist2d(x, y, bins=500, norm=LogNorm(), cmap="viridis")
     fig.colorbar(h[3], ax=ax, label="points per bin")
 
-    ax.plot(fx, fy, drawstyle="steps-pre", color="red", lw=1.5, label="Pareto front")
+    ax.plot(fx, fy, drawstyle="steps-pre", color="red", lw=1.5)
     ax.scatter(fx, fy, color="red", s=15, zorder=3)
 
-    ax.set_xlabel("mi")
-    ax.set_ylabel("mi_emp")
+    ax.set_xlabel(axis_labels[0])
+    ax.set_ylabel(axis_labels[1])
     ax.set_title(f"Pareto front ({len(fx)} points of {len(x):,})")
     ax.legend()
     plt.show()

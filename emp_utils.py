@@ -538,7 +538,7 @@ def top_n_pareto(df, n=None, cols=("mi", "mi_emp"), verbose=False, plot=False):
         if verbose:
             print(f"Selected {len(out)} points by {cols}")
         if plot:
-            plot_pareto(*arrays, idx)
+            plot_pareto(*arrays, idx, axis_labels=cols)
         return out
 
     
