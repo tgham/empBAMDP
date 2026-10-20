@@ -273,10 +273,18 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
     
 
 ## generate a single synthetic dataset, i.e. an ell agent acting in its own emp bandit env
-def gen_arms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, termination_arm=True, diag_histories=None, n_subseq_trials=1, temp=1.0, greedy =False, seed=None):
-    """Generate synthetic data from an agent in its own emp bandit env."""
+def gen_arms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, termination_arm=True, diag_histories=None, n_subseq_trials=1, temp=1.0, greedy =False, seed=None, agent_alpha=None):
+    """Generate synthetic data from an agent in its own emp bandit env.
+
+    `alpha` is the Dirichlet concentration the bandits are drawn from;
+    `agent_alpha` the one the agent makes its posterior inferences with
+    (default: `alpha`, i.e. the agent knows the true prior).
+    """
+    if agent_alpha is None:
+        agent_alpha = alpha
+
     ## emp agent at this ell, or info-seeking agent if ell is None (NB: the info agent here is cost-free)
-    agent = make_agent(n_arms, n_outcomes, alpha, ell, termination_arm,
+    agent = make_agent(n_arms, n_outcomes, agent_alpha, ell, termination_arm,
                        cost=cost if ell is not None else 0.0)
 
     ## define ell_1 agent for scoring expected p(reward)
@@ -405,21 +413,26 @@ def gen_arms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, t
     sim_out['gen_ell'] = [ell] * len(sim_out['room'])
     sim_out['gen_horizon'] = [horizon] * len(sim_out['room'])
     sim_out['gen_temp'] = [temp] * len(sim_out['room'])
+    sim_out['gen_agent_alpha'] = [agent_alpha] * len(sim_out['room'])
 
     return sim_out
 
 
 ## generate a single synthetic dataset for the rooms task, i.e. an ell agent choosing between n_AFC belief states
-def gen_rooms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon=None, termination_arm=True, diag_histories=None, temp=1.0, greedy=False, seed=None):
+def gen_rooms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon=None, termination_arm=True, diag_histories=None, temp=1.0, greedy=False, seed=None, agent_alpha=None):
     """Generate synthetic data from an agent choosing between preset belief states.
 
     Each of the `n_rooms` choices is between one tuple of `diag_histories`, with
     p(r|ell) = softmax_r(Emp_ell(h_r) / temp) -- the leaf value of each room's
     belief state, as in `_diag_model_row`. `n_trials` and `horizon` are unused,
-    and kept only so the signature mirrors `gen_arms`.
+    and kept only so the signature mirrors `gen_arms`. `agent_alpha` is the
+    concentration the agent infers with, as in `gen_arms` (default: `alpha`).
     """
+    if agent_alpha is None:
+        agent_alpha = alpha
+
     ## emp agent at this ell, or info-seeking agent if ell is None 
-    agent = make_agent(n_arms, n_outcomes, alpha, ell, termination_arm,
+    agent = make_agent(n_arms, n_outcomes, agent_alpha, ell, termination_arm,
                        cost=cost if ell is not None else 0.0) #(NB: the info agent here is cost-free)
 
     ## define ell_1 agent for scoring expected p(reward)
@@ -471,6 +484,7 @@ def gen_rooms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon=N
     sim_out['gen_ell'] = [ell] * len(sim_out['room'])
     sim_out['gen_horizon'] = [horizon] * len(sim_out['room'])
     sim_out['gen_temp'] = [temp] * len(sim_out['room'])
+    sim_out['gen_agent_alpha'] = [agent_alpha] * len(sim_out['room'])
 
     return sim_out
 
@@ -1035,14 +1049,17 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     that per-model quantity is reported as `mi_{m}` (e.g. `mi_emp`, `mi_emp_lo`),
     and the joint satisfies mi_joint = mi_model + sum_m p(m) * mi_{m}.
 
-    FAMILY SPLIT: grouping the emp models into one family F = emp vs info, the
-    chain rule splits the score into
-        mi_model = mi_family + p(F=emp) * mi_emp_type,
+    FAMILY SPLIT: grouping the emp models into one family F = emp vs info gives
+    two further scores, each computed directly from its own definition:
     `mi_family` = I(A;F|h) -- emp (the p_model-weighted mixture of the emp
     models) vs info -- and `mi_emp_type` = I(A;M|h,F=emp) -- which emp model,
-    among the emp models alone. With a single emp model mi_family = mi_model and
-    mi_emp_type = 0. Rank on `mi_emp_type` for histories that tell emp_lo / emp_1
-    / emp_hi apart, regardless of info.
+    among the emp models alone. 
+    Since F is a function of M, the chain rule guarantees
+        mi_model = mi_family + p(F=emp) * mi_emp_type,
+    which is not used to compute them, so it doubles as a numerical check
+    (asserted below). With a single emp model mi_family = mi_model and
+    mi_emp_type = 0. Rank on `mi_emp_type` for histories that tell emp_lo /
+    emp_1 / emp_hi apart, regardless of info.
 
     PRIOR vs POSTERIOR: both p(ell) and p(m) are PRIORS, not beliefs updated on h.
     This is a design-time score -- "if I showed a participant this history, how
@@ -1124,7 +1141,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         for r in range(n_AFC):
             Q_info[r] = info_agent.leaf_value(counts_array[r])[0] # (n_AFC,)
 
-    ### p(a|h,m) for each model -- every emp model reads the same per-ell policy, under its own weights
+    ### p(a|h,m) for each model
 
     ## if just single action, MI is taken over single step
     if h_remaining == 1:
@@ -1135,7 +1152,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         else:
             ## softmax over the rooms, for each ell
             P_emp = _softmax(Qs_emp / temp_emp, axis=1)
-        emp_terms = [_mi_from_step(P_emp, w) for w in W]
+        emp_terms = [_mi_from_step(P_emp, w) for w in W] # i.e. we use the full ell grid, but each emp model has its own prior weights that appropriately 0 out the other models' ells
 
         ## info-seeking agent: not parameterised by ell, so a single policy
         if not room_selection:
@@ -1158,7 +1175,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         _, _, _, p_marg_info = _mi_from_sequences(info_agent, counts_array, t, n_trials, horizon, temp_info, None)
 
     mi_ell = [mi for (_, _, mi, _) in emp_terms]                                 # I(A;ell|h,m), per emp model
-    P_m = np.stack([p for (_, _, _, p) in emp_terms] + [p_marg_info], axis=0)   # p(a|h,m): (M, A)
+    p_marg_all = np.stack([p for (_, _, _, p) in emp_terms] + [p_marg_info], axis=0)   # p(a|h,m): (M, A) - i.e. the marginalised policy for each model, including info
 
 
     ### margins -- see TIES. tie_tol is a log-odds threshold throughout.
@@ -1182,10 +1199,10 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     info_tie = bool(gap_info_temp <= tie_tol)
 
     ## between models: probability space, the only common currency
-    best_a = {m: int(np.argmax(P_m[k])) for k, m in enumerate(models)}
+    best_a = {m: int(np.argmax(p_marg_all[k])) for k, m in enumerate(models)}
     logodds_marg = {}
     for k, m in enumerate(emp_names):
-        p_sorted = np.sort(P_m[k])
+        p_sorted = np.sort(p_marg_all[k])
         logodds_marg[m] = float(np.log(p_sorted[-1] / p_sorted[-2])
                                 if n_actions > 1 and p_sorted[-2] > 0 else 0.0)
     marg_tie = {m: bool(lo <= tie_tol) for m, lo in logodds_marg.items()}
@@ -1200,21 +1217,38 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         raise ValueError(f"p_model must give one prior per model {tuple(models)}, got {p_model!r}")
     p_m = p_m / p_m.sum()
 
-    ## the same computation as I(A;ell|h), with the models in place of the ells:
+    ## H(M) = -sum_m p(m) log p(m)
+    H_M = float(_neg_p_log_p(p_m))
+
     ## p(m|h,a) = p(a|h,m) p(m) / p(a|h), and p(a|h) = sum_m p(m) p(a|h,m)
-    H_M, _, mi_model, p_marg_model = _mi_from_step(P_m, p_m)
+    p_marg_model = p_marg_all.T @ p_m # p(a|h) = sum_m p(m) p(a|h,m)
     H_marg_model = float(_neg_p_log_p(p_marg_model))
+    p_m_post = np.divide(p_marg_all * p_m[:, None], p_marg_model[None, :], out=np.zeros_like(p_marg_all), where=p_marg_model > 0) # i.e. each model's posterior probability given the action
+    H_M_cond = _neg_p_log_p(p_m_post) 
+
+    ## E_a[H(M|h,a)] = sum_a p(a|h) H(M|h,a)
+    E_H_M_cond = float(p_marg_model @ H_M_cond)
+    mi_model = max(H_M - E_H_M_cond, 0.0) # I(A;M|h) = H(M) - E_a[H(M|h,a)]
 
     ## normalise by H(M): I(A;M|h) <= min(H(A), H(M))
     mi_norm = mi_model / H_M if H_M > 0 else 0.0
 
-    ## family split, mi_model = mi_family + p(F=emp) mi_emp_type -- see FAMILY SPLIT
+    
+    ### family split: I(A;M|h) = I(A;F|h) + p(F=emp) I(A;M|h,F=emp), where F = emp family vs info
+
+    ## get marginalised policy for the emp family vs info
     p_emp_family = p_m[:n_emp].sum()
     p_m_emp = p_m[:n_emp] / p_emp_family # p(m|F=emp)
-    P_family = np.stack([p_m_emp @ P_m[:n_emp], P_m[-1]], axis=0)
-    _, _, mi_family, _ = _mi_from_step(P_family, np.array([p_emp_family, p_m[-1]]))
-    H_emp_type, _, mi_emp_type, _ = _mi_from_step(P_m[:n_emp], p_m_emp)
+    P_family = np.stack([p_m_emp @ p_marg_all[:n_emp], p_marg_all[-1]], axis=0) # i.e. marginalised policy for the emp family vs info, where p(a|h,F=emp) = sum_{m in emp} p(m|F=emp) p(a|h,m)
 
+    ## I(A;F|h), F = emp family vs info
+    _, _, mi_family, _ = _mi_from_step(P_family, np.array([p_emp_family, p_m[-1]])) 
+
+    ## I(A;M|h,F=emp), between the emp models
+    H_emp_type, _, mi_emp_type, _ = _mi_from_step(p_marg_all[:n_emp], p_m_emp) 
+
+    ## by the chain rule, mi_model = mi_family + p(F=emp) * mi_emp_type + p(F=info) * mi_info (since latter term is 0, it is omitted)
+    assert np.isclose(mi_model, mi_family + p_emp_family * mi_emp_type), f"mi_model={mi_model}, mi_family={mi_family}, mi_emp_type={mi_emp_type}, p_emp_family={p_emp_family}"
 
     row = {
         'alpha': alpha,
@@ -1255,7 +1289,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         row[f'{m}_marg_tie'] = marg_tie[m]
     row['model_tie'] = bool(info_tie or any(marg_tie.values()))
     for i, j in itertools.combinations(range(n_models), 2):
-        row[f'tvd_{models[i]}_{models[j]}'] = float(0.5 * np.abs(P_m[i] - P_m[j]).sum())
+        row[f'tvd_{models[i]}_{models[j]}'] = float(0.5 * np.abs(p_marg_all[i] - p_marg_all[j]).sum())
 
     ## room selection: t, history and LML are per room, and the "actions" are the rooms
     if room_selection:
@@ -1267,7 +1301,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
             row[f'LML_{r}'] = emp_agent.marginal_likelihood(counts_array[r]) # belief-model property, shared by both agents
             row[f'p_marg_{r}'] = p_marg_model[r]
             for k, m in enumerate(models):
-                row[f'p_marg_{m}_{r}'] = P_m[k, r]
+                row[f'p_marg_{m}_{r}'] = p_marg_all[k, r]
             for m, d in within_emp.items():
                 row[f'best_room_frac_{m}_{r}'] = d['frac'][r]
                 row[f'best_room_frac_dec_{m}_{r}'] = d['frac_dec'][r]
@@ -1277,7 +1311,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         for a, lab in labels:
             row[f'p_marg_{lab}'] = p_marg_model[a]
             for k, m in enumerate(models):
-                row[f'p_marg_{m}_{lab}'] = P_m[k, a]
+                row[f'p_marg_{m}_{lab}'] = p_marg_all[k, a]
             for m, d in within_emp.items():
                 row[f'best_a_frac_{m}_{lab}'] = d['frac'][a]
                 row[f'best_a_frac_dec_{m}_{lab}'] = d['frac_dec'][a]
@@ -1617,7 +1651,7 @@ def fit_emp(df_ppt,
                            horizon=None, init_t=0,
                            maxiter=200, tol=1e-6, n_jobs=-1,
                            ell_eps=1e-3, optimizer='lbfgsb', n_starts=10,
-                           seed=None, verbose=True):
+                           alpha_bounds=None, seed=None, verbose=True):
     """
     Parallelized version of fit_emp_model using joblib.
 
@@ -1653,7 +1687,12 @@ def fit_emp(df_ppt,
         'de': differential evolution, which needs finite bounds throughout.
     n_starts : int
         Starting points for 'lbfgsb': log ell from the N(0, 2) prior over the
-        type's slice, temp uniform over `temp_bounds`.
+        type's slice, temp and alpha uniform over `temp_bounds` / `alpha_bounds`.
+    alpha_bounds : (lo, hi) or None
+        If given, every agent type also fits the Dirichlet concentration it
+        makes posterior inferences with, within these (finite, positive)
+        bounds. None (default) fixes it to the design's `alpha` column, i.e.
+        the agent knows the prior the bandits are drawn from.
     seed : int or None
         Seeds the starting points / DE population; each subject gets its own
         stream.
@@ -1690,6 +1729,7 @@ def fit_emp(df_ppt,
                     agent_type=agent_type,
                     optimizer=optimizer,
                     n_starts=n_starts,
+                    alpha_bounds=alpha_bounds,
                     seed=np.random.default_rng(seeds[i_type * len(pids) + i_pid])
                 )
                 for i_pid, pid in enumerate(pids)
@@ -1701,7 +1741,7 @@ def fit_emp(df_ppt,
     return df_fits
 def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
              init_t, maxiter, tol, verbose, agent_type=None,
-             optimizer='lbfgsb', n_starts=10,
+             optimizer='lbfgsb', n_starts=10, alpha_bounds=None,
              popsize=15, mutation=(0.5, 1), recombination=0.7, seed=None):
     """
     Fit model for a single subject, by multi-start L-BFGS-B ('lbfgsb') or
@@ -1710,6 +1750,9 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
     The empowerment agent is optimised over log ell (bounds `log_ell_bounds`,
     +/-inf where open -- 'lbfgsb' only); the agent itself is run at
     ell = exp(log ell). `log_ell_bounds=None` marks the info-seeking agent.
+    With `alpha_bounds`, alpha (the agent's Dirichlet concentration) is a
+    further free parameter, last in the parameter vector; otherwise
+    alpha is the design's.
     """
     
     ## hoist the data out of the DataFrame
@@ -1731,19 +1774,31 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
     else:
         bounds = [log_ell_bounds, temp_bounds]
     fixed_ell = None if fixed_log_ell is None else np.exp(fixed_log_ell)
+    free_ell = len(bounds) == 2
+    fit_alpha = alpha_bounds is not None
+    if fit_alpha:
+        alpha_bounds = tuple(float(b) for b in alpha_bounds)
+        if not (np.all(np.isfinite(alpha_bounds)) and alpha_bounds[0] > 0):
+            raise ValueError(f"alpha_bounds must be finite and positive, got {alpha_bounds}")
+        bounds = bounds + [alpha_bounds]
 
-    def compute_nll(params):
-        if len(params) == 1: ## info-seeking agent, or emp with ell pinned
-            ell = fixed_ell
-            temp = params[0]
-        else: ## empowerment agent
+    def unpack(params):
+        params = list(params)
+        alpha = params.pop() if fit_alpha else design['alpha']
+        if free_ell: ## empowerment agent
             log_ell, temp = params
             ell = np.exp(log_ell)
+        else: ## info-seeking agent, or emp with ell pinned
+            ell = fixed_ell
+            temp = params[0]
+        return ell, temp, alpha
 
+    def compute_nll(params):
+        ell, temp, alpha = unpack(params)
         if design['expt'] == 'rooms':
-            return _nll_from_rooms(rooms, design, ell, temp)
+            return _nll_from_rooms(rooms, design, ell, temp, alpha=alpha)
         elif design['expt'] == 'arms':
-            return _nll_from_arms(arms, design, ell, temp, horizon, init_t)
+            return _nll_from_arms(arms, design, ell, temp, horizon, init_t, alpha=alpha)
 
     rng = np.random.default_rng(seed)
     if optimizer == 'de':
@@ -1765,11 +1820,13 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
             disp=False
         )
     else:
-        ## starting points: log ell from its (truncated) prior, temp uniform
+        ## starting points: log ell from its (truncated) prior, temp and alpha uniform
         starts = rng.uniform(*temp_bounds, size=(n_starts, 1))
-        if len(bounds) == 2:
+        if free_ell:
             log_ell_0 = log_ell_prior(agent_type, bounds[0])[0].rvs(size=n_starts, random_state=rng)
             starts = np.column_stack([log_ell_0, starts])
+        if fit_alpha:
+            starts = np.column_stack([starts, rng.uniform(*alpha_bounds, size=n_starts)])
 
         ## L-BFGS-B from each, keeping the best; open sides go in as None
         lbfgsb_bounds = [tuple(None if np.isinf(b) else b for b in bd) for bd in bounds]
@@ -1779,12 +1836,9 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
                          tol=tol, options={'maxiter': maxiter})
             if res is None or r.fun < res.fun:
                 res = r
-    if len(res.x) == 1:
-        log_ell_hat = fixed_log_ell
-        temp_hat = res.x[0]
-    else:
-        log_ell_hat, temp_hat = res.x
-    ell_hat = None if log_ell_hat is None else float(np.exp(log_ell_hat))
+    ell_hat, temp_hat, alpha_hat = unpack(res.x)
+    ell_hat = None if ell_hat is None else float(ell_hat)
+    log_ell_hat = None if ell_hat is None else float(np.log(ell_hat))
     nll = res.fun
     success = res.success
 
@@ -1793,7 +1847,7 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
         n_fit_trials = len(rooms)
     else:
         n_fit_trials = len(df_ppt.loc[df_ppt['trial'] >= init_t])
-    n_free_params = len(bounds) ## temp, plus ell wherever it is free
+    n_free_params = len(bounds) ## temp, plus ell and alpha wherever they are free
     BIC = n_free_params*np.log(n_fit_trials) + 2*nll
 
     return {
@@ -1801,6 +1855,8 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
         'log_ell': log_ell_hat,
         'ell': ell_hat,
         'temp': temp_hat,
+        'agent_alpha': float(alpha_hat),
+        'fit_alpha': fit_alpha,
         'nll': nll,
         'BIC': BIC,
         'success': success,
@@ -1879,14 +1935,15 @@ def _arms_from_df(df_ppt):
 
 
 # NLL of the choices under, given parameterised model
-def _nll_from_arms(arms, design, ell, temp, horizon, init_t):
+def _nll_from_arms(arms, design, ell, temp, horizon, init_t, alpha=None):
 
     n_arms = design['n_arms']
     n_outcomes = design['n_outcomes']
     n_trials = design['n_trials']
     termination_arm = design['termination_arm']
     cost = design['cost']
-    alpha = design['alpha']
+    if alpha is None: ## agent infers with the true prior
+        alpha = design['alpha']
 
     ## fresh agent per evaluation: the optimiser moves ell on every call, so a shared cache would never be reused
     agent = make_agent(n_arms, n_outcomes, alpha, ell, termination_arm, cost)
@@ -1952,13 +2009,14 @@ def _rooms_from_df(df_ppt):
 
 
 # NLL of the room choices, given parameterised model
-def _nll_from_rooms(rooms, design, ell, temp):
+def _nll_from_rooms(rooms, design, ell, temp, alpha=None):
 
     n_arms = design['n_arms']
     n_outcomes = design['n_outcomes']
     termination_arm = design['termination_arm']
     cost = design['cost']
-    alpha = design['alpha']
+    if alpha is None: ## agent infers with the true prior
+        alpha = design['alpha']
 
     ## fresh agent per evaluation, as in _nll_from_arms
     agent = make_agent(n_arms, n_outcomes, alpha, ell, termination_arm, cost)
@@ -1974,8 +2032,9 @@ def _nll_from_rooms(rooms, design, ell, temp):
     return NLL
 
 
-def nll_emp(df_ppt, ell=1, horizon=None, init_t=0, temp=1):
-    """NLL of the yoked choices in `df_ppt` under (ell, temp). Returns a float.
+def nll_emp(df_ppt, ell=1, horizon=None, init_t=0, temp=1, alpha=None):
+    """NLL of the yoked choices in `df_ppt` under (ell, temp), for an agent
+    inferring with concentration `alpha` (default: the design's). Returns a float.
 
     The scoring counterpart to `run_emp`. Extracts the sequence and the task
     constants, then scores; `_fit_ppt` skips this wrapper and reuses a single
@@ -1984,10 +2043,10 @@ def nll_emp(df_ppt, ell=1, horizon=None, init_t=0, temp=1):
     """
     design = _design_from_df(df_ppt)
     if design['expt'] == 'rooms':
-        return _nll_from_rooms(_rooms_from_df(df_ppt), design, ell, temp)
+        return _nll_from_rooms(_rooms_from_df(df_ppt), design, ell, temp, alpha=alpha)
     elif design['expt'] == 'arms':
         return _nll_from_arms(_arms_from_df(df_ppt), design,
-                            ell, temp, horizon, init_t)
+                            ell, temp, horizon, init_t, alpha=alpha)
 
 ### calculate PFs for info-seeking agent
 def pareto_run(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
