@@ -100,6 +100,12 @@ def main():
     parser.add_argument('--n_starts', type=int, default=10,
                         help='starting points for --optimizer lbfgsb')
     parser.add_argument('--temp_bounds', type=float, default=(0.001, 0.2), nargs=2)
+    parser.add_argument('--fit_alpha', action='store_true',
+                        help="Whether to fit the agent's alpha (Dirichlet concentration) or keep it fixed at "
+                             "the generative value")
+    parser.add_argument('--alpha_bounds', type=float, default=(0.001, 1.0), nargs=2,
+                        help='bounds on generative and fitted'
+                             'agent alpha; must be > 0')
     parser.add_argument('--cost', type=float, default=0.0)
     parser.add_argument('--horizon', type=int, default=1)
     parser.add_argument('--init_t', type=int, default=1)
@@ -162,6 +168,8 @@ def main():
     if args.preset_histories:
         stem += f'_top{args.top_n or "front"}_{"-".join(args.diag_cols)}'
     stem += f'_{args.ell_prior}'
+    if args.fit_alpha:
+        stem += f'_fitAlpha'
 
     if args.gen_data:
         print('EMP RECOVERY')
@@ -174,6 +182,8 @@ def main():
         if rooms:
             print(f'  - N AFC: {args.n_AFC}')
         print(f'  - Alpha: {args.alpha}')
+        print(f'  - Fitting alpha: {args.fit_alpha}'
+              + (f' (in {tuple(args.alpha_bounds)})' if args.fit_alpha else ''))
         print(f'  - Horizon: {args.horizon}')
         print(f'  - Cost: {args.cost}')
         print(f'  - Initial trial: {init_t}')
@@ -216,6 +226,11 @@ def main():
                 ell = float(np.exp(log_ell))
             temp = rng.uniform(*args.temp_bounds)
 
+            ## the alpha the agent infers with: the bandits' own, or a misspecified one
+            if args.fit_alpha:
+                agent_alpha = rng.uniform(*args.alpha_bounds)
+            else:
+                agent_alpha = args.alpha
 
             # Generate data
             if rooms:
@@ -230,6 +245,7 @@ def main():
                     temp=temp,
                     termination_arm=args.termination_arm,
                     diag_histories=diag_histories,
+                    agent_alpha=agent_alpha,
                 )
             else:
                 sim_tmp = gen_arms(
@@ -246,7 +262,8 @@ def main():
 
                     ## horizons task
                     diag_histories=diag_histories,
-                    n_subseq_trials=args.n_subseq_trials
+                    n_subseq_trials=args.n_subseq_trials,
+                    agent_alpha=agent_alpha,
                 )
             sim_tmp['subject_id'] = [sim_id] * len(sim_tmp['room'])
             sim_tmp['agent_type'] = [agent_type] * len(sim_tmp['room'])
@@ -325,6 +342,7 @@ def main():
             n_jobs=args.n_jobs,
             optimizer=args.optimizer,
             n_starts=args.n_starts,
+            alpha_bounds=args.alpha_bounds if args.fit_alpha else None,
             seed=args.seed,
             verbose=True
         )
@@ -334,10 +352,14 @@ def main():
             df_fits.loc[df_fits['subject_id']==sim, 'gen_agent_type'] = df_sim.loc[df_sim['subject_id']==sim, 'agent_type'].iloc[0]
             df_fits.loc[df_fits['subject_id']==sim, 'gen_ell'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_ell'].iloc[0]
             df_fits.loc[df_fits['subject_id']==sim, 'gen_temp'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_temp'].iloc[0]
+            ## data generated before agent alpha existed came from agents inferring with --alpha
+            df_fits.loc[df_fits['subject_id']==sim, 'gen_agent_alpha'] = (
+                df_sim.loc[df_sim['subject_id']==sim, 'gen_agent_alpha'].iloc[0]
+                if 'gen_agent_alpha' in df_sim.columns else args.alpha)
         df_fits['gen_log_ell'] = np.log(df_fits['gen_ell'].astype(float))
 
         ## save fits
-        path = f'{stem}_fits.csv'
+        path = f'{stem}{"_fitAlpha" if args.fit_alpha else ""}_fits.csv'
         df_fits.to_csv(path, index=False)
         print(f"Saved fits to {path}")
 
