@@ -29,7 +29,11 @@ def load_diag_histories(args, term):
     """
     rooms = args.expt == 'rooms'
     path = (f'useful_saves/diag/{args.expt}/{args.n_arms}arms_{args.n_outcomes}outcomes_'
-            f'{args.n_trials}trials_{term}_{args.n_AFC}AFC_{args.diag_target}_{args.ell_prior}_diag.csv')
+            f'{args.n_trials}trials_{term}_{args.n_AFC}AFC_{args.diag_target}_{args.ell_prior}')
+    if 'emp' not in args.agent_types:
+        emp_types = [t for t in args.agent_types if t.startswith('emp')]
+        path += '_' + '_'.join(emp_types)
+    path += '_diag.csv'
     df_diag = pd.read_csv(path)
 
     ## keep only the rows generated under this run's design (rooms are valued at their leaf, so no horizon)
@@ -137,7 +141,7 @@ def main():
     parser.add_argument('--n_AFC', type=int, default=2)
 
     parser.add_argument('--diag_target', choices=['model', 'ell'], default='model')
-    parser.add_argument('--diag_cols', nargs='+', default=['mi_emp'],
+    parser.add_argument('--diag_cols', nargs='+', default=['mi_model'],
                         help='Diagnosticity columns to maximise jointly (Pareto layers) when picking preset histories.')
     parser.add_argument('--top_n', type=int, default=None,
                         help='Number of distinct preset histories to pick, by Pareto rank; repeated cyclically '

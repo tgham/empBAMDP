@@ -1212,7 +1212,18 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
 
     ## p(m), over the emp models then info; H(M|h) = H(M) because the prior is independent of h
     n_models = len(models)
-    p_m = np.full(n_models, 1.0 / n_models) if p_model is None else np.asarray(p_model, dtype=float) # None = uniform
+    if p_model is None: 
+        
+        ## uniform
+        p_m = np.full(n_models, 1.0 / n_models) 
+
+        ## or, if multiple emp models, half the mass on the emp models and half on info
+        if n_emp > 1:
+            p_m[:n_emp] = 0.5 / n_emp
+            p_m[-1] = 0.5
+
+    else:
+        p_m = np.asarray(p_m, dtype=float) # None = uniform
     if p_m.shape != (n_models,):
         raise ValueError(f"p_model must give one prior per model {tuple(models)}, got {p_model!r}")
     p_m = p_m / p_m.sum()
