@@ -377,7 +377,7 @@ def main():
         df_fits['gen_log_ell'] = np.log(df_fits['gen_ell'].astype(float))
 
         ## save fits
-        path = f'{stem}{"_fitAlpha" if args.fit_alpha else ""}_fits.csv'
+        path = f'{stem}_fits.csv'
         df_fits.to_csv(path, index=False)
         print(f"Saved fits to {path}")
 
