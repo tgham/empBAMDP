@@ -1235,7 +1235,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     p_marg_model = p_marg_all.T @ p_m # p(a|h) = sum_m p(m) p(a|h,m)
     H_marg_model = float(_neg_p_log_p(p_marg_model))
     p_m_post = np.divide(p_marg_all * p_m[:, None], p_marg_model[None, :], out=np.zeros_like(p_marg_all), where=p_marg_model > 0) # i.e. each model's posterior probability given the action
-    H_M_cond = _neg_p_log_p(p_m_post) 
+    H_M_cond = _neg_p_log_p(p_m_post.T) # transpose puts M on the last axis, so one entropy per action
 
     ## E_a[H(M|h,a)] = sum_a p(a|h) H(M|h,a)
     E_H_M_cond = float(p_marg_model @ H_M_cond)
@@ -1605,7 +1605,245 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
         row['prior_loc'], row['prior_scale'] = LOG_ELL_PRIOR
     return row
 
-    
+
+### Greedy sequential design: a SET of trials that is jointly diagnostic
+
+def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
+                  termination_arm=True, temp_emp=1.0, temp_info=1.0, costs=(0.0,),
+                  n_ell_samples=200, seed=None,
+                  emp_type='emp', log_ell_bounds=None, ell_prior='lognormal',
+                  init_t=0, target='ell', p_model=None, objective=None,
+                  expt='arms', n_AFC=2, n_room_samples=None,
+                  allow_repeats=False, max_branches=1024):
+    """Greedily choose `n_select` trials that are jointly diagnostic.
+
+    `enumerate_diagnosticity` scores each trial under the prior alone. Here the
+    trials are chosen one at a time, each conditioned on the (unknown) choices
+    made on the trials already chosen, using the chain rule
+
+        I(theta; A_1..A_k) = sum_k I(theta; A_k | A_1..A_{k-1}).
+
+    BRANCHES: at design time the earlier choices are unknown, so every possible
+    sequence of them is kept as a branch, with its probability p(a_1..a_k) and
+    its posterior weights p(theta | a_1..a_k) over the latent grid. The gain of a
+    candidate trial h is the branch-weighted average of the one-trial MI,
+
+        gain(h) = sum_b p(b) I(theta; A | h, w_b),
+
+    each term from `_mi_from_step` with the branch's posterior weights as its
+    prior. After choosing h*, each branch splits into one child per action a,
+    with p(b, a) = p(b) p(a|h*, w_b) and w_{b,a} proportional to w_b * p(a|h*, theta).
+    There are |A|^k branches after k trials; above `max_branches` they are
+    resampled in proportion to p(b) (seeded by `seed`), and from then on the
+    rows read `exact=False`.
+
+    LATENT GRID: target='ell' uses the ell grid of `enumerate_diagnosticity`
+    (objective 'ell'). target='model' keeps the weights on the JOINT (model, ell)
+    grid -- each emp ell point weighted p(m) w_m(ell), plus one info point -- so
+    the ell shared by a participant's choices carries across trials. Chaining
+    `_diag_model_row`'s per-trial ell-marginals instead would redraw ell every
+    trial. Its objective is 'model' (which of the emp models / info, as
+    `mi_model`) or 'family' (emp vs info, as `mi_family`): the branch weights are
+    summed within each group, and each group's policy is its weight-averaged
+    policy, as `_diag_model_row` builds `p_marg_all`.
+
+    Only one-step choices: 'rooms', or 'arms' with horizon 1. Candidates are the
+    canonical histories (from `init_t`) or `_room_tuples` of them.
+
+    Returns a DataFrame with one row per (alpha, cost, step): the chosen trial,
+    `gain` (what it adds), `mi_cum` (the running total), `mi_single` (its score
+    under the prior alone, = `mi` / `mi_model` / `mi_family` of
+    `enumerate_diagnosticity`), `H_prior` and `H_post` (so that, while exact,
+    mi_cum = H_prior - H_post), `n_branches` and `exact`.
+    """
+    if target not in ('ell', 'model'):
+        raise ValueError(f"target must be 'ell' or 'model', got {target!r}")
+    if expt not in ('arms', 'rooms'):
+        raise ValueError(f"expt must be 'arms' or 'rooms', got {expt!r}")
+    if objective is None:
+        objective = 'ell' if target == 'ell' else 'model'
+    if (target == 'ell') != (objective == 'ell') or objective not in ('ell', 'model', 'family'):
+        raise ValueError(f"objective {objective!r} does not go with target {target!r} "
+                         "('ell' for target='ell'; 'model' or 'family' for target='model')")
+    rng = np.random.default_rng(seed)
+
+    ### latent grid: prior weights w0 and, for the model objectives, a group label per point
+
+    ell_samples, ell_w0s = _diag_ell_grid(target, emp_type, n_ell_samples, log_ell_bounds, ell_prior)
+    if target == 'ell':
+        w0 = np.asarray(ell_w0s, dtype=float)
+        groups = None
+        models, p_m = [], None
+    else:
+        emp_names = list(ell_w0s)
+        W = np.stack([np.asarray(ell_w0s[m], dtype=float) for m in emp_names]) # (n_emp, n_ell)
+        n_emp = len(emp_names)
+        models = emp_names + ['info']
+
+        ## p(m), as in `_diag_model_row`: uniform, or half on info if several emp models
+        if p_model is None:
+            p_m = np.full(n_emp + 1, 1.0 / (n_emp + 1))
+            if n_emp > 1:
+                p_m[:n_emp] = 0.5 / n_emp
+                p_m[-1] = 0.5
+        else:
+            p_m = np.asarray(p_model, dtype=float)
+        if p_m.shape != (n_emp + 1,):
+            raise ValueError(f"p_model must give one prior per model {tuple(models)}, got {p_model!r}")
+        p_m = p_m / p_m.sum()
+
+        ## joint grid: emp ell points weighted p(m) w_m(ell), then the info point
+        w0 = np.append(p_m[:n_emp] @ W, p_m[-1])
+
+        ## each emp ell point belongs to the one model whose block it is in (see `model_ell_grid`)
+        model_of = np.append(np.argmax(W, axis=0), n_emp)
+        groups = model_of if objective == 'model' else (model_of == n_emp).astype(int)
+
+    def mi_one(P, w):
+        """I(target; A | h, w) for one candidate's policy P (n_theta, A) and weights w."""
+        if groups is None:
+            return _mi_from_step(P, w)[2]
+
+        ## p(g|w), and each group's policy p(a|h,g,w) = sum_{theta in g} w(theta|g) p(a|h,theta)
+        p_g, P_g = [], []
+        for k in np.unique(groups):
+            mask = groups == k
+            mass = w[mask].sum()
+            if mass > 0:
+                p_g.append(mass)
+                P_g.append(w[mask] @ P[mask] / mass)
+        return _mi_from_step(np.stack(P_g), np.array(p_g))[2]
+
+    def H_target(w):
+        """Entropy of the target under weights w: over theta, or over its groups."""
+        if groups is None:
+            return float(_neg_p_log_p(w))
+        return float(_neg_p_log_p(np.bincount(groups, weights=w)))
+
+    ### candidates
+
+    states = canonical_states(n_arms, n_outcomes, n_trials)
+    states = [s for s in states if int(s[0]) >= init_t]
+    if expt == 'rooms':
+        states = _room_tuples(states, n_AFC, n_room_samples, seed)
+    horizon = 0 if expt == 'rooms' else 1  # rooms are valued at their leaf; arms are one-step
+    print('greedy design over', len(states), 'candidate trials')
+
+    costs = [costs] if np.isscalar(costs) else list(costs)
+    rows = []
+    for alpha in alphas:
+        for cost in costs:
+            emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
+            info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost) if target == 'model' else None
+
+            ### p(a|h,theta) for every candidate, once: it does not depend on the weights
+
+            P_all = []
+            leaf = {} # rooms: (emp leaf values, info leaf value) per history, shared across tuples
+            for (t, C, cc, hs, _) in tqdm(states, desc=f"Policies (alpha={alpha}, cost={cost})"):
+
+                ## arms: the one-step policy, as in the row functions
+                if expt == 'arms':
+                    P = np.exp(emp_agent.log_policy(C, horizon, temp_emp))
+                    if target == 'model':
+                        P = np.vstack([P, np.exp(info_agent.log_policy(C, horizon, temp_info))])
+
+                ## rooms: softmax over each room's leaf value, as in the row functions
+                else:
+                    for r, h in enumerate(hs):
+                        if h not in leaf:
+                            leaf[h] = (emp_agent.leaf_value(C[r]),
+                                       info_agent.leaf_value(C[r])[0] if target == 'model' else None)
+                    Qs = np.stack([leaf[h][0] for h in hs], axis=1)      # (n_ell, n_AFC)
+                    P = _softmax(Qs / temp_emp, axis=1)
+                    if target == 'model':
+                        Q_info = np.array([leaf[h][1] for h in hs])
+                        P = np.vstack([P, _softmax(Q_info / temp_info)[None, :]])
+                P_all.append(P)
+
+            ### greedy loop
+
+            ## branches: probabilities pi (B,) and posterior weights W_b (B, n_theta); one branch to start
+            pi = np.ones(1)
+            W_b = w0[None, :].copy()
+            exact = True
+            H_prior = H_target(w0)
+            mi_cum = 0.0
+            chosen = set()
+            mi_single = None
+
+            for step in range(n_select):
+
+                ## gain(h) = sum_b p(b) I(target; A | h, w_b), for every candidate
+                gains = np.full(len(states), -np.inf)
+                for c in tqdm(range(len(states)), desc=f"Step {step + 1}/{n_select}", leave=False):
+                    if c in chosen and not allow_repeats:
+                        continue
+                    gains[c] = sum(p * mi_one(P_all[c], w) for p, w in zip(pi, W_b))
+                if step == 0:
+                    mi_single = gains.copy() # with one branch at the prior, the gain is the single-trial MI
+                if not np.isfinite(gains).any():
+                    warnings.warn(f'ran out of candidates after {step} steps')
+                    break
+                c_best = int(np.argmax(gains))
+                chosen.add(c_best)
+                mi_cum += gains[c_best]
+
+                ## split each branch by the chosen trial's action: p(b,a) = p(b) p(a|b), w_{b,a} ~ w_b p(a|theta)
+                P_best = P_all[c_best]
+                joint = W_b[:, :, None] * P_best[None, :, :]   # (B, n_theta, A)
+                p_a = joint.sum(axis=1)                        # (B, A) = p(a | h*, w_b)
+                pi_new = (pi[:, None] * p_a).ravel()
+                W_new = (joint / np.where(p_a > 0, p_a, 1.0)[:, None, :]).transpose(0, 2, 1).reshape(-1, len(w0))
+                keep = pi_new > 0
+                pi, W_b = pi_new[keep], W_new[keep]
+
+                ## too many branches: resample them in proportion to their probability
+                if len(pi) > max_branches:
+                    idx = rng.choice(len(pi), size=max_branches, p=pi / pi.sum())
+                    pi, W_b = np.full(max_branches, 1.0 / max_branches), W_b[idx]
+                    exact = False
+
+                ## save
+                t, C, cc, hs, orbit = states[c_best]
+                row = {
+                    'alpha': alpha, 'horizon': horizon, 'cost': cost,
+                    'temp_emp': temp_emp, 'temp_info': temp_info,
+                    'objective': objective, 'step': step,
+                    'gain': gains[c_best],
+                    'gain_bits': gains[c_best] / np.log(2.0),
+                    'mi_cum': mi_cum,
+                    'mi_cum_bits': mi_cum / np.log(2.0),
+                    'mi_single': mi_single[c_best],
+                    'H_prior': H_prior,
+                    'H_post': float(pi @ np.array([H_target(w) for w in W_b])),
+                    'n_branches': len(pi),
+                    'exact': exact,
+                    'candidate': c_best,
+                    **{f'p_model_{m}': p_m[k] for k, m in enumerate(models)},
+                }
+                if expt == 'rooms':
+                    row['pair_str'] = ' | '.join(hs)
+                    for r in range(len(hs)):
+                        row[f't_{r}'] = t[r]
+                        row[f'history_str_{r}'] = hs[r]
+                        row[f'history_{r}'] = cc[r]
+                        row[f'orbit_size_{r}'] = orbit[r]
+                else:
+                    row.update({'t': t, 'history_str': hs, 'history': cc, 'orbit_size': orbit})
+                rows.append(row)
+
+    df = pd.DataFrame(rows)
+    df['target'] = target
+    df['expt'] = expt
+    df['ell_prior'] = ell_prior
+    for k, v in _emp_type_cols(emp_type, log_ell_bounds).items():
+        df[k] = v
+    if ell_prior == 'lognormal':
+        df['prior_loc'], df['prior_scale'] = LOG_ELL_PRIOR
+    return df
+
+
 
 
 
