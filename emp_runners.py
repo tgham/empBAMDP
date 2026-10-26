@@ -1223,7 +1223,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
             p_m[-1] = 0.5
 
     else:
-        p_m = np.asarray(p_m, dtype=float) # None = uniform
+        p_m = np.asarray(p_model, dtype=float) # None = uniform
     if p_m.shape != (n_models,):
         raise ValueError(f"p_model must give one prior per model {tuple(models)}, got {p_model!r}")
     p_m = p_m / p_m.sum()
