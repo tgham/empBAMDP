@@ -39,6 +39,19 @@ def main():
                         help="Prior over the models: one per --emp_type, then info. "
                              "Default uniform.")
     
+    ## greedy sequential design: choose a jointly diagnostic SET of trials instead (see `greedy_design`)
+    parser.add_argument('--greedy', type=int, default=None,
+                        help="Greedily choose this many trials, each conditioned on the choices "
+                             "on the trials before it, instead of scoring every trial under the prior.")
+    parser.add_argument('--objective', type=str, default=None, choices=['ell', 'model', 'family'],
+                        help="--greedy only: what the set is diagnostic of (default: 'ell' for "
+                             "--target ell, 'model' for --target model).")
+    parser.add_argument('--max_branches', type=int, default=1024,
+                        help="--greedy only: branches (possible choice sequences) kept exactly "
+                             "before they are resampled.")
+    parser.add_argument('--allow_repeats', action='store_true',
+                        help="--greedy only: allow the same trial to be chosen more than once.")
+
     parser.add_argument('--expt', type=str, default='arms', choices=['arms','rooms'])
     if parser.parse_known_args()[0].expt == 'rooms':
         parser.add_argument('--n_AFC', type=int, default=2)
@@ -61,6 +74,31 @@ def main():
     print('Running diagnosticity sweep with parameters:')
     for k, v in vars(args).items():
         print(f'  {k}: {v}')
+
+    if args.greedy is not None:
+        df_greedy = greedy_design(
+            args.greedy,
+            n_arms=args.n_arms, n_outcomes=args.n_outcomes, n_trials=args.n_trials,
+            alphas=args.alphas,
+            termination_arm=args.termination_arm, temp_emp=args.temp_emp, temp_info=args.temp_info,
+            costs=args.costs,
+            n_ell_samples=args.n_ell_samples,
+            seed=args.seed,
+            emp_type=args.emp_type[0] if len(args.emp_type) == 1 else tuple(args.emp_type),
+            log_ell_bounds=args.log_ell_bounds and tuple(args.log_ell_bounds),
+            ell_prior=args.ell_prior,
+            init_t=args.init_t,
+            target=args.target,
+            p_model=None if args.p_model is None else tuple(args.p_model),
+            objective=args.objective,
+            expt=args.expt, n_AFC=getattr(args, 'n_AFC', 2),
+            n_room_samples=getattr(args, 'n_room_samples', None),
+            allow_repeats=args.allow_repeats, max_branches=args.max_branches,
+        )
+        out = f'{stem}_greedy.csv'
+        print(f'Saving df_greedy to {out}')
+        df_greedy.to_csv(out, index=False)
+        return
 
     df_diag = enumerate_diagnosticity(
         n_arms=args.n_arms, n_outcomes=args.n_outcomes, n_trials=args.n_trials,

@@ -24,6 +24,10 @@ def load_diag_histories(args, term):
     For `--expt rooms` each row is a tuple of `args.n_AFC` histories to choose
     between, ranked and de-duplicated by `pair_str`.
 
+    `--diag_source greedy` reads the `diag_sweep.py --greedy` output instead:
+    a set of trials chosen to be jointly diagnostic (see `greedy_design`), taken
+    in the order they were chosen rather than ranked by `--diag_cols`.
+
     Returns a list of histories, each `(((arm, outcome), count), ...)`, or for
     rooms a list of tuples of them.
     """
@@ -33,7 +37,7 @@ def load_diag_histories(args, term):
     if 'emp' not in args.agent_types:
         emp_types = [t for t in args.agent_types if t.startswith('emp')]
         path += '_' + '_'.join(emp_types)
-    path += '_diag.csv'
+    path += '_greedy.csv' if args.diag_source == 'greedy' else '_diag.csv'
     df_diag = pd.read_csv(path)
 
     ## keep only the rows generated under this run's design (rooms are valued at their leaf, so no horizon)
@@ -50,28 +54,35 @@ def load_diag_histories(args, term):
                 )
             sel = match
 
-    ## one row per history (or tuple of histories), keeping its best score on the first objective
-    key = 'pair_str' if rooms else 'history'
-    missing = [c for c in args.diag_cols if c not in sel.columns]
-    if missing:
-        raise ValueError(f'{path} has no column(s) {missing} (available: {list(sel.columns)})')
-    sel = sel.sort_values(args.diag_cols[0], ascending=False).drop_duplicates(key)
+    ## greedy set: already one row per chosen trial, taken in the order chosen
+    if args.diag_source == 'greedy':
+        sel = sel.sort_values('step')
 
-    ## the top_n most diagnostic by Pareto rank over diag_cols (or, by default, just the
-    ## first Pareto layer), cycled until n_rooms is reached
-    if args.top_n is None:
-        if len(args.diag_cols) == 1:
-            raise ValueError('--top_n is required with a single --diag_cols objective '
-                             '(its first Pareto layer is just the tied maxima)')
-        sel = sel.dropna(subset=args.diag_cols)
-        sel = sel.iloc[pareto_front_idx(*(sel[c].to_numpy() for c in args.diag_cols))]
     else:
-        if len(sel) < args.top_n:
-            raise ValueError(
-                f'{path} only has {len(sel)} distinct histories for this condition, '
-                f'but --top_n={args.top_n} were requested'
-            )
-        sel = top_n_pareto(sel, n=args.top_n, cols=args.diag_cols)
+        ## one row per history (or tuple of histories), keeping its best score on the first objective
+        key = 'pair_str' if rooms else 'history'
+        missing = [c for c in args.diag_cols if c not in sel.columns]
+        if missing:
+            raise ValueError(f'{path} has no column(s) {missing} (available: {list(sel.columns)})')
+        sel = sel.sort_values(args.diag_cols[0], ascending=False).drop_duplicates(key)
+
+        ## the top_n most diagnostic by Pareto rank over diag_cols (or, by default, just the
+        ## first Pareto layer)
+        if args.top_n is None:
+            if len(args.diag_cols) == 1:
+                raise ValueError('--top_n is required with a single --diag_cols objective '
+                                 '(its first Pareto layer is just the tied maxima)')
+            sel = sel.dropna(subset=args.diag_cols)
+            sel = sel.iloc[pareto_front_idx(*(sel[c].to_numpy() for c in args.diag_cols))]
+        else:
+            if len(sel) < args.top_n:
+                raise ValueError(
+                    f'{path} only has {len(sel)} distinct histories for this condition, '
+                    f'but --top_n={args.top_n} were requested'
+                )
+            sel = top_n_pareto(sel, n=args.top_n, cols=args.diag_cols)
+
+    ## cycled until n_rooms is reached
     sel = sel.iloc[np.arange(args.n_rooms) % len(sel)].reset_index(drop=True)
 
     if rooms:
@@ -141,6 +152,9 @@ def main():
     parser.add_argument('--n_AFC', type=int, default=2)
 
     parser.add_argument('--diag_target', choices=['model', 'ell'], default='model')
+    parser.add_argument('--diag_source', choices=['ranked', 'greedy'], default='ranked',
+                        help="'ranked': the top single-trial scores of `diag_sweep.py` (by --diag_cols); "
+                             "'greedy': the jointly diagnostic set of `diag_sweep.py --greedy`, in order.")
     parser.add_argument('--diag_cols', nargs='+', default=['mi_model'],
                         help='Diagnosticity columns to maximise jointly (Pareto layers) when picking preset histories.')
     parser.add_argument('--top_n', type=int, default=None,
