@@ -1647,6 +1647,10 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     summed within each group, and each group's policy is its weight-averaged
     policy, as `_diag_model_row` builds `p_marg_all`.
 
+    REPEATS: with `allow_repeats=False` no history is shown twice. For 'rooms'
+    that applies to each room, not just each tuple: once A vs B is chosen, any
+    tuple containing A or B (e.g. A vs C) is excluded.
+
     Only one-step choices: 'rooms', or 'arms' with horizon 1. Candidates are the
     canonical histories (from `init_t`) or `_room_tuples` of them.
 
@@ -1769,7 +1773,8 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
             exact = True
             H_prior = H_target(w0)
             mi_cum = 0.0
-            chosen = set()
+            used = set() # histories already shown: each room's, for 'rooms'
+            trial_histories = (lambda c: states[c][3]) if expt == 'rooms' else (lambda c: (states[c][3],))
             mi_single = None
 
             for step in range(n_select):
@@ -1777,7 +1782,7 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                 ## gain(h) = sum_b p(b) I(target; A | h, w_b), for every candidate
                 gains = np.full(len(states), -np.inf)
                 for c in tqdm(range(len(states)), desc=f"Step {step + 1}/{n_select}", leave=False):
-                    if c in chosen and not allow_repeats:
+                    if not allow_repeats and used.intersection(trial_histories(c)):
                         continue
                     gains[c] = sum(p * mi_one(P_all[c], w) for p, w in zip(pi, W_b))
                 if step == 0:
@@ -1786,7 +1791,7 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                     warnings.warn(f'ran out of candidates after {step} steps')
                     break
                 c_best = int(np.argmax(gains))
-                chosen.add(c_best)
+                used.update(trial_histories(c_best))
                 mi_cum += gains[c_best]
 
                 ## split each branch by the chosen trial's action: p(b,a) = p(b) p(a|b), w_{b,a} ~ w_b p(a|theta)
