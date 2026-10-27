@@ -43,9 +43,6 @@ def main():
     parser.add_argument('--greedy', type=int, default=None,
                         help="Greedily choose this many trials, each conditioned on the choices "
                              "on the trials before it, instead of scoring every trial under the prior.")
-    parser.add_argument('--objective', type=str, default=None, choices=['ell', 'model', 'family'],
-                        help="--greedy only: what the set is diagnostic of (default: 'ell' for "
-                             "--target ell, 'model' for --target model).")
     parser.add_argument('--max_branches', type=int, default=1024,
                         help="--greedy only: branches (possible choice sequences) kept exactly "
                              "before they are resampled.")
@@ -90,7 +87,6 @@ def main():
             init_t=args.init_t,
             target=args.target,
             p_model=None if args.p_model is None else tuple(args.p_model),
-            objective=args.objective,
             expt=args.expt, n_AFC=getattr(args, 'n_AFC', 2),
             n_room_samples=getattr(args, 'n_room_samples', None),
             allow_repeats=args.allow_repeats, max_branches=args.max_branches,
