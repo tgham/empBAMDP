@@ -1612,40 +1612,36 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                   termination_arm=True, temp_emp=1.0, temp_info=1.0, costs=(0.0,),
                   n_ell_samples=200, seed=None,
                   emp_type='emp', log_ell_bounds=None, ell_prior='lognormal',
-                  init_t=0, target='ell', p_model=None, objective=None,
+                  init_t=0, target='ell', p_model=None,
                   expt='arms', n_AFC=2, n_room_samples=None,
                   allow_repeats=False, max_branches=1024):
     """Greedily choose `n_select` trials that are jointly diagnostic.
 
     `enumerate_diagnosticity` scores each trial under the prior alone. Here the
-    trials are chosen one at a time, each conditioned on the (unknown) choices
-    made on the trials already chosen, using the chain rule
+    set S is built one trial at a time, maximising F(S) = I(H; A_S) over a
+    discrete hypothesis grid H. Each step adds the trial j with the largest gain
 
-        I(theta; A_1..A_k) = sum_k I(theta; A_k | A_1..A_{k-1}).
+        Delta_j(S) = I(H; A_S, A_j) - I(H; A_S)
+                   = H(A_S, A_j) - H(A_S) - H(A_j | H),
 
-    BRANCHES: at design time the earlier choices are unknown, so every possible
-    sequence of them is kept as a branch, with its probability p(a_1..a_k) and
-    its posterior weights p(theta | a_1..a_k) over the latent grid. The gain of a
-    candidate trial h is the branch-weighted average of the one-trial MI,
+    which uses A_S _||_ A_j | H. H(A_j | H) = sum_theta w0(theta) H(A_j | theta)
+    is fixed per trial; H(A_S) and H(A_S, A_j) are entropies of the marginal
+    choice probabilities, so no posteriors are needed. F is monotone and
+    sub-modular, so greedy is within (1 - 1/e) of the best set.
 
-        gain(h) = sum_b p(b) I(theta; A | h, w_b),
+    HYPOTHESIS GRID: target='ell' uses the ell grid of `enumerate_diagnosticity`.
+    target='model' uses the JOINT (model, ell) grid -- each emp ell point weighted
+    p(m) w_m(ell), plus one info point -- so H pins down both the model and ell.
+    (Targeting the model alone leaves ell as a nuisance shared across trials, and
+    then the gain is no longer sub-modular.) What is learned about the model
+    itself is reported in `H_model_*` and `H_family_*` (emp vs info).
 
-    each term from `_mi_from_step` with the branch's posterior weights as its
-    prior. After choosing h*, each branch splits into one child per action a,
-    with p(b, a) = p(b) p(a|h*, w_b) and w_{b,a} proportional to w_b * p(a|h*, theta).
-    There are |A|^k branches after k trials; above `max_branches` they are
-    resampled in proportion to p(b) (seeded by `seed`), and from then on the
+    BRANCHES: J[b, theta] = w0(theta) prod_{i in S} p(a_i^b | h_i, theta), one row
+    per sequence b of choices on the trials chosen so far, so p(a_S) = J.sum(1)
+    and p(a_S, a_j) = J @ P_j. After choosing h*, each row splits into one per
+    action. There are |A|^k rows after k trials; above `max_branches` they are
+    resampled in proportion to p(a_S) (seeded by `seed`), and from then on the
     rows read `exact=False`.
-
-    LATENT GRID: target='ell' uses the ell grid of `enumerate_diagnosticity`
-    (objective 'ell'). target='model' keeps the weights on the JOINT (model, ell)
-    grid -- each emp ell point weighted p(m) w_m(ell), plus one info point -- so
-    the ell shared by a participant's choices carries across trials. Chaining
-    `_diag_model_row`'s per-trial ell-marginals instead would redraw ell every
-    trial. Its objective is 'model' (which of the emp models / info, as
-    `mi_model`) or 'family' (emp vs info, as `mi_family`): the branch weights are
-    summed within each group, and each group's policy is its weight-averaged
-    policy, as `_diag_model_row` builds `p_marg_all`.
 
     REPEATS: with `allow_repeats=False` no history is shown twice. For 'rooms'
     that applies to each room, not just each tuple: once A vs B is chosen, any
@@ -1656,38 +1652,37 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
 
     Returns a DataFrame with one row per (alpha, cost, step): the chosen trial,
     `gain` (what it adds), `mi_cum` (the running total), `mi_single` (its score
-    under the prior alone, = `mi` / `mi_model` / `mi_family` of
-    `enumerate_diagnosticity`), `H_prior` and `H_post` (so that, while exact,
+    under the prior alone), `H_prior` and `H_post` over H (so that, while exact,
     mi_cum = H_prior - H_post), `n_branches` and `exact`.
     """
     if target not in ('ell', 'model'):
         raise ValueError(f"target must be 'ell' or 'model', got {target!r}")
     if expt not in ('arms', 'rooms'):
         raise ValueError(f"expt must be 'arms' or 'rooms', got {expt!r}")
-    if objective is None:
-        objective = 'ell' if target == 'ell' else 'model'
-    if (target == 'ell') != (objective == 'ell') or objective not in ('ell', 'model', 'family'):
-        raise ValueError(f"objective {objective!r} does not go with target {target!r} "
-                         "('ell' for target='ell'; 'model' or 'family' for target='model')")
     rng = np.random.default_rng(seed)
 
-    ### latent grid: prior weights w0 and, for the model objectives, a group label per point
+    ### hypothesis grid: prior weights w0 and, for target='model', the model of each point
 
     ell_samples, ell_w0s = _diag_ell_grid(target, emp_type, n_ell_samples, log_ell_bounds, ell_prior)
+
+    ## prior weights over ell - no model split
     if target == 'ell':
         w0 = np.asarray(ell_w0s, dtype=float)
-        groups = None
         models, p_m = [], None
+
+    ## prior weights over the joint (model, ell) grid
     else:
         emp_names = list(ell_w0s)
+
+        ## stack each emp-model's ell grid
         W = np.stack([np.asarray(ell_w0s[m], dtype=float) for m in emp_names]) # (n_emp, n_ell)
         n_emp = len(emp_names)
         models = emp_names + ['info']
 
-        ## p(m), as in `_diag_model_row`: uniform, or half on info if several emp models
+        ## define model prior
         if p_model is None:
             p_m = np.full(n_emp + 1, 1.0 / (n_emp + 1))
-            if n_emp > 1:
+            if n_emp > 1: # half on info, half on other emp models
                 p_m[:n_emp] = 0.5 / n_emp
                 p_m[-1] = 0.5
         else:
@@ -1696,33 +1691,14 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
             raise ValueError(f"p_model must give one prior per model {tuple(models)}, got {p_model!r}")
         p_m = p_m / p_m.sum()
 
-        ## joint grid: emp ell points weighted p(m) w_m(ell), then the info point
+        ## joint grid: emp ell points weighted p(m) w_m(ell), then the info point - e.g. [p_emp*w_emp_1, ..., p_emp*w_emp_G, p_info]
         w0 = np.append(p_m[:n_emp] @ W, p_m[-1])
 
-        ## each emp ell point belongs to the one model whose block it is in (see `model_ell_grid`)
+        ## each emp ell point belongs to the one model whose block it is in (see `model_ell_grid`);
+        ## one-hot maps from grid points to models, and to families (emp, info), for reporting
         model_of = np.append(np.argmax(W, axis=0), n_emp)
-        groups = model_of if objective == 'model' else (model_of == n_emp).astype(int)
-
-    def mi_one(P, w):
-        """I(target; A | h, w) for one candidate's policy P (n_theta, A) and weights w."""
-        if groups is None:
-            return _mi_from_step(P, w)[2]
-
-        ## p(g|w), and each group's policy p(a|h,g,w) = sum_{theta in g} w(theta|g) p(a|h,theta)
-        p_g, P_g = [], []
-        for k in np.unique(groups):
-            mask = groups == k
-            mass = w[mask].sum()
-            if mass > 0:
-                p_g.append(mass)
-                P_g.append(w[mask] @ P[mask] / mass)
-        return _mi_from_step(np.stack(P_g), np.array(p_g))[2]
-
-    def H_target(w):
-        """Entropy of the target under weights w: over theta, or over its groups."""
-        if groups is None:
-            return float(_neg_p_log_p(w))
-        return float(_neg_p_log_p(np.bincount(groups, weights=w)))
+        to_model = np.eye(n_emp + 1)[model_of]
+        to_family = np.eye(2)[(model_of == n_emp).astype(int)]
 
     ### candidates
 
@@ -1733,6 +1709,9 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     horizon = 0 if expt == 'rooms' else 1  # rooms are valued at their leaf; arms are one-step
     print('greedy design over', len(states), 'candidate trials')
 
+    ## the histories each candidate shows: each room's, for 'rooms'
+    hist = [set(s[3]) if expt == 'rooms' else {s[3]} for s in states]
+
     costs = [costs] if np.isscalar(costs) else list(costs)
     rows = []
     for alpha in alphas:
@@ -1740,7 +1719,7 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
             emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
             info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost) if target == 'model' else None
 
-            ### p(a|h,theta) for every candidate, once: it does not depend on the weights
+            ### p(a|h,theta) for every candidate, once: it does not depend on the choices
 
             P_all = []
             leaf = {} # rooms: (emp leaf values, info leaf value) per history, shared across tuples
@@ -1764,69 +1743,81 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                         Q_info = np.array([leaf[h][1] for h in hs])
                         P = np.vstack([P, _softmax(Q_info / temp_info)[None, :]])
                 P_all.append(P)
+            P_all = np.stack(P_all)                 # (n_cand, n_theta, A)
+            n_cand, n_theta, n_act = P_all.shape
+
+            ## H(A_j | H) = sum_theta w0(theta) H(A_j | theta): fixed for each candidate
+            H_cond = _neg_p_log_p(P_all) @ w0
 
             ### greedy loop
 
-            ## branches: probabilities pi (B,) and posterior weights W_b (B, n_theta); one branch to start
-            pi = np.ones(1)
-            W_b = w0[None, :].copy()
+            J = w0[None, :].copy()   # (B, n_theta): w0(theta) p(a_S^b | theta); one branch to start
+            avail = np.ones(n_cand, dtype=bool)
             exact = True
-            H_prior = H_target(w0)
+            H_prior = float(_neg_p_log_p(w0))
             mi_cum = 0.0
-            used = set() # histories already shown: each room's, for 'rooms'
-            trial_histories = (lambda c: states[c][3]) if expt == 'rooms' else (lambda c: (states[c][3],))
             mi_single = None
 
             for step in range(n_select):
 
-                ## gain(h) = sum_b p(b) I(target; A | h, w_b), for every candidate
-                gains = np.full(len(states), -np.inf)
-                for c in tqdm(range(len(states)), desc=f"Step {step + 1}/{n_select}", leave=False):
-                    if not allow_repeats and used.intersection(trial_histories(c)):
-                        continue
-                    gains[c] = sum(p * mi_one(P_all[c], w) for p, w in zip(pi, W_b))
+                ## Delta_j = H(A_S, A_j) - H(A_S) - H(A_j | H), for every candidate, in chunks
+                pi = J.sum(axis=1)                          # p(a_S)
+                H_S = float(_neg_p_log_p(pi))
+                gains = np.full(n_cand, -np.inf)
+                chunk = max(1, int(2e7 // (len(J) * n_act)))
+                for lo in range(0, n_cand, chunk):
+                    sl = slice(lo, lo + chunk)
+                    PA = np.matmul(J, P_all[sl])            # (c, B, A) = p(a_S, a_j)
+                    gains[sl] = _neg_p_log_p(PA.reshape(len(PA), -1)) - H_S - H_cond[sl]
+                gains[~avail] = -np.inf
                 if step == 0:
                     mi_single = gains.copy() # with one branch at the prior, the gain is the single-trial MI
                 if not np.isfinite(gains).any():
                     warnings.warn(f'ran out of candidates after {step} steps')
                     break
                 c_best = int(np.argmax(gains))
-                used.update(trial_histories(c_best))
                 mi_cum += gains[c_best]
+                if not allow_repeats:
+                    avail &= np.array([not (h & hist[c_best]) for h in hist])
 
-                ## split each branch by the chosen trial's action: p(b,a) = p(b) p(a|b), w_{b,a} ~ w_b p(a|theta)
-                P_best = P_all[c_best]
-                joint = W_b[:, :, None] * P_best[None, :, :]   # (B, n_theta, A)
-                p_a = joint.sum(axis=1)                        # (B, A) = p(a | h*, w_b)
-                pi_new = (pi[:, None] * p_a).ravel()
-                W_new = (joint / np.where(p_a > 0, p_a, 1.0)[:, None, :]).transpose(0, 2, 1).reshape(-1, len(w0))
-                keep = pi_new > 0
-                pi, W_b = pi_new[keep], W_new[keep]
+                ## split each branch by the chosen trial's action: J[(b,a), theta] = J[b, theta] p(a|h*, theta)
+                J = (J[:, :, None] * P_all[c_best][None]).transpose(0, 2, 1).reshape(-1, n_theta)
+                J = J[J.sum(axis=1) > 0]
 
                 ## too many branches: resample them in proportion to their probability
-                if len(pi) > max_branches:
-                    idx = rng.choice(len(pi), size=max_branches, p=pi / pi.sum())
-                    pi, W_b = np.full(max_branches, 1.0 / max_branches), W_b[idx]
+                if len(J) > max_branches:
+                    pi = J.sum(axis=1)
+                    idx = rng.choice(len(J), size=max_branches, p=pi / pi.sum())
+                    J = J[idx] / pi[idx, None] / max_branches
                     exact = False
+
+                ## posteriors p(theta | a_S^b), for reporting
+                pi = J.sum(axis=1)
+                post = J / pi[:, None]
 
                 ## save
                 t, C, cc, hs, orbit = states[c_best]
                 row = {
                     'alpha': alpha, 'horizon': horizon, 'cost': cost,
                     'temp_emp': temp_emp, 'temp_info': temp_info,
-                    'objective': objective, 'step': step,
+                    'step': step,
                     'gain': gains[c_best],
                     'gain_bits': gains[c_best] / np.log(2.0),
                     'mi_cum': mi_cum,
                     'mi_cum_bits': mi_cum / np.log(2.0),
                     'mi_single': mi_single[c_best],
                     'H_prior': H_prior,
-                    'H_post': float(pi @ np.array([H_target(w) for w in W_b])),
-                    'n_branches': len(pi),
+                    'H_post': float(pi @ _neg_p_log_p(post)),
+                    'n_branches': len(J),
                     'exact': exact,
                     'candidate': c_best,
                     **{f'p_model_{m}': p_m[k] for k, m in enumerate(models)},
                 }
+                if target == 'model':
+                    row['H_model_prior'] = float(_neg_p_log_p(w0 @ to_model))
+                    row['H_model_post'] = float(pi @ _neg_p_log_p(post @ to_model))
+                    row['H_family_prior'] = float(_neg_p_log_p(w0 @ to_family))
+                    row['H_family_post'] = float(pi @ _neg_p_log_p(post @ to_family))
                 if expt == 'rooms':
                     row['pair_str'] = ' | '.join(hs)
                     for r in range(len(hs)):
