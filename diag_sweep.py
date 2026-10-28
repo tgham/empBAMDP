@@ -91,7 +91,7 @@ def main():
             n_room_samples=getattr(args, 'n_room_samples', None),
             allow_repeats=args.allow_repeats, max_branches=args.max_branches,
         )
-        out = f'{stem}_greedy.csv'
+        out = f'{stem}_{args.greedy}greedy.csv'
         print(f'Saving df_greedy to {out}')
         df_greedy.to_csv(out, index=False)
         return

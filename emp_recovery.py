@@ -24,9 +24,10 @@ def load_diag_histories(args, term):
     For `--expt rooms` each row is a tuple of `args.n_AFC` histories to choose
     between, ranked and de-duplicated by `pair_str`.
 
-    `--diag_source greedy` reads the `diag_sweep.py --greedy` output instead:
-    a set of trials chosen to be jointly diagnostic (see `greedy_design`), taken
-    in the order they were chosen rather than ranked by `--diag_cols`.
+    `--diag_source greedy` reads the `diag_sweep.py --greedy <top_n>` output
+    instead: a set of `--top_n` trials chosen to be jointly diagnostic (see
+    `greedy_design`), taken in the order they were chosen rather than ranked by
+    `--diag_cols`.
 
     Returns a list of histories, each `(((arm, outcome), count), ...)`, or for
     rooms a list of tuples of them.
@@ -37,7 +38,7 @@ def load_diag_histories(args, term):
     if 'emp' not in args.agent_types:
         emp_types = [t for t in args.agent_types if t.startswith('emp')]
         path += '_' + '_'.join(emp_types)
-    path += '_greedy.csv' if args.diag_source == 'greedy' else '_diag.csv'
+    path += f'_{args.top_n}greedy.csv' if args.diag_source == 'greedy' else '_diag.csv'
     df_diag = pd.read_csv(path)
 
     ## keep only the rows generated under this run's design (rooms are valued at their leaf, so no horizon)
@@ -160,11 +161,14 @@ def main():
     parser.add_argument('--top_n', type=int, default=None,
                         help='Number of distinct preset histories to pick, by Pareto rank; repeated cyclically '
                              'up to --n_rooms. Required for a single objective; with several, '
-                             'defaults to the whole first Pareto layer.')
+                             'defaults to the whole first Pareto layer. With --diag_source greedy, '
+                             'the size of the greedy set (required).')
 
     args = parser.parse_args()
 
     term = ["noTermination", "Termination"][args.termination_arm]
+    if args.diag_source == 'greedy' and args.top_n is None:
+        parser.error('--diag_source greedy needs --top_n (the size of the greedy set)')
 
     ## rooms task: every choice is between preset histories, and all of it is scored
     rooms = args.expt == 'rooms'
@@ -184,7 +188,10 @@ def main():
         if args.preset_histories:
             stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq_{args.diag_target}target'
     if args.preset_histories:
-        stem += f'_top{args.top_n or "front"}_{"-".join(args.diag_cols)}'
+        if args.diag_source == 'greedy':
+            stem += f'_greedy{args.top_n}'
+        else:
+            stem += f'_top{args.top_n or "front"}_{"-".join(args.diag_cols)}'
     stem += f'_{args.ell_prior}'
     if args.fit_alpha:
         stem += f'_fitAlpha'
@@ -214,9 +221,13 @@ def main():
         if args.preset_histories:
             diag_histories = load_diag_histories(args, term)
             print(f'  - Diagnosticity target: {args.diag_target}')
-            print(f'  - Pareto objectives: {args.diag_cols}, '
-                  f'{f"top {args.top_n}" if args.top_n else "first layer"} '
-                  f'({len(set(diag_histories))} distinct) cycled to {args.n_rooms} rooms')
+            if args.diag_source == 'greedy':
+                print(f'  - Greedy set of {args.top_n} trials '
+                      f'({len(set(diag_histories))} distinct) cycled to {args.n_rooms} rooms')
+            else:
+                print(f'  - Pareto objectives: {args.diag_cols}, '
+                      f'{f"top {args.top_n}" if args.top_n else "first layer"} '
+                      f'({len(set(diag_histories))} distinct) cycled to {args.n_rooms} rooms')
             if rooms:
                 print(f'  - Loaded {len(diag_histories)} diagnostic {args.n_AFC}-AFC tuples '
                       f'(lengths {sorted({sum(c for _, c in h) for hs in diag_histories for h in hs})})')
