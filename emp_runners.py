@@ -1691,7 +1691,7 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
             raise ValueError(f"p_model must give one prior per model {tuple(models)}, got {p_model!r}")
         p_m = p_m / p_m.sum()
 
-        ## joint grid: emp ell points weighted p(m) w_m(ell), then the info point - e.g. [p_emp*w_emp_1, ..., p_emp*w_emp_G, p_info]
+        ## joint grid: emp ell points weighted p(m) w_m(ell), then the info point - i.e. [p_emp*w_emp_1, ..., p_emp*w_emp_G, p_info]
         w0 = np.append(p_m[:n_emp] @ W, p_m[-1])
 
         ## each emp ell point belongs to the one model whose block it is in (see `model_ell_grid`);
@@ -1700,8 +1700,7 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
         to_model = np.eye(n_emp + 1)[model_of]
         to_family = np.eye(2)[(model_of == n_emp).astype(int)]
 
-    ### candidates
-
+    ### candidates (i.e. histories/trials)
     states = canonical_states(n_arms, n_outcomes, n_trials)
     states = [s for s in states if int(s[0]) >= init_t]
     if expt == 'rooms':
@@ -1719,19 +1718,19 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
             emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
             info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost) if target == 'model' else None
 
-            ### p(a|h,theta) for every candidate, once: it does not depend on the choices
+            ### p(a|h,theta) for every candidate. calculate once, because it does not depend on the choices
 
             P_all = []
             leaf = {} # rooms: (emp leaf values, info leaf value) per history, shared across tuples
             for (t, C, cc, hs, _) in tqdm(states, desc=f"Policies (alpha={alpha}, cost={cost})"):
 
-                ## arms: the one-step policy, as in the row functions
+                ## arms: the one-step policy
                 if expt == 'arms':
                     P = np.exp(emp_agent.log_policy(C, horizon, temp_emp))
                     if target == 'model':
                         P = np.vstack([P, np.exp(info_agent.log_policy(C, horizon, temp_info))])
 
-                ## rooms: softmax over each room's leaf value, as in the row functions
+                ## rooms: softmax over each room's leaf value
                 else:
                     for r, h in enumerate(hs):
                         if h not in leaf:
@@ -1743,16 +1742,17 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                         Q_info = np.array([leaf[h][1] for h in hs])
                         P = np.vstack([P, _softmax(Q_info / temp_info)[None, :]])
                 P_all.append(P)
-            P_all = np.stack(P_all)                 # (n_cand, n_theta, A)
-            n_cand, n_theta, n_act = P_all.shape
+            P_all = np.stack(P_all) # large matrix of choice probabilities 
+            n_cand, n_hypo, n_actions = P_all.shape
 
-            ## H(A_j | H) = sum_theta w0(theta) H(A_j | theta): fixed for each candidate
-            H_cond = _neg_p_log_p(P_all) @ w0
+            ## H(A_j | H) = sum_theta w0(theta) H(A_j | theta): 
+            H_cond = _neg_p_log_p(P_all) @ w0 # This is the noise in the policy, and so is fixed for each candidate
 
             ### greedy loop
 
-            J = w0[None, :].copy()   # (B, n_theta): w0(theta) p(a_S^b | theta); one branch to start
-            avail = np.ones(n_cand, dtype=bool)
+            ## initialise (B, n_hypo) branch matrix = w0(theta) p(a_S^b | theta) - i.e. joint probability of each sequence of choices and hypothesis starting with the prior
+            J = w0[None, :].copy()
+            avail = np.ones(n_cand, dtype=bool) # which candidates are still available to choose from, depending on whether repeats are allowed
             exact = True
             H_prior = float(_neg_p_log_p(w0))
             mi_cum = 0.0
@@ -1760,28 +1760,33 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
 
             for step in range(n_select):
 
-                ## Delta_j = H(A_S, A_j) - H(A_S) - H(A_j | H), for every candidate, in chunks
-                pi = J.sum(axis=1)                          # p(a_S)
-                H_S = float(_neg_p_log_p(pi))
+                pi = J.sum(axis=1)                          # p(a_S) = sum_theta w0(theta) p(a_S | theta)
+                H_S = float(_neg_p_log_p(pi))               # H(A_S) = -sum_b p(a_S^b) log p(a_S^b)
                 gains = np.full(n_cand, -np.inf)
-                chunk = max(1, int(2e7 // (len(J) * n_act)))
+
+                ## chunking is needed because P_all is (n_cand, n_hypo, n_actions) and J is (B, n_hypo), so matmul may be huge
+                chunk = max(1, int(2e7 // (len(J) * n_actions)))
                 for lo in range(0, n_cand, chunk):
                     sl = slice(lo, lo + chunk)
-                    PA = np.matmul(J, P_all[sl])            # (c, B, A) = p(a_S, a_j)
+                    PA = np.matmul(J, P_all[sl])            # (c, B, A) = p(a_S, a_j) = sum_theta w0(theta) p(a_S | theta) p(a_j | h_j, theta)
+
+                    ## Delta_j = H(A_S, A_j) - H(A_S) - H(A_j | H), for every candidate
                     gains[sl] = _neg_p_log_p(PA.reshape(len(PA), -1)) - H_S - H_cond[sl]
-                gains[~avail] = -np.inf
+                gains[~avail] = -np.inf ## set gain to -inf for unavailable candidates
                 if step == 0:
                     mi_single = gains.copy() # with one branch at the prior, the gain is the single-trial MI
                 if not np.isfinite(gains).any():
                     warnings.warn(f'ran out of candidates after {step} steps')
                     break
+
+                ## get best increment and optionally remove it from the available set
                 c_best = int(np.argmax(gains))
                 mi_cum += gains[c_best]
                 if not allow_repeats:
                     avail &= np.array([not (h & hist[c_best]) for h in hist])
 
-                ## split each branch by the chosen trial's action: J[(b,a), theta] = J[b, theta] p(a|h*, theta)
-                J = (J[:, :, None] * P_all[c_best][None]).transpose(0, 2, 1).reshape(-1, n_theta)
+                ## extend each branch by the chosen trial's action: J[(b,a), theta] = J[b, theta] p(a|h*, theta) - i.e. each row of J splits into one per action, weighted by the new trial's policy
+                J = (J[:, :, None] * P_all[c_best][None]).transpose(0, 2, 1).reshape(-1, n_hypo)
                 J = J[J.sum(axis=1) > 0]
 
                 ## too many branches: resample them in proportion to their probability
@@ -1838,13 +1843,6 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     if ell_prior == 'lognormal':
         df['prior_loc'], df['prior_scale'] = LOG_ELL_PRIOR
     return df
-
-
-
-
-
-
-
 
 
 ### fitting functions
