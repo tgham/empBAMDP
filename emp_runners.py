@@ -1614,7 +1614,7 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                   emp_type='emp', log_ell_bounds=None, ell_prior='lognormal',
                   init_t=0, target='ell', p_model=None,
                   expt='arms', n_AFC=2, n_room_samples=None,
-                  allow_repeats=False, max_branches=1024):
+                  repeats='no_elements', max_branches=1024):
     """Greedily choose `n_select` trials that are jointly diagnostic.
 
     `enumerate_diagnosticity` scores each trial under the prior alone. Here the
@@ -1643,9 +1643,11 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     resampled in proportion to p(a_S) (seeded by `seed`), and from then on the
     rows read `exact=False`.
 
-    REPEATS: with `allow_repeats=False` no history is shown twice. For 'rooms'
-    that applies to each room, not just each tuple: once A vs B is chosen, any
-    tuple containing A or B (e.g. A vs C) is excluded.
+    REPEATS: 'allow' lets any trial be chosen again. 'no_pairs' never shows the
+    same tuple twice (in any order): once A vs B is chosen, B vs A is excluded but
+    A vs C is not. 'no_elements' never shows the same history twice: once A vs B
+    is chosen, any tuple containing A or B (e.g. A vs C) is excluded. For 'arms'
+    each trial is one history, so 'no_pairs' and 'no_elements' are the same.
 
     Only one-step choices: 'rooms', or 'arms' with horizon 1. Candidates are the
     canonical histories (from `init_t`) or `_room_tuples` of them.
@@ -1659,6 +1661,8 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
         raise ValueError(f"target must be 'ell' or 'model', got {target!r}")
     if expt not in ('arms', 'rooms'):
         raise ValueError(f"expt must be 'arms' or 'rooms', got {expt!r}")
+    if repeats not in ('allow', 'no_pairs', 'no_elements'):
+        raise ValueError(f"repeats must be 'allow', 'no_pairs' or 'no_elements', got {repeats!r}")
     rng = np.random.default_rng(seed)
 
     ### hypothesis grid: prior weights w0 and, for target='model', the model of each point
@@ -1782,7 +1786,9 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                 ## get best increment and optionally remove it from the available set
                 c_best = int(np.argmax(gains))
                 mi_cum += gains[c_best]
-                if not allow_repeats:
+                if repeats == 'no_pairs':
+                    avail &= np.array([h != hist[c_best] for h in hist])
+                elif repeats == 'no_elements':
                     avail &= np.array([not (h & hist[c_best]) for h in hist])
 
                 ## extend each branch by the chosen trial's action: J[(b,a), theta] = J[b, theta] p(a|h*, theta) - i.e. each row of J splits into one per action, weighted by the new trial's policy

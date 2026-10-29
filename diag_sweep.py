@@ -46,8 +46,10 @@ def main():
     parser.add_argument('--max_branches', type=int, default=1024,
                         help="--greedy only: branches (possible choice sequences) kept exactly "
                              "before they are resampled.")
-    parser.add_argument('--allow_repeats', action='store_true',
-                        help="--greedy only: allow the same trial to be chosen more than once.")
+    parser.add_argument('--repeats', default='no_elements', choices=['allow', 'no_pairs', 'no_elements'],
+                        help="--greedy only: 'allow' any trial to be chosen again; 'no_pairs': never the "
+                             "same tuple of rooms twice; 'no_elements': never the same history twice, "
+                             "even in a different tuple.")
 
     parser.add_argument('--expt', type=str, default='arms', choices=['arms','rooms'])
     if parser.parse_known_args()[0].expt == 'rooms':
@@ -89,7 +91,7 @@ def main():
             p_model=None if args.p_model is None else tuple(args.p_model),
             expt=args.expt, n_AFC=getattr(args, 'n_AFC', 2),
             n_room_samples=getattr(args, 'n_room_samples', None),
-            allow_repeats=args.allow_repeats, max_branches=args.max_branches,
+            repeats=args.repeats, max_branches=args.max_branches,
         )
         out = f'{stem}_{args.greedy}greedy.csv'
         print(f'Saving df_greedy to {out}')
