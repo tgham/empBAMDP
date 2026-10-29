@@ -1,0 +1,11 @@
+{
+  "DIRECTORIES": {
+    "METADATA": "./data/metadata",
+    "COMPLETE": "./data/complete",
+    "INCOMPLETE": "./data/incomplete",
+    "INVALID": "./data/invalid"
+  },
+  "PID_MAPPING_FILE": "./data/metadata/pid_map.json",
+  "RANDOMISED_ID": true,
+  "LOG_FILE": "./backend.log"
+}
