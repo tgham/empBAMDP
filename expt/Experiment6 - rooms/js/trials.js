@@ -574,7 +574,7 @@ function make_choice_intro(choice_num) {
             lines: [
                 `First, watch as some choices are made for you in each of the ${N_AFC} rooms.`,
                 OBJECTIVE === "gold"
-                    ? `Then click on the room you want to enter to collect the gold.`
+                    ? `Then click on the room in which you think you would be most likely to reach the gold coin.`
                     : `Then click on the room in which you feel the greatest sense of control.`,
                 `Press any key to begin.`
             ].map(line => `<span class="screen-question">${line}</span>`)
@@ -737,7 +737,7 @@ function make_room_choice(choice_num, opts) {
                 const lines = document.getElementById("screen-lines");
                 if (lines) lines.innerHTML = linesHTML([
                     OBJECTIVE === "gold"
-                        ? `<span class="screen-question">Click on the room you want to enter.</span>`
+                        ? `<span class="screen-question">Click on the room in which you think you would be most likely to reach the gold coin.</span>`
                         : `<span class="screen-question">In which room do you feel the greatest <strong>sense of control</strong>?</span>`
                 ]);
                 const t0 = performance.now();

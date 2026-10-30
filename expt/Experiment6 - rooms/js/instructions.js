@@ -167,7 +167,7 @@ function outcomeByTokenCount(which) {
 // keep playing.
 //----------------------------------------------------------------------------//
 function make_auto_demo_trial(cfg) {
-    const revealAfter = cfg.revealAfter || 1;
+    const revealAfter = cfg.revealAfter || 5;
     return {
         type: jsPsychHtmlKeyboardResponse,
         choices: "NO_KEYS",
@@ -682,8 +682,9 @@ function make_instructions_timeline() {
     }
 
     // Two real trials from the presets file for the practice, concretised the same
-    // way (here with a shuffled screen order, as in the task).
-    const practiceTrials = shuffled(PRESETS).slice(0, 2).map(function (trial) {
+    // way (here with a shuffled screen order, as in the task). Unlike the real
+    // trials, only pairs in which every room has at least one press are used.
+    const practiceTrials = shuffled(PRESETS.filter(trial => trial.every(h => h.length > 0))).slice(0, 2).map(function (trial) {
         const demo = demoTrial(trial);
         demo.optionOrder = shuffled(demo.optionOrder);
         return demo;
@@ -726,7 +727,7 @@ function make_instructions_timeline() {
             screenHTML({
                 title: `Tokens`,
                 lines: [
-                    `Whenever you a button is pressed, a <strong>coloured token</strong> will be placed on the location that you reached.`,
+                    `Whenever a button is pressed, a <strong>coloured token</strong> will be placed on the location that you reached.`,
                     `Hence, the tokens in each location reflect the <strong>number of times</strong> each button has taken you there.`,
                     `While there is <strong>always some degree of randomness</strong> in where a button leads, buttons can vary in how <strong>reliable</strong> they are.`,
                     `Let's look at ${BUTTONS.length === 2 ? "two" : "three"} examples.`
@@ -849,16 +850,16 @@ function make_instructions_timeline() {
     // choice_num -3..-1 keep these rows out of the way of the real trials (1..N_ROOMS)
     tl.push(make_room_choice(-3, Object.assign({ practice: true, watchOnly: true }, testDemo)));
 
-    // ---- How much each room is tested varies: the pair as a whole, then a room
-    //      testing blue far more than red (the empty room greyed out), then the
-    //      untested room (the tested one greyed out) ----
+    // ---- How much each room is tested varies: the pair just watched, then a
+    //      room testing blue far more than red (the empty room greyed out), then
+    //      the untested room (the tested one greyed out) ----
     const objectivePages = [
         screenHTML({
             title: `Which buttons are tested in each room?`,
             lines: [
                 `The number of times the buttons are pressed for you before you select your room, and which buttons are pressed, <strong>varies from trial to trial</strong>.`
             ],
-            stage: roomsStaticHTML(untestedDemo)
+            stage: roomsStaticHTML(testDemo)
         }),
         screenHTML({
             title: `Which buttons are tested in each room?`,
@@ -891,7 +892,13 @@ function make_instructions_timeline() {
             title: `What does it mean to feel a sense of control?`,
             lines: [
                 `Well, this is exactly what we are trying to find out!`,
-                `Different people might feel in control in different ways. For example, someone might feel like the room on the left gives them more control, while someone might prefer the room on the right.`,
+                `Different people might feel in control in different ways. For example, someone might feel like the room on the left gives them more control, while someone might prefer the room on the right.`
+            ],
+            stage: roomsStaticHTML(untestedDemo)
+        }));
+        objectivePages.push(screenHTML({
+            title: `What does it mean to feel a sense of control?`,
+            lines: [
                 `There is <strong>no correct answer</strong>, so please choose as honestly as you can depending on your understanding of what it means to be in control.`
             ],
             stage: roomsStaticHTML(untestedDemo)
@@ -1011,7 +1018,8 @@ function make_instructions_timeline() {
                 `So, make sure you select whichever room you think gives you the <strong>best chance of reaching the gold</strong>, given what you have learned about how the buttons work.`
             ] : [
                 `There are <strong>no right or wrong answers</strong>, and there is no bonus for choosing particular rooms.`,
-                `Please choose the room in which you genuinely feel the <strong>strongest sense of control</strong>, and answer as honestly as you can.`
+                `Please choose the room in which you genuinely feel the <strong>strongest sense of control</strong>, and answer as honestly as you can.`,
+                `We are very grateful for your participation, and for helping us to understand what it means for people to feel a <strong>sense of control</strong>.`
             ]
         })
     ]));

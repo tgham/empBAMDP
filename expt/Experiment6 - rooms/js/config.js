@@ -12,7 +12,7 @@ const DEBUGGING = false;
 // Experiment parameters
 //----------------------------------------------------------------------------//
 // N buttons per room (2 or 3), K=4 outcomes (cardinal directions), Dirichlet alpha
-const N_BUTTONS = 3;
+const N_BUTTONS = 2;
 const K_OUTCOMES = 4;
 // N_AFC: how many rooms are offered on each trial. The participant watches every
 // room's preset history, then clicks the one they want to enter for the gold.
@@ -100,8 +100,8 @@ const SHOW_GOLD_OUTCOME = false;
 //   "control" -> "In which room do you feel the greatest sense of control?"; no
 //                gold selection task -- after the choice (and the confidence
 //                rating, if CONFIDENCE) it is straight on to the next trial.
-const OBJECTIVE = "gold";
-// const OBJECTIVE = "control";
+// const OBJECTIVE = "gold";
+const OBJECTIVE = "control";
 if (OBJECTIVE !== "gold" && OBJECTIVE !== "control") {
     throw new Error(`OBJECTIVE must be "gold" or "control", not ${JSON.stringify(OBJECTIVE)}`);
 }
@@ -113,7 +113,7 @@ if (OBJECTIVE !== "gold" && OBJECTIVE !== "control") {
 //            is worded for the OBJECTIVE.
 //   false -> straight on from the choice to the gold (or, under "control", to
 //            the next trial).
-const CONFIDENCE = true;
+const CONFIDENCE = false;
 
 // SHUFFLE_TRIALS: is the order of the trials in the presets file shuffled per
 // participant?
@@ -125,7 +125,7 @@ const SHUFFLE_TRIALS = false;
 
 // ATTENTION_CHECK_EVERY: an attention-check block is run after every this many
 // trials (never after the final one). 0 -> no attention checks in the task.
-const ATTENTION_CHECK_EVERY = 10;
+const ATTENTION_CHECK_EVERY = 2;
 
 // Prolific redirect links (fill in later). If left blank, no redirect happens.
 const REDIRECT_COMPLETE = "https://app.prolific.com/submissions/complete?cc=COKTR2G5"; // shown after finishing the experiment
