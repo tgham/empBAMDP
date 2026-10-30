@@ -273,7 +273,10 @@
                     title: `Congratulations`,
                     lines: [
                         `You made it to the end of the experiment.`,
-                        `Before we calculate your bonus and return you to Prolific, we have a few short questions that we'd like to ask you.`
+                        // no bonus under "control", so don't mention one
+                        OBJECTIVE === "gold"
+                            ? `Before we calculate your bonus and return you to Prolific, we have a few short questions that we'd like to ask you.`
+                            : `Before we return you to Prolific, we have a few short questions that we'd like to ask you.`
                     ]
                 }),
                 data: { task: "end_congrats" },
@@ -313,7 +316,8 @@
                         title: `Thank you!`,
                         lines: [
                             // `You collected <strong>${collected_gold}</strong> out of <strong>${N_ROOMS}</strong> gold coins.`,
-                            `Your bonus is <strong>&pound;${bonus}</strong>. Well done!`,
+                            // the bonus line only under "gold"; under "control" there is no bonus
+                            ...(OBJECTIVE === "gold" ? [`Your bonus is <strong>&pound;${bonus}</strong>. Well done!`] : []),
                             `Click below to return to Prolific.`,
                             `After clicking DO NOT CLOSE YOUR BROWSER until you have returned to Prolific. This may take a few seconds...`
                         ]
