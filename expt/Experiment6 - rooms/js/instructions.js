@@ -857,7 +857,7 @@ function make_instructions_timeline() {
         screenHTML({
             title: `Which buttons are tested in each room?`,
             lines: [
-                `The number of times the buttons are pressed for you before you select your room, and which buttons are pressed, <strong>varies from trial to trial</strong>.`
+                `The number of times the buttons are pressed for you before you select your room, and which buttons are pressed, <strong>varies between trials</strong>.`
             ],
             stage: roomsStaticHTML(testDemo)
         }),

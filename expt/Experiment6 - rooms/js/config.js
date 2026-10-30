@@ -6,7 +6,7 @@
 // conditional on it), and the Prolific redirect at the end is suppressed.
 // MUST be false for any real run: it bypasses the comprehension gate.
 //----------------------------------------------------------------------------//
-const DEBUGGING = false;
+const DEBUGGING = true;
 
 //----------------------------------------------------------------------------//
 // Experiment parameters
@@ -125,7 +125,7 @@ const SHUFFLE_TRIALS = false;
 
 // ATTENTION_CHECK_EVERY: an attention-check block is run after every this many
 // trials (never after the final one). 0 -> no attention checks in the task.
-const ATTENTION_CHECK_EVERY = 2;
+const ATTENTION_CHECK_EVERY = 15;
 
 // Prolific redirect links (fill in later). If left blank, no redirect happens.
 const REDIRECT_COMPLETE = "https://app.prolific.com/submissions/complete?cc=COKTR2G5"; // shown after finishing the experiment
