@@ -295,6 +295,10 @@
             effort: false,
             frustration: false,
             strategy: true,
+            // the strategy question names the objective the participant was given
+            strategy_prompt: OBJECTIVE === "gold"
+                ? `Did you use any particular strategies for deciding in which kind of room you were more likely to reach the gold coin?`
+                : `Did you use any particular strategies for deciding which kind of room gave you a stronger sense of control?`,
             feedback: true,
             data: { task: "expfeedback" }
         };
