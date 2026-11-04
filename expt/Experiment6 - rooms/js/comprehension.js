@@ -52,7 +52,7 @@ const ALL_QUIZ_QUESTIONS = [
         prompt: `What is the relationship between the buttons in each ${ROOM_SET} of rooms?`,
         correct: "They all control movement in that room, and the locations they reach are independent of each other. The buttons in one room are also unrelated to the buttons in the other room(s).",
         distractors: [
-            "The buttons in one room are always more reliable than those in the other room(s).",
+            "The buttons in one room are always more consistent than those in the other room(s).",
             "A button in one room works the same way as the button of the same colour in the other room(s)."
         ]
     },
@@ -72,8 +72,8 @@ const ALL_QUIZ_QUESTIONS = [
         prompt: "Suppose one of the buttons hasn't been tried yet. What can you assume about this button, based on your current knowledge?",
         correct: "Since it hasn't been tried, it's reasonable to assume it has a similar chance of reaching each location.",
         distractors: [
-            "Since it hasn't been tried yet, it is almost definitely a reliable button.",
-            "Since it hasn't been tried yet, it is almost definitely an unreliable button."
+            "Since it hasn't been tried yet, it is almost definitely a consistent button.",
+            "Since it hasn't been tried yet, it is almost definitely a variable button."
         ]
     },
     {
@@ -82,7 +82,7 @@ const ALL_QUIZ_QUESTIONS = [
         correct: "The number and colour of the button presses in each room vary from trial to trial.",
         distractors: [
             "Each button of each room is pressed evenly.",
-            "The most reliable buttons are pressed."
+            "The most consistent buttons are pressed."
         ]
     },
     {

@@ -160,7 +160,7 @@ function outcomeByTokenCount(which) {
 //----------------------------------------------------------------------------//
 // Auto-play demo: the computer presses one button `cfg.outcomes.length` times,
 // showing the agent move to each (fixed) outcome and return to the centre. Used
-// to illustrate how reliable vs variable a button can be. A coloured token is
+// to illustrate how consistent vs variable a button can be. A coloured token is
 // placed on each location the agent reaches, so the tally builds up as the demo
 // plays (the tally starts empty). The Next button appears after `cfg.revealAfter`
 // observations (default 5) so the participant may continue early while the rest
@@ -729,7 +729,7 @@ function make_instructions_timeline() {
                 lines: [
                     `Whenever a button is pressed, a <strong>coloured token</strong> will be placed on the location that you reached.`,
                     `Hence, the tokens in each location reflect the <strong>number of times</strong> each button has taken you there.`,
-                    `While there is <strong>always some degree of randomness</strong> in where a button leads, buttons can vary in how <strong>reliable</strong> they are.`,
+                    `While there is <strong>always some degree of randomness</strong> in where a button leads, buttons can vary in how <strong>consistent</strong> they are.`,
                     `Let's look at ${BUTTONS.length === 2 ? "two" : "three"} examples.`
                 ],
                 stage: taskDisplayStaticHTML(counts)
@@ -738,8 +738,8 @@ function make_instructions_timeline() {
     }));
 
     // ---- Reliability animations (computer presses each button; Next after 5).
-    //      One per button: with 3, reliable (blue) / two directions (red) /
-    //      variable (green); with 2, the reliable and the variable demo, the
+    //      One per button: with 3, consistent (blue) / two directions (red) /
+    //      variable (green); with 2, the consistent and the variable demo, the
     //      latter on red. ----
     const tokenDemos = [{
         button: "blue",
@@ -857,7 +857,8 @@ function make_instructions_timeline() {
         screenHTML({
             title: `Which buttons are tested in each room?`,
             lines: [
-                `The number of times the buttons are pressed for you before you select your room, and which buttons are pressed, <strong>varies between trials</strong>.`
+                `The number of times the buttons are pressed for you before you select your room, and which buttons are pressed, <strong>varies between trials</strong>.`,
+                `This is decided <strong>at random</strong> &mdash; the computer does <strong>not</strong> know how well any of the buttons work.`
             ],
             stage: roomsStaticHTML(testDemo)
         }),
