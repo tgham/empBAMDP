@@ -23,8 +23,8 @@ def main():
     parser.add_argument('--beta_emp', type=float, default=1.0)
     parser.add_argument('--beta_info', type=float, default=1.0)
     parser.add_argument('--normalise_q', action='store_true',
-                        help="Normalise each agent's Q-values onto [0, 1] with its best and worst leaf "
-                             "values over the task's histories (see `leaf_q_bounds`; cached in useful_saves/diag/bounds/).")
+                        help="Divide emp values by the ell-prior-weighted mean of each ell's best leaf value over the "
+                             "task's histories (see `leaf_q_bounds`); info values are already normalised by the empty prior's variance.")
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--emp_type', type=str, nargs='+', default=['emp'],
                         choices=['emp', 'emp_lo', 'emp_1', 'emp_hi'],

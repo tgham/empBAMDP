@@ -22,8 +22,8 @@ def main():
     parser.add_argument('--beta', type=float, default=1.0,
                         help="Softmax inverse temperature, shared by the emp and info agents.")
     parser.add_argument('--normalise_q', action='store_true',
-                        help="Normalise each agent's values onto [0, 1] with its best and worst leaf "
-                             "values over the task's histories (see `leaf_q_bounds`).")
+                        help="Divide emp values by the ell-prior-weighted mean of each ell's best leaf value over the "
+                             "task's histories (see `leaf_q_bounds`); info values are already normalised by the empty prior's variance.")
 
     args = parser.parse_args()
 

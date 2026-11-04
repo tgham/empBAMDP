@@ -519,9 +519,10 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     recursively on every pull over the horizon (see `EmpAgent.Q`); the
     terminate action is free and the info-seeking columns stay cost-free.
 
-    `normalise_q`: every agent's values (Q and current_*) are mapped onto [0, 1]
-    with the leaf-value bounds of `leaf_q_bounds` for its own cost, so `beta`
-    means the same for emp at every ell and for info.
+    `normalise_q`: emp values (Q and current_emp) are divided by the single
+    normaliser of `leaf_q_bounds` for its own cost -- the lognormal-prior-weighted
+    mean of the per-ell max leaf values -- so `beta` means the same at every ell.
+    Info values are already normalised by the empty prior's variance.
 
     Returns a long-format DataFrame with one row per (history_str, t, ell,
     agent), columns: alpha, Q_0, Q_1, ..., Q_terminate (if
@@ -554,6 +555,9 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     ## sampled ells, shared by every history
     sample_ells = np.logspace(np.log10(ell_lo), np.log10(ell_hi), n_ell_samples)
 
+    ## their lognormal prior weights, for the emp normaliser
+    sample_w0s = ell_weights(np.log(sample_ells), log_ell_prior()[0])
+
     ## big loop
     rows = []
     for alpha in alphas:
@@ -561,7 +565,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
         ## create agents for this alpha: (emp for every sampled ell at once; info-seeker), for each cost
         agents = {}
         for c in {float(k) for k in costs} | {0.0}:
-            emp_bounds, info_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, c, sample_ells)
+            emp_bounds, info_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, c, sample_ells, sample_w0s)
                                        if normalise_q else (None, None))
             agents[c] = (make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost=c, q_bounds=info_bounds), # info-seeker
                          make_agent(n_arms, n_outcomes, alpha, sample_ells, termination_arm, cost=c, q_bounds=emp_bounds)) # emp
@@ -1344,7 +1348,7 @@ def _diag_rows(target, states, args, ell_w0s=None, q_bounds=(None, None)):
     it. `args` are the row function's arguments after the history. The agents are
     built here and dropped on return, so their memo is shared by every history in
     the batch but never outlives it, in the parent process or in a worker.
-    `q_bounds` = (emp bounds, info bounds) from `leaf_q_bounds`, or Nones.
+    `q_bounds` = (emp bounds, info bounds) from `leaf_q_bounds` (info is None), or Nones.
     """
     ell_samples, n_arms, n_outcomes, _, alpha, termination_arm, _, cost = args[:8]
     emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost, q_bounds=q_bounds[0])
@@ -1421,9 +1425,10 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     uniform over it (finite bounds only), as in parameter recovery (see
     `log_ell_prior`).
 
-    `normalise_q`: map each agent's Q-values onto [0, 1] with the per-ell (emp)
-    and global (info) leaf-value bounds of `leaf_q_bounds`, so `beta_emp` /
-    `beta_info` share one scale.
+    `normalise_q`: divide the emp Q-values by the single normaliser of
+    `leaf_q_bounds` -- the prior-weighted mean of the per-ell max leaf values,
+    saved as `q_norm_emp` -- so `beta_emp` / `beta_info` share one scale (info
+    values are already normalised by the empty prior's variance).
 
     The ell sample is drawn ONCE and reused across every history, alpha, horizon
     and cost -- common random numbers, so the resulting mi values are directly
@@ -1473,12 +1478,12 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                         termination_arm, horizon, cost, beta_emp)
                 args = args + ((beta_info, p_model, tie_tol) if target == 'model'
                                else (tie_tol,))
-                q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples)
+                q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples, ell_w0s)
                             if normalise_q else (None, None))
                 block = _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s, q_bounds)
                 if normalise_q:
                     for row in block:
-                        row['q_lo_info'], row['q_hi_info'] = q_bounds[1]
+                        row['q_norm_emp'] = q_bounds[0][1]
 
                 ## rooms: index the tuples, and carry each room's orbit size
                 if expt == 'rooms':
@@ -1516,45 +1521,43 @@ def _diag_ell_grid(target, emp_type, n_samples, log_ell_bounds, ell_prior):
                              log_ell_bounds=log_ell_bounds, prior=ell_prior)
 
 
-def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells,
+def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells, ell_w0s,
                   bounds_dir='useful_saves/diag/bounds'):
-    """Empirical (lo, hi) value bounds for the emp agent (one per ell) and the info agent.
+    """Value bounds for the emp agent (one shared normaliser) and the info agent (none).
 
-    The worst and best leaf value (`current_emp` / `current_info`) over every
-    canonical history of 0..n_trials pulls -- every belief state a diag Q can
-    reach, since its look-ahead stops at n_trials -- so Q-values, which are
-    expectations and maxes over these leaves, fall inside them.
+    For each ell, the best leaf value (`current_emp`) over every canonical history
+    of 0..n_trials pulls -- every belief state a diag Q can reach, since its
+    look-ahead stops at n_trials. The emp normaliser N is the average of these
+    maxes weighted by the ell prior `ell_w0s` (an array over `ells`, or the
+    {emp_type: weights} dict of `model_ell_grid`, whose types count equally), so
+    every ell's values map to v / N and `beta` means the same at every ell.
 
-    Cached in `bounds_dir`, one file per (task, alpha, cost) with a row per ell
-    plus one for info; ells not yet in the file are computed and added.
+    The info agent's leaf, 1 - Var(h) / Var(h_0), is already normalised by the
+    variance of the empty prior, so it gets no bounds.
 
-    Returns ((lo, hi) arrays over `ells`, (lo, hi) scalars) for `make_agent`'s `q_bounds`.
+    Cached in `bounds_dir`, one file per (task, alpha, cost) with a row per ell;
+    ells not yet in the file are computed and added.
+
+    Returns ((0, N), None) for `make_agent`'s `q_bounds`.
     """
     ells = np.asarray(ells, dtype=float)
     path = os.path.join(bounds_dir, f'{n_arms}arms_{n_outcomes}outcomes_{n_trials}trials_'
                                     f'alpha{float(alpha)}_cost{float(cost)}.csv')
     df = pd.read_csv(path) if os.path.exists(path) else pd.DataFrame(columns=['model', 'ell', 'lo', 'hi'])
 
-    ## which ells (and whether info) still need computing
+    ## which ells still need computing
     emp_df = df[df['model'] == 'emp']
     have = emp_df['ell'].to_numpy(dtype=float)
     todo = np.array([e for e in ells if not np.isclose(have, e, rtol=1e-9, atol=0).any()])
-    need_info = not (df['model'] == 'info').any()
 
-    if len(todo) or need_info:
+    if len(todo):
 
         ## leaf values of every history up to n_trials pulls (canonical_states stops one short)
         states = canonical_states(n_arms, n_outcomes, n_trials + 1)
-        new = []
-        if len(todo):
-            emp_agent = make_agent(n_arms, n_outcomes, alpha, todo, cost=cost)
-            V = np.stack([emp_agent.leaf_value(C) for (_, C, _, _, _) in states]) # (n_states, n_todo)
-            new.append(pd.DataFrame({'model': 'emp', 'ell': todo, 'lo': V.min(axis=0), 'hi': V.max(axis=0)}))
-        if need_info:
-            info_agent = make_agent(n_arms, n_outcomes, alpha, None, cost=cost)
-            V = np.array([info_agent.leaf_value(C)[0] for (_, C, _, _, _) in states])
-            new.append(pd.DataFrame({'model': ['info'], 'ell': [np.nan], 'lo': [V.min()], 'hi': [V.max()]}))
-        df = pd.concat([df] + new, ignore_index=True)
+        emp_agent = make_agent(n_arms, n_outcomes, alpha, todo, cost=cost)
+        V = np.stack([emp_agent.leaf_value(C) for (_, C, _, _, _) in states]) # (n_states, n_todo)
+        new = pd.DataFrame({'model': 'emp', 'ell': todo, 'lo': V.min(axis=0), 'hi': V.max(axis=0)})
+        df = pd.concat([df, new], ignore_index=True)
         os.makedirs(bounds_dir, exist_ok=True)
         df.to_csv(path, index=False)
         emp_df = df[df['model'] == 'emp']
@@ -1562,9 +1565,13 @@ def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells,
     ## look up each ell exactly
     have = emp_df['ell'].to_numpy(dtype=float)
     idx = [np.flatnonzero(np.isclose(have, e, rtol=1e-9, atol=0))[0] for e in ells]
-    emp_bounds = (emp_df['lo'].to_numpy(dtype=float)[idx], emp_df['hi'].to_numpy(dtype=float)[idx])
-    info = df[df['model'] == 'info'].iloc[0]
-    return emp_bounds, (float(info['lo']), float(info['hi']))
+    hi = emp_df['hi'].to_numpy(dtype=float)[idx]
+
+    ## prior-weighted average of the per-ell maxes
+    w = (np.mean([np.asarray(v, dtype=float) for v in ell_w0s.values()], axis=0)
+         if isinstance(ell_w0s, dict) else np.asarray(ell_w0s, dtype=float))
+    N = float(w @ hi / w.sum())
+    return (0.0, N), None
 
 
 def _emp_type_cols(emp_type, log_ell_bounds):
@@ -1789,7 +1796,7 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     rows = []
     for alpha in alphas:
         for cost in costs:
-            q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples)
+            q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples, ell_w0s)
                         if normalise_q else (None, None))
             emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost, q_bounds=q_bounds[0])
             info_agent = (make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost, q_bounds=q_bounds[1])
