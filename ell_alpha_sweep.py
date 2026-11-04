@@ -19,11 +19,20 @@ def main():
     parser.add_argument('--init_t', type=int, default=0)
     parser.add_argument('--costs', type=float, nargs='+',
                         default=[0])
+    parser.add_argument('--beta', type=float, default=1.0,
+                        help="Softmax inverse temperature, shared by the emp and info agents.")
+    parser.add_argument('--normalise_q', action='store_true',
+                        help="Normalise each agent's values onto [0, 1] with its best and worst leaf "
+                             "values over the task's histories (see `leaf_q_bounds`).")
 
     args = parser.parse_args()
 
     tag = ["noTermination", "Termination"][args.termination_arm]
     stem = f'useful_saves/sweep/{args.n_arms}arms_{args.n_outcomes}outcomes_{args.n_trials}trials_{tag}'
+    if args.normalise_q:
+        stem += '_normQ'
+    if args.beta != 1:
+        stem += f'_beta{args.beta}'
     max_emps_path = f'{stem}_max_emps.csv'
 
     ## run expt
@@ -38,6 +47,8 @@ def main():
     print(f'  alphas: {args.alphas}')
     print(f'  termination_arm: {args.termination_arm}')
     print(f'  costs: {args.costs}')
+    print(f'  beta: {args.beta}')
+    print(f'  normalise_q: {args.normalise_q}')
     print(f'  init_t: {args.init_t}')
     print(f'  n_jobs: {args.n_jobs}')
 
@@ -48,7 +59,9 @@ def main():
                                  termination_arm=args.termination_arm,
                                  n_ell_samples=args.n_ell_samples,
                                  costs=args.costs,
-                                    init_t=args.init_t
+                                    init_t=args.init_t,
+                                 beta=args.beta,
+                                 normalise_q=args.normalise_q
                                  )
 
     ## save
