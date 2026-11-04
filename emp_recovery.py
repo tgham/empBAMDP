@@ -29,6 +29,9 @@ def load_diag_histories(args, term):
     `greedy_design`), taken in the order they were chosen rather than ranked by
     `--diag_cols`.
 
+    `--normalise_q` reads the `diag_sweep.py --normalise_q` output instead, i.e.
+    trials scored with each agent's Q-values normalised onto [0, 1].
+
     Returns a list of histories, each `(((arm, outcome), count), ...)`, or for
     rooms a list of tuples of them.
     """
@@ -38,6 +41,8 @@ def load_diag_histories(args, term):
     if 'emp' not in args.agent_types:
         emp_types = [t for t in args.agent_types if t.startswith('emp')]
         path += '_' + '_'.join(emp_types)
+    if args.normalise_q:
+        path += '_normQ'
     path += f'_{args.top_n}greedy.csv' if args.diag_source == 'greedy' else '_diag.csv'
     df_diag = pd.read_csv(path)
 
@@ -158,6 +163,8 @@ def main():
                              "'greedy': the jointly diagnostic set of `diag_sweep.py --greedy`, in order.")
     parser.add_argument('--diag_cols', nargs='+', default=['mi_model'],
                         help='Diagnosticity columns to maximise jointly (Pareto layers) when picking preset histories.')
+    parser.add_argument('--normalise_q', action='store_true',
+                        help='Use the diagnostic trials of `diag_sweep.py --normalise_q` (preset histories only).')
     parser.add_argument('--top_n', type=int, default=None,
                         help='Number of distinct preset histories to pick, by Pareto rank; repeated cyclically '
                              'up to --n_rooms. Required for a single objective; with several, '
@@ -192,6 +199,8 @@ def main():
             stem += f'_{args.top_n}greedy'
         else:
             stem += f'_top{args.top_n or "front"}_{"-".join(args.diag_cols)}'
+        if args.normalise_q:
+            stem += '_normQ'
     stem += f'_{args.ell_prior}'
     if args.fit_alpha:
         stem += f'_fitAlpha'
@@ -216,6 +225,7 @@ def main():
         print(f'  - Agent types: {args.agent_types}')
         print(f'  - Preset histories: {args.preset_histories}')
         print(f'  - N subsequent trials: {args.n_subseq_trials}')
+        print(f'  - Normalised-Q diagnostic trials: {args.normalise_q}')
 
         ## load preset histories with the largest diagnosticity scores
         if args.preset_histories:

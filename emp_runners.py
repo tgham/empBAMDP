@@ -495,7 +495,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      horizons = None,
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50,
-                     costs=(0.0,),init_t=0):
+                     costs=(0.0,),init_t=0, normalise_q=False):
     """Q / softmax-prob curves over ell for canonical histories.
 
     - enumerate ALL canonical histories at all trials,
@@ -518,6 +518,10 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     is penalised by `c = k * (max achievable emp for this alpha, ell)`, paid
     recursively on every pull over the horizon (see `EmpAgent.Q`); the
     terminate action is free and the info-seeking columns stay cost-free.
+
+    `normalise_q`: every agent's values (Q and current_*) are mapped onto [0, 1]
+    with the leaf-value bounds of `leaf_q_bounds` for its own cost, so `beta`
+    means the same for emp at every ell and for info.
 
     Returns a long-format DataFrame with one row per (history_str, t, ell,
     agent), columns: alpha, Q_0, Q_1, ..., Q_terminate (if
@@ -555,9 +559,12 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     for alpha in alphas:
 
         ## create agents for this alpha: (emp for every sampled ell at once; info-seeker), for each cost
-        agents = {c: (make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost=c), # info-seeker 
-                      make_agent(n_arms, n_outcomes, alpha, sample_ells, termination_arm, cost=c)) # emp
-                  for c in {float(k) for k in costs} | {0.0}}
+        agents = {}
+        for c in {float(k) for k in costs} | {0.0}:
+            emp_bounds, info_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, c, sample_ells)
+                                       if normalise_q else (None, None))
+            agents[c] = (make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost=c, q_bounds=info_bounds), # info-seeker
+                         make_agent(n_arms, n_outcomes, alpha, sample_ells, termination_arm, cost=c, q_bounds=emp_bounds)) # emp
         
         ## plus cost-free ones for the *_cost_free columns
         info_agent_cost_free, emp_agent_cost_free = agents[0.0]
@@ -605,7 +612,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                             'horizon': horizon, 'history_str': history_str, 't': t, 'ell': e, 
                             'current_emp': current_emps[ei], 'current_info': current_info,
                             'current_emp_cost_free': current_emps_cost_free[ei], 'current_info_cost_free': current_info_cost_free,
-                            'cost': cost,
+                            'cost': cost, 'beta': beta, 'normalise_q': normalise_q,
                             'LML': LML,
                             'info_best_a': info_best_a}
                         for a in range(n_arms):
