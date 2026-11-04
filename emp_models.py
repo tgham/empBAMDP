@@ -129,13 +129,13 @@ class EmpAgent:
             self._Q[k] = Q
         return Q
 
-    def log_policy(self, counts, h, temp):
-        """(n_params, n_actions) log softmax(Q / temp)."""
+    def log_policy(self, counts, h, beta):
+        """(n_params, n_actions) log softmax(Q * beta)."""
         counts = np.asarray(counts, dtype=np.int64)
-        k = (counts.tobytes(), int(h), float(temp))
+        k = (counts.tobytes(), int(h), float(beta))
         logP = self._logP.get(k)
         if logP is None:
-            z = self.Q(counts, h) / temp
+            z = self.Q(counts, h) * beta
             logP = z - logsumexp(z, axis=1, keepdims=True)
             logP.flags.writeable = False
             self._logP[k] = logP
