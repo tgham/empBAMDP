@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--diag_grid', action='store_true',
                         help="Sweep the ells of diag_sweep.py's prior grid, built from the args below "
                              "and --n_ell_samples, instead of --ell_lo / --ell_hi.")
-    parser.add_argument('--target', type=str, default='ell', choices=['ell', 'model'])
+    parser.add_argument('--target', type=str, default='model', choices=['ell', 'model'])
     parser.add_argument('--ell_prior', type=str, default='lognormal', choices=['lognormal', 'loguniform'])
     parser.add_argument('--emp_type', type=str, nargs='+', default=['emp'],
                         choices=['emp', 'emp_lo', 'emp_1', 'emp_hi'])
