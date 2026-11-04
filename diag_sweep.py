@@ -22,9 +22,10 @@ def main():
     parser.add_argument('--n_ell_samples', type=int, default=200)
     parser.add_argument('--beta_emp', type=float, default=1.0)
     parser.add_argument('--beta_info', type=float, default=1.0)
-    parser.add_argument('--normalise_q', action='store_true',
-                        help="Divide emp values by the ell-prior-weighted mean of each ell's best leaf value over the "
-                             "task's histories (see `leaf_q_bounds`); info values are already normalised by the empty prior's variance.")
+    parser.add_argument('--normalise_q', nargs='?', const='prior', default=None, choices=['prior', 'analytic'],
+                        help="Normalise emp values (see `leaf_q_bounds`): 'prior' (the default when given bare) divides by the "
+                             "ell-prior-weighted mean of each ell's best leaf value over the task's histories; 'analytic' maps "
+                             "each ell onto [0, 1] with its analytic min and max. Info values are already normalised by the empty prior's variance.")
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--emp_type', type=str, nargs='+', default=['emp'],
                         choices=['emp', 'emp_lo', 'emp_1', 'emp_hi'],
@@ -71,7 +72,7 @@ def main():
     if args.emp_type != ['emp']:
         stem += '_' + '_'.join(args.emp_type)
     if args.normalise_q:
-        stem += '_normQ'
+        stem += '_normQ' + ('analytic' if args.normalise_q == 'analytic' else '')
     os.makedirs('useful_saves/diag', exist_ok=True)
 
     ## run expt

@@ -522,10 +522,11 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     recursively on every pull over the horizon (see `EmpAgent.Q`); the
     terminate action is free and the info-seeking columns stay cost-free.
 
-    `normalise_q`: emp values (Q and current_emp) are divided by the single
-    normaliser of `leaf_q_bounds` for its own cost -- the lognormal-prior-weighted
-    mean of the per-ell max leaf values -- so `beta` means the same at every ell.
-    Info values are already normalised by the empty prior's variance.
+    `normalise_q`: None, or a `leaf_q_bounds` mode for the emp values (Q and
+    current_emp), with its own cost. 'prior' divides by the single normaliser --
+    the prior-weighted mean of the per-ell max leaf values -- so `beta` means the
+    same at every ell; 'analytic' maps each ell onto [0, 1] with its own analytic
+    min and max. Info values are already normalised by the empty prior's variance.
 
     Returns a long-format DataFrame with one row per (history_str, t, ell,
     agent), columns: alpha, Q_0, Q_1, ..., Q_terminate (if
@@ -569,7 +570,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
         ## create agents for this alpha: (emp for every sampled ell at once; info-seeker), for each cost
         agents = {}
         for c in {float(k) for k in costs} | {0.0}:
-            emp_bounds, info_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, c, sample_ells, sample_w0s)
+            emp_bounds, info_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, c, sample_ells, sample_w0s, mode=normalise_q)
                                        if normalise_q else (None, None))
             agents[c] = (make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost=c, q_bounds=info_bounds), # info-seeker
                          make_agent(n_arms, n_outcomes, alpha, sample_ells, termination_arm, cost=c, q_bounds=emp_bounds)) # emp
@@ -1429,10 +1430,12 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     uniform over it (finite bounds only), as in parameter recovery (see
     `log_ell_prior`).
 
-    `normalise_q`: divide the emp Q-values by the single normaliser of
-    `leaf_q_bounds` -- the prior-weighted mean of the per-ell max leaf values,
-    saved as `q_norm_emp` -- so `beta_emp` / `beta_info` share one scale (info
-    values are already normalised by the empty prior's variance).
+    `normalise_q`: None, or a `leaf_q_bounds` mode for the emp Q-values, so
+    `beta_emp` / `beta_info` share one scale (info values are already normalised
+    by the empty prior's variance). 'prior' divides by the single normaliser --
+    the prior-weighted mean of the per-ell max leaf values, saved as
+    `q_norm_emp`; 'analytic' maps each ell onto [0, 1] with its own analytic
+    min and max.
 
     The ell sample is drawn ONCE and reused across every history, alpha, horizon
     and cost -- common random numbers, so the resulting mi values are directly
@@ -1482,10 +1485,11 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                         termination_arm, horizon, cost, beta_emp)
                 args = args + ((beta_info, p_model, tie_tol) if target == 'model'
                                else (tie_tol,))
-                q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples, ell_w0s)
+                q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples, ell_w0s,
+                                          mode=normalise_q)
                             if normalise_q else (None, None))
                 block = _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s, q_bounds)
-                if normalise_q:
+                if normalise_q == 'prior':
                     for row in block:
                         row['q_norm_emp'] = q_bounds[0][1]
 
@@ -1525,11 +1529,22 @@ def _diag_ell_grid(target, emp_type, n_samples, log_ell_bounds, ell_prior):
                              log_ell_bounds=log_ell_bounds, prior=ell_prior)
 
 
-def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells, ell_w0s,
+def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells, ell_w0s, mode='prior',
                   bounds_dir='useful_saves/diag/bounds'):
-    """Value bounds for the emp agent (one shared normaliser) and the info agent (none).
+    """Value bounds for the emp agent and the info agent (none), by `mode`.
 
-    For each ell, the best leaf value (`current_emp`) over every canonical history
+    mode='analytic': each ell's own range of Emp = sum_o m_o^ell, m_o = max_a p(o|a),
+    over all arm distributions (N arms, K outcomes, q, r = divmod(K, N)). Each
+    m_o is in [0, 1] and 1 <= sum_o m_o <= min(N, K), so
+      - ell < 1 (m^ell >= m, concave): min 1, all arms deterministic on one
+        outcome; max (N - r) q^(1-ell) + r (q+1)^(1-ell), each arm uniform over
+        its own share of the outcomes, the shares as equal as possible.
+      - ell >= 1 (m^ell <= m, convex): min K^(1-ell), all arms uniform;
+        max min(N, K), deterministic arms on distinct outcomes.
+    Values map to (v - lo) / (hi - lo); a Dirichlet posterior never reaches the
+    ends, and cost is ignored. Returns ((lo, hi) arrays over `ells`, None).
+
+    mode='prior': for each ell, the best leaf value (`current_emp`) over every canonical history
     of 0..n_trials pulls -- every belief state a diag Q can reach, since its
     look-ahead stops at n_trials. The emp normaliser N is the average of these
     maxes weighted by the ell prior `ell_w0s` (an array over `ells`, or the
@@ -1545,7 +1560,19 @@ def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells, ell_w0s,
     Returns ((0, N), None) for `make_agent`'s `q_bounds`.
     """
     ells = np.asarray(ells, dtype=float)
-    path = os.path.join(bounds_dir, f'{n_arms}arms_{n_outcomes}outcomes_{n_trials}trials_'
+
+    ## analytic per-ell range of sum_o (max_a p(o|a))^ell
+    if mode == 'analytic':
+        q, r = divmod(n_outcomes, n_arms)
+        with np.errstate(divide='ignore'): # 0 ** negative in np.where's unused branch
+            lo = np.where(ells < 1, 1.0, n_outcomes ** (1 - ells))
+            hi = np.where(ells < 1, (n_arms - r) * float(q) ** (1 - ells) + r * float(q + 1) ** (1 - ells),
+                          min(n_arms, n_outcomes))
+        return (lo, hi), None
+    if mode != 'prior':
+        raise ValueError(f"mode must be 'prior' or 'analytic', got {mode!r}")
+
+    path =os.path.join(bounds_dir, f'{n_arms}arms_{n_outcomes}outcomes_{n_trials}trials_'
                                     f'alpha{float(alpha)}_cost{float(cost)}.csv')
     df = pd.read_csv(path) if os.path.exists(path) else pd.DataFrame(columns=['model', 'ell', 'lo', 'hi'])
 
@@ -1800,7 +1827,8 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     rows = []
     for alpha in alphas:
         for cost in costs:
-            q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples, ell_w0s)
+            q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples, ell_w0s,
+                                      mode=normalise_q)
                         if normalise_q else (None, None))
             emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost, q_bounds=q_bounds[0])
             info_agent = (make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost, q_bounds=q_bounds[1])
