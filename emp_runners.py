@@ -495,12 +495,15 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                      horizons = None,
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50,
-                     costs=(0.0,),init_t=0, normalise_q=False):
+                     costs=(0.0,),init_t=0, normalise_q=False, ells=None, ell_w0s=None):
     """Q / softmax-prob curves over ell for canonical histories.
 
     - enumerate ALL canonical histories at all trials,
       sampling `n_ell_samples` log-spaced ells in `[ell_lo, ell_hi]` for each.
       Coarse but exhaustive picture of how Q/p vary with ell.
+      `ells` overrides that grid, e.g. with the diagnosticity's (`_diag_ell_grid`),
+      and `ell_w0s` its prior weights for the emp normaliser, so `normalise_q`
+      divides by the same N as the diagnosticity run.
 
     Each curve is produced by one belief agent (`EmpAgent`) per value in
     `alphas` (the agent knows its Dirichlet concentration); the `alpha` column
@@ -553,10 +556,11 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     costs = [costs] if np.isscalar(costs) else list(costs)
 
     ## sampled ells, shared by every history
-    sample_ells = np.logspace(np.log10(ell_lo), np.log10(ell_hi), n_ell_samples)
+    sample_ells = (np.logspace(np.log10(ell_lo), np.log10(ell_hi), n_ell_samples)
+                   if ells is None else np.asarray(ells, dtype=float))
 
     ## their lognormal prior weights, for the emp normaliser
-    sample_w0s = ell_weights(np.log(sample_ells), log_ell_prior()[0])
+    sample_w0s = ell_weights(np.log(sample_ells), log_ell_prior()[0]) if ell_w0s is None else ell_w0s
 
     ## big loop
     rows = []
