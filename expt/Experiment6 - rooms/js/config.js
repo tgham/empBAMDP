@@ -6,7 +6,7 @@
 // conditional on it), and the Prolific redirect at the end is suppressed.
 // MUST be false for any real run: it bypasses the comprehension gate.
 //----------------------------------------------------------------------------//
-const DEBUGGING = true;
+const DEBUGGING = false;
 
 //----------------------------------------------------------------------------//
 // Experiment parameters
