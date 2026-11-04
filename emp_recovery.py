@@ -189,7 +189,7 @@ def main():
             stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq_{args.diag_target}target'
     if args.preset_histories:
         if args.diag_source == 'greedy':
-            stem += f'_greedy{args.top_n}'
+            stem += f'_{args.top_n}greedy'
         else:
             stem += f'_top{args.top_n or "front"}_{"-".join(args.diag_cols)}'
     stem += f'_{args.ell_prior}'

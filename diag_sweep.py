@@ -43,7 +43,7 @@ def main():
     parser.add_argument('--greedy', type=int, default=None,
                         help="Greedily choose this many trials, each conditioned on the choices "
                              "on the trials before it, instead of scoring every trial under the prior.")
-    parser.add_argument('--max_branches', type=int, default=1024,
+    parser.add_argument('--max_branches', type=int, default=4096,
                         help="--greedy only: branches (possible choice sequences) kept exactly "
                              "before they are resampled.")
     parser.add_argument('--repeats', default='no_elements', choices=['allow', 'no_pairs', 'no_elements'],
@@ -65,6 +65,7 @@ def main():
         stem += f'_{args.n_AFC}AFC'
     stem += f'_{args.target}'
     stem += f'_{args.ell_prior}'
+    stem += f'_tempEmp{args.temp_emp}_tempInfo{args.temp_info}'
     if args.emp_type != ['emp']:
         stem += '_' + '_'.join(args.emp_type)
     os.makedirs('useful_saves/diag', exist_ok=True)
