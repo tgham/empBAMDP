@@ -22,6 +22,9 @@ def main():
     parser.add_argument('--n_ell_samples', type=int, default=200)
     parser.add_argument('--beta_emp', type=float, default=1.0)
     parser.add_argument('--beta_info', type=float, default=1.0)
+    parser.add_argument('--normalise_q', action='store_true',
+                        help="Normalise each agent's Q-values onto [0, 1] with its best and worst leaf "
+                             "values over the task's histories (see `leaf_q_bounds`; cached in useful_saves/diag/bounds/).")
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--emp_type', type=str, nargs='+', default=['emp'],
                         choices=['emp', 'emp_lo', 'emp_1', 'emp_hi'],
@@ -67,6 +70,8 @@ def main():
     stem += f'_{args.ell_prior}'
     if args.emp_type != ['emp']:
         stem += '_' + '_'.join(args.emp_type)
+    if args.normalise_q:
+        stem += '_normQ'
     os.makedirs('useful_saves/diag', exist_ok=True)
 
     ## run expt
@@ -92,6 +97,7 @@ def main():
             expt=args.expt, n_AFC=getattr(args, 'n_AFC', 2),
             n_room_samples=getattr(args, 'n_room_samples', None),
             repeats=args.repeats, max_branches=args.max_branches,
+            normalise_q=args.normalise_q,
         )
         out = f'{stem}_{args.greedy}greedy.csv'
         print(f'Saving df_greedy to {out}')
@@ -112,7 +118,8 @@ def main():
         target=args.target, beta_info=args.beta_info,
         p_model=None if args.p_model is None else tuple(args.p_model),
         expt=args.expt, n_AFC=getattr(args, 'n_AFC', 2),
-        n_room_samples=getattr(args, 'n_room_samples', None)
+        n_room_samples=getattr(args, 'n_room_samples', None),
+        normalise_q=args.normalise_q,
     )
 
     ## save

@@ -1,4 +1,5 @@
 import ast
+import os
 import itertools
 import numpy as np
 import pandas as pd
@@ -1329,20 +1330,21 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     return row
 
 
-def _diag_rows(target, states, args, ell_w0s=None):
+def _diag_rows(target, states, args, ell_w0s=None, q_bounds=(None, None)):
     """Diagnosticity rows for a batch of canonical histories, sharing one set of agents.
 
     The task unit of `enumerate_diagnosticity`, module-level so joblib can pickle
     it. `args` are the row function's arguments after the history. The agents are
     built here and dropped on return, so their memo is shared by every history in
     the batch but never outlives it, in the parent process or in a worker.
+    `q_bounds` = (emp bounds, info bounds) from `leaf_q_bounds`, or Nones.
     """
     ell_samples, n_arms, n_outcomes, _, alpha, termination_arm, _, cost = args[:8]
-    emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
+    emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost, q_bounds=q_bounds[0])
     if target == 'ell':
         return [_diag_emp_row(t, C, cc, hs, *args, agent=emp_agent, ell_w0s=ell_w0s)
                 for (t, C, cc, hs, _) in states]
-    info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost)
+    info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost, q_bounds=q_bounds[1])
     return [_diag_model_row(t, C, cc, hs, *args, emp_agent=emp_agent, info_agent=info_agent,
                             ell_w0s=ell_w0s)
             for (t, C, cc, hs, _) in states]
@@ -1355,7 +1357,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             emp_type='emp', log_ell_bounds=None, ell_prior='lognormal',
                             init_t=0, n_jobs=1,
                             target='ell', p_model=None, tie_tol=None,
-                            expt='arms', n_AFC=2, n_room_samples=None):
+                            expt='arms', n_AFC=2, n_room_samples=None, normalise_q=False):
     """Diagnosticity of every canonical history, for one of two targets.
 
     Mirrors `enumerate_curves`: the same canonical-history enumeration, the same
@@ -1412,6 +1414,10 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     uniform over it (finite bounds only), as in parameter recovery (see
     `log_ell_prior`).
 
+    `normalise_q`: map each agent's Q-values onto [0, 1] with the per-ell (emp)
+    and global (info) leaf-value bounds of `leaf_q_bounds`, so `beta_emp` /
+    `beta_info` share one scale.
+
     The ell sample is drawn ONCE and reused across every history, alpha, horizon
     and cost -- common random numbers, so the resulting mi values are directly
     comparable between histories, which is the point of the score.
@@ -1460,7 +1466,12 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                         termination_arm, horizon, cost, beta_emp)
                 args = args + ((beta_info, p_model, tie_tol) if target == 'model'
                                else (tie_tol,))
-                block = _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s)
+                q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples)
+                            if normalise_q else (None, None))
+                block = _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s, q_bounds)
+                if normalise_q:
+                    for row in block:
+                        row['q_lo_info'], row['q_hi_info'] = q_bounds[1]
 
                 ## rooms: index the tuples, and carry each room's orbit size
                 if expt == 'rooms':
@@ -1474,6 +1485,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     df['target'] = target
     df['expt'] = expt
     df['ell_prior'] = ell_prior
+    df['normalise_q'] = normalise_q
     for k, v in _emp_type_cols(emp_type, log_ell_bounds).items():
         df[k] = v
     if ell_prior == 'lognormal':
@@ -1495,6 +1507,57 @@ def _diag_ell_grid(target, emp_type, n_samples, log_ell_bounds, ell_prior):
         raise ValueError(f"target='ell' takes a single emp_type, got {emp_type!r}")
     return ell_prior_samples(n_samples, emp_type=emp_types[0],
                              log_ell_bounds=log_ell_bounds, prior=ell_prior)
+
+
+def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells,
+                  bounds_dir='useful_saves/diag/bounds'):
+    """Empirical (lo, hi) value bounds for the emp agent (one per ell) and the info agent.
+
+    The worst and best leaf value (`current_emp` / `current_info`) over every
+    canonical history of 0..n_trials pulls -- every belief state a diag Q can
+    reach, since its look-ahead stops at n_trials -- so Q-values, which are
+    expectations and maxes over these leaves, fall inside them.
+
+    Cached in `bounds_dir`, one file per (task, alpha, cost) with a row per ell
+    plus one for info; ells not yet in the file are computed and added.
+
+    Returns ((lo, hi) arrays over `ells`, (lo, hi) scalars) for `make_agent`'s `q_bounds`.
+    """
+    ells = np.asarray(ells, dtype=float)
+    path = os.path.join(bounds_dir, f'{n_arms}arms_{n_outcomes}outcomes_{n_trials}trials_'
+                                    f'alpha{float(alpha)}_cost{float(cost)}.csv')
+    df = pd.read_csv(path) if os.path.exists(path) else pd.DataFrame(columns=['model', 'ell', 'lo', 'hi'])
+
+    ## which ells (and whether info) still need computing
+    emp_df = df[df['model'] == 'emp']
+    have = emp_df['ell'].to_numpy(dtype=float)
+    todo = np.array([e for e in ells if not np.isclose(have, e, rtol=1e-9, atol=0).any()])
+    need_info = not (df['model'] == 'info').any()
+
+    if len(todo) or need_info:
+
+        ## leaf values of every history up to n_trials pulls (canonical_states stops one short)
+        states = canonical_states(n_arms, n_outcomes, n_trials + 1)
+        new = []
+        if len(todo):
+            emp_agent = make_agent(n_arms, n_outcomes, alpha, todo, cost=cost)
+            V = np.stack([emp_agent.leaf_value(C) for (_, C, _, _, _) in states]) # (n_states, n_todo)
+            new.append(pd.DataFrame({'model': 'emp', 'ell': todo, 'lo': V.min(axis=0), 'hi': V.max(axis=0)}))
+        if need_info:
+            info_agent = make_agent(n_arms, n_outcomes, alpha, None, cost=cost)
+            V = np.array([info_agent.leaf_value(C)[0] for (_, C, _, _, _) in states])
+            new.append(pd.DataFrame({'model': ['info'], 'ell': [np.nan], 'lo': [V.min()], 'hi': [V.max()]}))
+        df = pd.concat([df] + new, ignore_index=True)
+        os.makedirs(bounds_dir, exist_ok=True)
+        df.to_csv(path, index=False)
+        emp_df = df[df['model'] == 'emp']
+
+    ## look up each ell exactly
+    have = emp_df['ell'].to_numpy(dtype=float)
+    idx = [np.flatnonzero(np.isclose(have, e, rtol=1e-9, atol=0))[0] for e in ells]
+    emp_bounds = (emp_df['lo'].to_numpy(dtype=float)[idx], emp_df['hi'].to_numpy(dtype=float)[idx])
+    info = df[df['model'] == 'info'].iloc[0]
+    return emp_bounds, (float(info['lo']), float(info['hi']))
 
 
 def _emp_type_cols(emp_type, log_ell_bounds):
@@ -1530,16 +1593,16 @@ def _room_tuples(states, n_AFC, n_room_samples=None, seed=None):
     return [(ts, np.stack(Cs), ccs, hss, os_) for (ts, Cs, ccs, hss, os_) in tuples]
 
 
-def _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s=None):
+def _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s=None, q_bounds=(None, None)):
     """`_diag_rows` over `states`, serially or in `n_jobs` parallel batches, in the order of `states`."""
     if n_jobs == 1:
-        return _diag_rows(target, tqdm(states, desc=desc), args, ell_w0s)
+        return _diag_rows(target, tqdm(states, desc=desc), args, ell_w0s, q_bounds)
 
     ## several batches per worker, interleaved so each mixes early (deep) and late histories
     n_batches = min(len(states), 4 * effective_n_jobs(n_jobs))
     with tqdm_joblib(tqdm(total=n_batches, desc=desc)):
         batch_rows = Parallel(n_jobs=n_jobs)(
-            delayed(_diag_rows)(target, states[b::n_batches], args, ell_w0s)
+            delayed(_diag_rows)(target, states[b::n_batches], args, ell_w0s, q_bounds)
             for b in range(n_batches)
         )
 
@@ -1614,7 +1677,7 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                   emp_type='emp', log_ell_bounds=None, ell_prior='lognormal',
                   init_t=0, target='ell', p_model=None,
                   expt='arms', n_AFC=2, n_room_samples=None,
-                  repeats='no_elements', max_branches=1024):
+                  repeats='no_elements', max_branches=1024, normalise_q=False):
     """Greedily choose `n_select` trials that are jointly diagnostic.
 
     `enumerate_diagnosticity` scores each trial under the prior alone. Here the
@@ -1719,8 +1782,11 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     rows = []
     for alpha in alphas:
         for cost in costs:
-            emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
-            info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost) if target == 'model' else None
+            q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples)
+                        if normalise_q else (None, None))
+            emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost, q_bounds=q_bounds[0])
+            info_agent = (make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost, q_bounds=q_bounds[1])
+                          if target == 'model' else None)
 
             ### p(a|h,theta) for every candidate. calculate once, because it does not depend on the choices
 
@@ -1844,6 +1910,7 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     df['target'] = target
     df['expt'] = expt
     df['ell_prior'] = ell_prior
+    df['normalise_q'] = normalise_q
     for k, v in _emp_type_cols(emp_type, log_ell_bounds).items():
         df[k] = v
     if ell_prior == 'lognormal':

@@ -37,7 +37,7 @@ class EmpAgent:
 
     n_params = 1
 
-    def __init__(self, n_arms, n_outcomes, alpha, termination_arm=False, cost=0.0):
+    def __init__(self, n_arms, n_outcomes, alpha, termination_arm=False, cost=0.0, q_bounds=None):
         self.n_arms = n_arms
         self.n_outcomes = n_outcomes
         self.termination_arm = bool(termination_arm)
@@ -49,6 +49,10 @@ class EmpAgent:
         ## symmetric Dirichlet concentration
         self.alpha = float(alpha)
 
+        ## optional (lo, hi) range mapping leaf values (and so every V and Q) to (v - lo) / (hi - lo);
+        ## each bound a scalar or one per param (e.g. per ell)
+        self.q_bounds = None if q_bounds is None else tuple(np.asarray(b, dtype=float) for b in q_bounds)
+
         self.clear_cache()
 
     def clear_cache(self):
@@ -57,6 +61,14 @@ class EmpAgent:
     def leaf_value(self, counts):
         """(n_params,) value of ending in belief state `counts`."""
         raise NotImplementedError
+
+    def _normalise(self, v):
+        """Map a leaf value onto `q_bounds`. V and Q are expectations and maxes over
+        leaves, which commute with this positive affine map, so they are normalised too."""
+        if self.q_bounds is None:
+            return v
+        lo, hi = self.q_bounds
+        return (v - lo) / (hi - lo)
 
     ## ---- belief model -------------------------------------------------
     def marginal_likelihood(self, counts):
@@ -150,8 +162,8 @@ class EmpowermentAgent(EmpAgent):
     max over actions do -- so the whole grid is solved in one traversal.
     """
 
-    def __init__(self, n_arms, n_outcomes, alpha, ell, termination_arm=False, cost=0.0):
-        super().__init__(n_arms, n_outcomes, alpha, termination_arm, cost=cost)
+    def __init__(self, n_arms, n_outcomes, alpha, ell, termination_arm=False, cost=0.0, q_bounds=None):
+        super().__init__(n_arms, n_outcomes, alpha, termination_arm, cost=cost, q_bounds=q_bounds)
         self.ells = np.atleast_1d(np.asarray(ell, dtype=float)) # ensures 1D array, even if scalar
         self.n_params = len(self.ells)
 
@@ -172,7 +184,7 @@ class EmpowermentAgent(EmpAgent):
         # emp /= self._emp_norm
 
         ## cost is determined by number of pulls taken already - i.e. reachable reward enters into expectation calculation
-        return emp * (1 - counts.sum() * self.cost)
+        return self._normalise(emp * (1 - counts.sum() * self.cost))
 
 
 class InfoSeekingAgent(EmpAgent):
@@ -183,8 +195,8 @@ class InfoSeekingAgent(EmpAgent):
     flat-prior root. HIGHER IS BETTER. Not parameterised by ell, so n_params = 1.
     """
 
-    def __init__(self, n_arms, n_outcomes, alpha, termination_arm=False, cost=0.0):
-        super().__init__(n_arms, n_outcomes, alpha, termination_arm, cost=cost)
+    def __init__(self, n_arms, n_outcomes, alpha, termination_arm=False, cost=0.0, q_bounds=None):
+        super().__init__(n_arms, n_outcomes, alpha, termination_arm, cost=cost, q_bounds=q_bounds)
 
         ## define MSE(h_0) - i.e. the posterior variance at root
         self._var_norm = self._var(np.zeros((self.n_arms, self.n_outcomes))).sum()
@@ -201,11 +213,12 @@ class InfoSeekingAgent(EmpAgent):
         var = 1 - (self._var(counts).sum() / self._var_norm)
 
         ## apply cost
-        return np.array([var * (1 - counts.sum() * self.cost)])
+        return self._normalise(np.array([var * (1 - counts.sum() * self.cost)]))
 
 
-def make_agent(n_arms, n_outcomes, alpha, ell=None, termination_arm=False, cost=0.0):
-    """A fresh EmpowermentAgent for `ell` (scalar or grid), or an InfoSeekingAgent if ell is None."""
+def make_agent(n_arms, n_outcomes, alpha, ell=None, termination_arm=False, cost=0.0, q_bounds=None):
+    """A fresh EmpowermentAgent for `ell` (scalar or grid), or an InfoSeekingAgent if ell is None.
+    `q_bounds` = (lo, hi) optionally normalises its values (see `EmpAgent._normalise`)."""
     if ell is None:
-        return InfoSeekingAgent(n_arms, n_outcomes, alpha, termination_arm=termination_arm, cost=cost)
-    return EmpowermentAgent(n_arms, n_outcomes, alpha, ell=ell, termination_arm=termination_arm, cost=cost)
+        return InfoSeekingAgent(n_arms, n_outcomes, alpha, termination_arm=termination_arm, cost=cost, q_bounds=q_bounds)
+    return EmpowermentAgent(n_arms, n_outcomes, alpha, ell=ell, termination_arm=termination_arm, cost=cost, q_bounds=q_bounds)
