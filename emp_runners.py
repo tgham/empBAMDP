@@ -1,4 +1,5 @@
 import ast
+import os
 import itertools
 import numpy as np
 import pandas as pd
@@ -16,7 +17,7 @@ from emp_models import make_agent
 warnings.filterwarnings('ignore')
 
 
-def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
+def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, beta = 1, verbose=False):
     """Simulate an empowerment-bandit agent yoked to participants' actual trial
     sequences. Returns a tidy DataFrame, one row per (subject_id, room, trial),
     tagged with `ell`, so results from several ell-agents can be pd.concat'd.
@@ -39,7 +40,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
 
     # for pid in df_ppt['subject_id'].unique():
     if verbose:
-        print(f'Running run_emp for ell={ell}, horizon={horizon}, cost={cost}, termination_arm={termination_arm}, init_t={init_t}, temp={temp}')
+        print(f'Running run_emp for ell={ell}, horizon={horizon}, cost={cost}, termination_arm={termination_arm}, init_t={init_t}, beta={beta}')
         pbar = tqdm(range(len(df_ppt['subject_id'].unique())), desc='Subjects')
     for p in range(len(df_ppt['subject_id'].unique())):
         pid = df_ppt['subject_id'].unique()[p]
@@ -99,7 +100,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
                     max_Q = np.nanmax(Q)
                     best_arms = np.where(Q == max_Q)[0]
                     action = int(np.random.choice(best_arms)) if len(best_arms) > 1 else int(best_arms[0])
-                    probs = _softmax(Q/temp)
+                    probs = _softmax(Q * beta)
 
                     ## calculate current emp
                     current_emp = agent.leaf_value(counts)[0]
@@ -273,7 +274,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, temp = 1, verbose=False):
     
 
 ## generate a single synthetic dataset, i.e. an ell agent acting in its own emp bandit env
-def gen_arms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, termination_arm=True, diag_histories=None, n_subseq_trials=1, temp=1.0, greedy =False, seed=None, agent_alpha=None):
+def gen_arms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, termination_arm=True, diag_histories=None, n_subseq_trials=1, beta=1.0, greedy =False, seed=None, agent_alpha=None):
     """Generate synthetic data from an agent in its own emp bandit env.
 
     `alpha` is the Dirichlet concentration the bandits are drawn from;
@@ -338,7 +339,7 @@ def gen_arms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, t
             ## compute Q 
             h = (n_trials - t) if horizon is None else min(horizon, n_trials - t)
             Q = agent.Q(counts, h)[0]
-            probs = _softmax(Q/temp)
+            probs = _softmax(Q*beta)
 
             ## select action
             if greedy:
@@ -412,18 +413,18 @@ def gen_arms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon, t
     ## add info to dict about params
     sim_out['gen_ell'] = [ell] * len(sim_out['room'])
     sim_out['gen_horizon'] = [horizon] * len(sim_out['room'])
-    sim_out['gen_temp'] = [temp] * len(sim_out['room'])
+    sim_out['gen_beta'] = [beta] * len(sim_out['room'])
     sim_out['gen_agent_alpha'] = [agent_alpha] * len(sim_out['room'])
 
     return sim_out
 
 
 ## generate a single synthetic dataset for the rooms task, i.e. an ell agent choosing between n_AFC belief states
-def gen_rooms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon=None, termination_arm=True, diag_histories=None, temp=1.0, greedy=False, seed=None, agent_alpha=None):
+def gen_rooms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon=None, termination_arm=True, diag_histories=None, beta=1.0, greedy=False, seed=None, agent_alpha=None):
     """Generate synthetic data from an agent choosing between preset belief states.
 
     Each of the `n_rooms` choices is between one tuple of `diag_histories`, with
-    p(r|ell) = softmax_r(Emp_ell(h_r) / temp) -- the leaf value of each room's
+    p(r|ell) = softmax_r(Emp_ell(h_r) * beta) -- the leaf value of each room's
     belief state, as in `_diag_model_row`. `n_trials` and `horizon` are unused,
     and kept only so the signature mirrors `gen_arms`. `agent_alpha` is the
     concentration the agent infers with, as in `gen_arms` (default: `alpha`).
@@ -453,7 +454,7 @@ def gen_rooms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon=N
 
         ## compute Q = emp of each room's belief state
         Q = np.array([agent.leaf_value(C)[0] for C in counts_array])
-        probs = _softmax(Q/temp)
+        probs = _softmax(Q*beta)
 
         ## select room
         if greedy:
@@ -483,14 +484,14 @@ def gen_rooms(n_arms, n_outcomes, n_trials, n_rooms, alpha, ell, cost, horizon=N
     ## add info to dict about params
     sim_out['gen_ell'] = [ell] * len(sim_out['room'])
     sim_out['gen_horizon'] = [horizon] * len(sim_out['room'])
-    sim_out['gen_temp'] = [temp] * len(sim_out['room'])
+    sim_out['gen_beta'] = [beta] * len(sim_out['room'])
     sim_out['gen_agent_alpha'] = [agent_alpha] * len(sim_out['room'])
 
     return sim_out
 
 
 def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
-                     termination_arm=True, temp=1,
+                     termination_arm=True, beta=1,
                      horizons = None,
                      ell_lo=0.001, ell_hi=100,
                      n_ell_samples=50,
@@ -593,13 +594,13 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
                     ## info-seeking agent (not parameterised by ell)
                     Q_info = info_agent.Q(counts_array, h_remaining)[0]
                     info_best_a = int(np.argmax(Q_info))
-                    info_probs = _softmax(Q_info / temp)
+                    info_probs = _softmax(Q_info * beta)
 
                     ## save data
                     for ei in range(len(sample_ells)):
                         e = sample_ells[ei]
                         Q = Qs[ei]
-                        probs = _softmax(Q / temp)
+                        probs = _softmax(Q * beta)
                         row = {'alpha': alpha,
                             'horizon': horizon, 'history_str': history_str, 't': t, 'ell': e, 
                             'current_emp': current_emps[ei], 'current_info': current_info,
@@ -725,7 +726,7 @@ def _top2_gap(V):
     """Top-two gap along the last axis of an (..., A) array, as a flat array.
 
     The margin behind every hard argmax in this module. In Q units it is what
-    `temp` divides to set the choice odds; in probability units log(top1/top2)
+    `beta` multiplies to set the choice odds; in probability units log(top1/top2)
     plays the same role. Zero when there is only one action.
     """
     V = np.atleast_2d(np.asarray(V, dtype=float))
@@ -765,7 +766,7 @@ def _mi_from_step(P, ell_w0s):
     return H_ell, H_ell_cond, mi, p_marg
 
 
-def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s=None):
+def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, beta, ell_w0s=None):
     """(H_ell, H_ell_cond, mi) from every (action, outcome) sequence that can follow h.
 
     The multi-step counterpart to `_mi_from_step`: how much the remaining
@@ -778,11 +779,11 @@ def _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s=
     as in `gen_arms`. Every sequence is enumerated, so time and memory grow as
     (n_arms * n_outcomes) ** h_remaining.
     """
-    log_seq_Ps = _log_seq_probs(agent, counts_array, t, n_trials, horizon, temp)
+    log_seq_Ps = _log_seq_probs(agent, counts_array, t, n_trials, horizon, beta)
     return _mi_from_log_seq(log_seq_Ps, ell_w0s)
 
 
-def _log_seq_probs(agent, counts_array, t, n_trials, horizon, temp):
+def _log_seq_probs(agent, counts_array, t, n_trials, horizon, beta):
     """log p(seq|h,ell) for every (action, outcome) sequence that can follow h: (n_seqs, n_ell).
 
     The policy half of `_mi_from_sequences`, split out so several priors over
@@ -806,7 +807,7 @@ def _log_seq_probs(agent, counts_array, t, n_trials, horizon, temp):
         for subseq_t, (at, ot) in enumerate(seq):
 
             ## log p(a|h,ell) for every ell (retrieved from the agent's memo)
-            logP = agent.log_policy(seq_counts, min(horizon, n_trials - t - subseq_t), temp)
+            logP = agent.log_policy(seq_counts, min(horizon, n_trials - t - subseq_t), beta)
             if log_seq_Ps is None:
                 log_seq_Ps = np.zeros((n_seqs, logP.shape[0]))
             log_seq_Ps[s] += logP[:, at]
@@ -860,7 +861,7 @@ def _mi_from_log_seq(log_seq_Ps, ell_w0s=None):
 
 def _diag_emp_row(t, counts_array, canon_counts, history_str,
                           ell_samples, n_arms, n_outcomes, n_trials, alpha,
-                          termination_arm, horizon, cost, temp,
+                          termination_arm, horizon, cost, beta,
                           tie_tol=None, agent=None, ell_w0s=None,
                           ):
     """Per-canonical-history diagnosticity row.
@@ -879,7 +880,7 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
     A permissive and a strict count bracket the truth:
 
       - `best_a_frac_{a}`     : fraction of ells for which a is AMONG the best,
-                                Q_a >= max_Q - tie_tol*temp. Ties credit every
+                                Q_a >= max_Q - tie_tol/beta. Ties credit every
                                 tied action, so this does NOT sum to 1 -- a sum
                                 above 1 is precisely the signature of ties, and
                                 two actions both reading ~1 means the ells are
@@ -888,15 +889,15 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
                                 other action within tie_tol. `tie_frac` collects
                                 the rest, so sum_a best_a_frac_dec_{a} + tie_frac
                                 = 1. Use this to select genuine ell-splits.
-      - `gap_*`               : the top-two Q gap per ell, raw and in temp units.
-                                gap/temp is the behaviourally meaningful scale --
-                                the winner beats the runner-up exp(gap/temp):1 in
+      - `gap_*`               : the top-two Q gap per ell, raw and scaled by beta.
+                                gap*beta is the behaviourally meaningful scale --
+                                the winner beats the runner-up exp(gap*beta):1 in
                                 a two-way softmax.
       - `p_best_mean`         : E_ell[max_a p(a|h,ell)], a soft decisiveness
                                 scalar (1/n_actions when every ell is
                                 indifferent, 1 when all are decisive).
 
-    `tie_tol` is in temp units; default log(3) ~ 1.0986, i.e. the winner must be
+    `tie_tol` is in log-odds (beta-scaled) units; default log(3) ~ 1.0986, i.e. the winner must be
     at least 3:1 over the runner-up to count as uniquely best. `tie_tol=0` gives
     exact ties only, recovering the old argmax count except that exactly-tied
     actions now share credit instead of going to the lowest index. Note `mi` is
@@ -906,7 +907,7 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
     ROOM SELECTION (`room_selection=True`): the choice is between rooms rather
     than arms. `counts_array` is then an (n_rooms, n_arms, n_outcomes) stack and
     `t`, `canon_counts`, `history_str` are per-room tuples. Each room is valued
-    by its leaf empowerment, p(r|h,ell) = softmax_r(Emp_ell(h_r) / temp), so the
+    by its leaf empowerment, p(r|h,ell) = softmax_r(Emp_ell(h_r) * beta), so the
     choice is always one step and `horizon` / `n_trials` are unused. The row
     carries per-room `t_{r}`, `history_str_{r}`, `LML_{r}`, `p_marg_{r}` and
     `best_room_frac[_dec]_{r}` (the `best_a_frac` diagnostics, over rooms),
@@ -952,10 +953,10 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
 
         ## I(A;ell|h), from p(a|h,ell) for each sampled ell, where a is either the next sample or the chosen room
         if not room_selection:
-            P = np.exp(agent.log_policy(counts_array, h_remaining, temp))
+            P = np.exp(agent.log_policy(counts_array, h_remaining, beta))
         else:
             ## softmax over the rooms, for each ell
-            P = _softmax(Qs / temp, axis=1)                 # (n_ell, n_AFC)
+            P = _softmax(Qs * beta, axis=1)                 # (n_ell, n_AFC)
 
         H_ell, H_ell_cond, mi, p_marg = _mi_from_step(P, ell_w0s)
 
@@ -963,23 +964,23 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
     else:
 
         ## I(seq;ell|h), exactly over every sequence of the remaining choices
-        H_ell, H_ell_cond, mi, p_marg = _mi_from_sequences(agent, counts_array, t, n_trials, horizon, temp, ell_w0s)
+        H_ell, H_ell_cond, mi, p_marg = _mi_from_sequences(agent, counts_array, t, n_trials, horizon, beta, ell_w0s)
 
     ### which action(s) does the diagnosticity comes from? 
-    # near_best = Qs >= Qs.max(axis=1, keepdims=True) - tie_tol * temp
+    # near_best = Qs >= Qs.max(axis=1, keepdims=True) - tie_tol / beta
     tol = Qs.max() * 1e-6 
     near_best = Qs >= Qs.max(axis=1, keepdims=True) - tol ## i.e. which actions are among the best
     decisive = near_best.sum(axis=1) == 1 ## i.e. is there just one best action
     frac = near_best.mean(axis=0)
     frac_dec = (near_best & decisive[:, None]).mean(axis=0)
 
-    ## how decisive is that choice? top-two Q gap per ell, in temp units.
+    ## how decisive is that choice? top-two Q gap per ell, scaled by beta.
     gap = _top2_gap(Qs)                                  # >= 0
-    gap_temp = gap / temp
+    gap_beta = gap * beta
 
     row = {
         'alpha': alpha,
-        'horizon': horizon, 'cost': cost, 'temp': temp,
+        'horizon': horizon, 'cost': cost, 'beta': beta,
         **({} if room_selection else {'t': t, 'history_str': history_str, 'history': canon_counts}),
         'H_ell': H_ell,
         'H_ell_cond': H_ell_cond,
@@ -993,8 +994,8 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
         'gap_mean': float(gap.mean()),
         'gap_median': float(np.median(gap)),
         'gap_min': float(gap.min()),
-        'gap_mean_temp': float(gap_temp.mean()),
-        'gap_median_temp': float(np.median(gap_temp)),
+        'gap_mean_beta': float(gap_beta.mean()),
+        'gap_median_beta': float(np.median(gap_beta)),
     }
 
     ## room selection: t, history and LML are per room, and the "actions" are the rooms
@@ -1024,8 +1025,8 @@ def _diag_emp_row(t, counts_array, canon_counts, history_str,
 
 def _diag_model_row(t, counts_array, canon_counts, history_str,
                     ell_samples, n_arms, n_outcomes, n_trials, alpha,
-                    termination_arm, horizon, cost, temp_emp,
-                    temp_info, p_model=None, tie_tol=None,
+                    termination_arm, horizon, cost, beta_emp,
+                    beta_info, p_model=None, tie_tol=None,
                     emp_agent=None, info_agent=None, ell_w0s=None):
     """Per-canonical-history MODEL diagnosticity I(A;M|h), M in {emp models..., info}.
 
@@ -1074,12 +1075,12 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
 
       - WITHIN each emp model, across its ells: `gap_*_{m}`, `tie_frac_{m}` and
         `best_a_frac[_dec]_{m}_{a}` -- the `_diag_emp_row` diagnostics for the
-        ell-split that `mi_{m}` scores. Q gaps here are divided by `temp`.
+        ell-split that `mi_{m}` scores. Q gaps here are scaled by `beta_emp`.
         As there, `best_a_frac_{m}_{a}` counts ells where a is AMONG the best
         (it does not sum to 1) and `_dec_` where it is uniquely best.
-      - WITHIN info: `gap_info` (raw) and `gap_info_temp` = gap/`temp_info`,
+      - WITHIN info: `gap_info` (raw) and `gap_info_beta` = gap*`beta_info`,
         which IS the log-odds of the info agent's top two actions; `info_tie`
-        flags gap_info_temp <= tie_tol, i.e. an info policy with no real
+        flags gap_info_beta <= tie_tol, i.e. an info policy with no real
         preference.
       - BETWEEN models: `best_a_{m}` / `best_a_info` / `models_agree` (all
         models want the same action) is the hard read, and it is the one to
@@ -1148,17 +1149,17 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
 
         ## empowerment agents: marginalise over ell
         if not room_selection:
-            P_emp = np.exp(emp_agent.log_policy(counts_array, h_remaining, temp_emp))
+            P_emp = np.exp(emp_agent.log_policy(counts_array, h_remaining, beta_emp))
         else:
             ## softmax over the rooms, for each ell
-            P_emp = _softmax(Qs_emp / temp_emp, axis=1)
+            P_emp = _softmax(Qs_emp * beta_emp, axis=1)
         emp_terms = [_mi_from_step(P_emp, w) for w in W] # i.e. we use the full ell grid, but each emp model has its own prior weights that appropriately 0 out the other models' ells
 
         ## info-seeking agent: not parameterised by ell, so a single policy
         if not room_selection:
-            P_info = np.exp(info_agent.log_policy(counts_array, h_remaining, temp_info))
+            P_info = np.exp(info_agent.log_policy(counts_array, h_remaining, beta_info))
         else:
-            P_info = _softmax(Q_info / temp_info)
+            P_info = _softmax(Q_info * beta_info)
             P_info = P_info[None, :] ## make it 2D for `_mi_from_step` to accept
 
         _, _, _, p_marg_info = _mi_from_step(P_info, None) ## don't need mi_info - trivially 0, because no ell-dependence
@@ -1168,11 +1169,11 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     else:
 
         ## emp terms
-        log_seq_emp = _log_seq_probs(emp_agent, counts_array, t, n_trials, horizon, temp_emp)
+        log_seq_emp = _log_seq_probs(emp_agent, counts_array, t, n_trials, horizon, beta_emp)
         emp_terms = [_mi_from_log_seq(log_seq_emp, w) for w in W]
 
         ## info-seeker terms
-        _, _, _, p_marg_info = _mi_from_sequences(info_agent, counts_array, t, n_trials, horizon, temp_info, None)
+        _, _, _, p_marg_info = _mi_from_sequences(info_agent, counts_array, t, n_trials, horizon, beta_info, None)
 
     mi_ell = [mi for (_, _, mi, _) in emp_terms]                                 # I(A;ell|h,m), per emp model
     p_marg_all = np.stack([p for (_, _, _, p) in emp_terms] + [p_marg_info], axis=0)   # p(a|h,m): (M, A) - i.e. the marginalised policy for each model, including info
@@ -1186,17 +1187,17 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     within_emp = {}
     for m, w in zip(emp_names, W):
         Qs_m = Qs_emp[w > 0]
-        near_best = Qs_m >= Qs_m.max(axis=1, keepdims=True) - tie_tol * temp_emp
+        near_best = Qs_m >= Qs_m.max(axis=1, keepdims=True) - tie_tol / beta_emp
         decisive = near_best.sum(axis=1) == 1
         within_emp[m] = dict(frac=near_best.mean(axis=0),
                              frac_dec=(near_best & decisive[:, None]).mean(axis=0),
                              tie_frac=float(1.0 - decisive.mean()),
                              gap=_top2_gap(Qs_m))
 
-    ## within info: one policy, so gap/temp_info IS its top-two log-odds
+    ## within info: one policy, so gap*beta_info IS its top-two log-odds
     gap_info = float(_top2_gap(Q_info)[0])
-    gap_info_temp = gap_info / temp_info
-    info_tie = bool(gap_info_temp <= tie_tol)
+    gap_info_beta = gap_info * beta_info
+    info_tie = bool(gap_info_beta <= tie_tol)
 
     ## between models: probability space, the only common currency
     best_a = {m: int(np.argmax(p_marg_all[k])) for k, m in enumerate(models)}
@@ -1263,7 +1264,7 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
 
     row = {
         'alpha': alpha,
-        'horizon': horizon, 'cost': cost, 'temp_emp': temp_emp, 'temp_info': temp_info,
+        'horizon': horizon, 'cost': cost, 'beta_emp': beta_emp, 'beta_info': beta_info,
         **({} if room_selection else {'t': t, 'history_str': history_str, 'history': canon_counts}),
         'target': 'model',
         **{f'p_model_{m}': p_m[k] for k, m in enumerate(models)},
@@ -1285,11 +1286,11 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
         row[f'gap_mean_{m}'] = float(d['gap'].mean())
         row[f'gap_median_{m}'] = float(np.median(d['gap']))
         row[f'gap_min_{m}'] = float(d['gap'].min())
-        row[f'gap_mean_temp_{m}'] = float(d['gap'].mean() / temp_emp)
-        row[f'gap_median_temp_{m}'] = float(np.median(d['gap']) / temp_emp)
+        row[f'gap_mean_beta_{m}'] = float(d['gap'].mean() * beta_emp)
+        row[f'gap_median_beta_{m}'] = float(np.median(d['gap']) * beta_emp)
     ## -- within info
     row['gap_info'] = gap_info
-    row['gap_info_temp'] = gap_info_temp
+    row['gap_info_beta'] = gap_info_beta
     row['info_tie'] = info_tie
     ## -- between models
     for m in models:
@@ -1329,33 +1330,34 @@ def _diag_model_row(t, counts_array, canon_counts, history_str,
     return row
 
 
-def _diag_rows(target, states, args, ell_w0s=None):
+def _diag_rows(target, states, args, ell_w0s=None, q_bounds=(None, None)):
     """Diagnosticity rows for a batch of canonical histories, sharing one set of agents.
 
     The task unit of `enumerate_diagnosticity`, module-level so joblib can pickle
     it. `args` are the row function's arguments after the history. The agents are
     built here and dropped on return, so their memo is shared by every history in
     the batch but never outlives it, in the parent process or in a worker.
+    `q_bounds` = (emp bounds, info bounds) from `leaf_q_bounds`, or Nones.
     """
     ell_samples, n_arms, n_outcomes, _, alpha, termination_arm, _, cost = args[:8]
-    emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
+    emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost, q_bounds=q_bounds[0])
     if target == 'ell':
         return [_diag_emp_row(t, C, cc, hs, *args, agent=emp_agent, ell_w0s=ell_w0s)
                 for (t, C, cc, hs, _) in states]
-    info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost)
+    info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost, q_bounds=q_bounds[1])
     return [_diag_model_row(t, C, cc, hs, *args, emp_agent=emp_agent, info_agent=info_agent,
                             ell_w0s=ell_w0s)
             for (t, C, cc, hs, _) in states]
 
 
 def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
-                            termination_arm=True, temp_emp=1.0, temp_info=1.0,
+                            termination_arm=True, beta_emp=1.0, beta_info=1.0,
                             horizons=None, costs=(0.0,),
                             n_ell_samples=200, seed=None,
                             emp_type='emp', log_ell_bounds=None, ell_prior='lognormal',
                             init_t=0, n_jobs=1,
                             target='ell', p_model=None, tie_tol=None,
-                            expt='arms', n_AFC=2, n_room_samples=None):
+                            expt='arms', n_AFC=2, n_room_samples=None, normalise_q=False):
     """Diagnosticity of every canonical history, for one of two targets.
 
     Mirrors `enumerate_curves`: the same canonical-history enumeration, the same
@@ -1367,12 +1369,12 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     `expt` selects WHAT the agent chooses between:
       - 'arms'  (default): the next action within one history, as above.
       - 'rooms': a room, from `n_AFC` distinct canonical histories, with
-                p(r|h,ell) = softmax_r(Emp_ell(h_r) / temp_emp) -- the leaf
+                p(r|h,ell) = softmax_r(Emp_ell(h_r) * beta_emp) -- the leaf
                 empowerment of each room's belief state (see `_diag_emp_row`,
                 ROOM SELECTION). One step by construction, so `horizons` is
                 ignored (the `horizon` column reads 0). For target='model' the
                 info agent likewise values each room by its leaf, with
-                softmax_r(Info(h_r) / temp_info). `n_room_samples=None` (default) enumerates every
+                softmax_r(Info(h_r) * beta_info). `n_room_samples=None` (default) enumerates every
                 unordered tuple of histories once -- quadratic in the number of
                 histories for pairs, so keep n_trials small; an int instead
                 draws that many tuples uniformly, with replacement across
@@ -1383,7 +1385,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
 
     `target` selects WHAT the action is diagnostic OF:
       - 'ell'   (default): I(A;ell|h) -- which ell, within the empowerment model
-                (`_diag_emp_row`). Takes the extra `tie_tol` (in temp units,
+                (`_diag_emp_row`). Takes the extra `tie_tol` (in log-odds (beta-scaled) units,
                 default log(3)): how far below the top Q an action may sit and
                 still count as one of the best. `best_a_frac_{a}` counts ells
                 where a is among the best (ties credit every tied action, so it
@@ -1393,8 +1395,8 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                 would score a 1e-9 Q difference as a decisive win.
       - 'model':           I(A;M|h) with M in {emp, info} -- which model, with ell
                 marginalised out of the emp policy (`_diag_model_row`). Takes the
-                extra `temp_info` (info agent's softmax temperature, defaults to
-                `temp`) and `p_model` (prior over the models; None is uniform).
+                extra `beta_info` (info agent's softmax temperature, defaults to
+                `beta_emp`) and `p_model` (prior over the models; None is uniform).
                 `emp_type` may here be a tuple, e.g. ('emp_lo', 'emp_1',
                 'emp_hi'), splitting emp into one model per type, so M in
                 {emp_lo, emp_1, emp_hi, info}; `p_model` then gives one prior per
@@ -1411,6 +1413,10 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     'lognormal' is log ell ~ N(LOG_ELL_PRIOR) truncated to the slice, 'loguniform'
     uniform over it (finite bounds only), as in parameter recovery (see
     `log_ell_prior`).
+
+    `normalise_q`: map each agent's Q-values onto [0, 1] with the per-ell (emp)
+    and global (info) leaf-value bounds of `leaf_q_bounds`, so `beta_emp` /
+    `beta_info` share one scale.
 
     The ell sample is drawn ONCE and reused across every history, alpha, horizon
     and cost -- common random numbers, so the resulting mi values are directly
@@ -1457,10 +1463,15 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                 desc = (f"Diagnosticity[{target}, {expt}] (alpha={alpha}, "
                         f"h={horizon}, cost={cost})")
                 args = (ell_samples, n_arms, n_outcomes, n_trials, alpha,
-                        termination_arm, horizon, cost, temp_emp)
-                args = args + ((temp_info, p_model, tie_tol) if target == 'model'
+                        termination_arm, horizon, cost, beta_emp)
+                args = args + ((beta_info, p_model, tie_tol) if target == 'model'
                                else (tie_tol,))
-                block = _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s)
+                q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples)
+                            if normalise_q else (None, None))
+                block = _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s, q_bounds)
+                if normalise_q:
+                    for row in block:
+                        row['q_lo_info'], row['q_hi_info'] = q_bounds[1]
 
                 ## rooms: index the tuples, and carry each room's orbit size
                 if expt == 'rooms':
@@ -1474,6 +1485,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     df['target'] = target
     df['expt'] = expt
     df['ell_prior'] = ell_prior
+    df['normalise_q'] = normalise_q
     for k, v in _emp_type_cols(emp_type, log_ell_bounds).items():
         df[k] = v
     if ell_prior == 'lognormal':
@@ -1495,6 +1507,57 @@ def _diag_ell_grid(target, emp_type, n_samples, log_ell_bounds, ell_prior):
         raise ValueError(f"target='ell' takes a single emp_type, got {emp_type!r}")
     return ell_prior_samples(n_samples, emp_type=emp_types[0],
                              log_ell_bounds=log_ell_bounds, prior=ell_prior)
+
+
+def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells,
+                  bounds_dir='useful_saves/diag/bounds'):
+    """Empirical (lo, hi) value bounds for the emp agent (one per ell) and the info agent.
+
+    The worst and best leaf value (`current_emp` / `current_info`) over every
+    canonical history of 0..n_trials pulls -- every belief state a diag Q can
+    reach, since its look-ahead stops at n_trials -- so Q-values, which are
+    expectations and maxes over these leaves, fall inside them.
+
+    Cached in `bounds_dir`, one file per (task, alpha, cost) with a row per ell
+    plus one for info; ells not yet in the file are computed and added.
+
+    Returns ((lo, hi) arrays over `ells`, (lo, hi) scalars) for `make_agent`'s `q_bounds`.
+    """
+    ells = np.asarray(ells, dtype=float)
+    path = os.path.join(bounds_dir, f'{n_arms}arms_{n_outcomes}outcomes_{n_trials}trials_'
+                                    f'alpha{float(alpha)}_cost{float(cost)}.csv')
+    df = pd.read_csv(path) if os.path.exists(path) else pd.DataFrame(columns=['model', 'ell', 'lo', 'hi'])
+
+    ## which ells (and whether info) still need computing
+    emp_df = df[df['model'] == 'emp']
+    have = emp_df['ell'].to_numpy(dtype=float)
+    todo = np.array([e for e in ells if not np.isclose(have, e, rtol=1e-9, atol=0).any()])
+    need_info = not (df['model'] == 'info').any()
+
+    if len(todo) or need_info:
+
+        ## leaf values of every history up to n_trials pulls (canonical_states stops one short)
+        states = canonical_states(n_arms, n_outcomes, n_trials + 1)
+        new = []
+        if len(todo):
+            emp_agent = make_agent(n_arms, n_outcomes, alpha, todo, cost=cost)
+            V = np.stack([emp_agent.leaf_value(C) for (_, C, _, _, _) in states]) # (n_states, n_todo)
+            new.append(pd.DataFrame({'model': 'emp', 'ell': todo, 'lo': V.min(axis=0), 'hi': V.max(axis=0)}))
+        if need_info:
+            info_agent = make_agent(n_arms, n_outcomes, alpha, None, cost=cost)
+            V = np.array([info_agent.leaf_value(C)[0] for (_, C, _, _, _) in states])
+            new.append(pd.DataFrame({'model': ['info'], 'ell': [np.nan], 'lo': [V.min()], 'hi': [V.max()]}))
+        df = pd.concat([df] + new, ignore_index=True)
+        os.makedirs(bounds_dir, exist_ok=True)
+        df.to_csv(path, index=False)
+        emp_df = df[df['model'] == 'emp']
+
+    ## look up each ell exactly
+    have = emp_df['ell'].to_numpy(dtype=float)
+    idx = [np.flatnonzero(np.isclose(have, e, rtol=1e-9, atol=0))[0] for e in ells]
+    emp_bounds = (emp_df['lo'].to_numpy(dtype=float)[idx], emp_df['hi'].to_numpy(dtype=float)[idx])
+    info = df[df['model'] == 'info'].iloc[0]
+    return emp_bounds, (float(info['lo']), float(info['hi']))
 
 
 def _emp_type_cols(emp_type, log_ell_bounds):
@@ -1530,16 +1593,16 @@ def _room_tuples(states, n_AFC, n_room_samples=None, seed=None):
     return [(ts, np.stack(Cs), ccs, hss, os_) for (ts, Cs, ccs, hss, os_) in tuples]
 
 
-def _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s=None):
+def _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s=None, q_bounds=(None, None)):
     """`_diag_rows` over `states`, serially or in `n_jobs` parallel batches, in the order of `states`."""
     if n_jobs == 1:
-        return _diag_rows(target, tqdm(states, desc=desc), args, ell_w0s)
+        return _diag_rows(target, tqdm(states, desc=desc), args, ell_w0s, q_bounds)
 
     ## several batches per worker, interleaved so each mixes early (deep) and late histories
     n_batches = min(len(states), 4 * effective_n_jobs(n_jobs))
     with tqdm_joblib(tqdm(total=n_batches, desc=desc)):
         batch_rows = Parallel(n_jobs=n_jobs)(
-            delayed(_diag_rows)(target, states[b::n_batches], args, ell_w0s)
+            delayed(_diag_rows)(target, states[b::n_batches], args, ell_w0s, q_bounds)
             for b in range(n_batches)
         )
 
@@ -1552,7 +1615,7 @@ def _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s=None):
 
 def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
                              alpha=0.1,
-                             termination_arm=True, temp_emp=1.0, temp_info=1.0, horizon=None, cost=0.0,
+                             termination_arm=True, beta_emp=1.0, beta_info=1.0, horizon=None, cost=0.0,
                              n_samples=200,
                              emp_type='emp', log_ell_bounds=None, ell_prior='lognormal',
                              target='ell', p_model=None, tie_tol=None):
@@ -1567,7 +1630,7 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
     `n_trials` and `horizon` both default to "t pulls already taken, t more to
     come"; pass them explicitly to match a particular task design.
 
-    `target` ('ell' or 'model'), `temp_info`, `p_model` and the ell prior
+    `target` ('ell' or 'model'), `beta_info`, `p_model` and the ell prior
     (`ell_prior`, `emp_type` -- a tuple of types for 'model' -- and
     `log_ell_bounds`) behave exactly as in `enumerate_diagnosticity`.
 
@@ -1589,13 +1652,13 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
 
     ell_samples, ell_w0s = _diag_ell_grid(target, emp_type, n_samples, log_ell_bounds, ell_prior)
     args = (ell_samples, n_arms, n_outcomes, n_trials, alpha,
-            termination_arm, horizon, cost, temp_emp)
+            termination_arm, horizon, cost, beta_emp)
     if target == 'ell':
         row = _diag_emp_row(t, counts_array, canon_counts, history_str, *args,
                             tie_tol=tie_tol, ell_w0s=ell_w0s)
     else:
         row = _diag_model_row(t, counts_array, canon_counts, history_str, *args,
-                              temp_info=temp_info, p_model=p_model,
+                              beta_info=beta_info, p_model=p_model,
                               tie_tol=tie_tol, ell_w0s=ell_w0s)
     row['target'] = target
     row['orbit_size'] = orbit_sequence_count(counts_array)
@@ -1609,12 +1672,12 @@ def diagnosticity_for_counts(C, n_arms=None, n_outcomes=None, n_trials=None,
 ### Greedy sequential design: a SET of trials that is jointly diagnostic
 
 def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
-                  termination_arm=True, temp_emp=1.0, temp_info=1.0, costs=(0.0,),
+                  termination_arm=True, beta_emp=1.0, beta_info=1.0, costs=(0.0,),
                   n_ell_samples=200, seed=None,
                   emp_type='emp', log_ell_bounds=None, ell_prior='lognormal',
                   init_t=0, target='ell', p_model=None,
                   expt='arms', n_AFC=2, n_room_samples=None,
-                  repeats='no_elements', max_branches=1024):
+                  repeats='no_elements', max_branches=1024, normalise_q=False):
     """Greedily choose `n_select` trials that are jointly diagnostic.
 
     `enumerate_diagnosticity` scores each trial under the prior alone. Here the
@@ -1719,8 +1782,11 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     rows = []
     for alpha in alphas:
         for cost in costs:
-            emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost)
-            info_agent = make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost) if target == 'model' else None
+            q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples)
+                        if normalise_q else (None, None))
+            emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost, q_bounds=q_bounds[0])
+            info_agent = (make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost, q_bounds=q_bounds[1])
+                          if target == 'model' else None)
 
             ### p(a|h,theta) for every candidate. calculate once, because it does not depend on the choices
 
@@ -1730,9 +1796,9 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
 
                 ## arms: the one-step policy
                 if expt == 'arms':
-                    P = np.exp(emp_agent.log_policy(C, horizon, temp_emp))
+                    P = np.exp(emp_agent.log_policy(C, horizon, beta_emp))
                     if target == 'model':
-                        P = np.vstack([P, np.exp(info_agent.log_policy(C, horizon, temp_info))])
+                        P = np.vstack([P, np.exp(info_agent.log_policy(C, horizon, beta_info))])
 
                 ## rooms: softmax over each room's leaf value
                 else:
@@ -1741,10 +1807,10 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                             leaf[h] = (emp_agent.leaf_value(C[r]),
                                        info_agent.leaf_value(C[r])[0] if target == 'model' else None)
                     Qs = np.stack([leaf[h][0] for h in hs], axis=1)      # (n_ell, n_AFC)
-                    P = _softmax(Qs / temp_emp, axis=1)
+                    P = _softmax(Qs * beta_emp, axis=1)
                     if target == 'model':
                         Q_info = np.array([leaf[h][1] for h in hs])
-                        P = np.vstack([P, _softmax(Q_info / temp_info)[None, :]])
+                        P = np.vstack([P, _softmax(Q_info * beta_info)[None, :]])
                 P_all.append(P)
             P_all = np.stack(P_all) # large matrix of choice probabilities 
             n_cand, n_hypo, n_actions = P_all.shape
@@ -1810,7 +1876,7 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                 t, C, cc, hs, orbit = states[c_best]
                 row = {
                     'alpha': alpha, 'horizon': horizon, 'cost': cost,
-                    'temp_emp': temp_emp, 'temp_info': temp_info,
+                    'beta_emp': beta_emp, 'beta_info': beta_info,
                     'step': step,
                     'gain': gains[c_best],
                     'gain_bits': gains[c_best] / np.log(2.0),
@@ -1844,6 +1910,7 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     df['target'] = target
     df['expt'] = expt
     df['ell_prior'] = ell_prior
+    df['normalise_q'] = normalise_q
     for k, v in _emp_type_cols(emp_type, log_ell_bounds).items():
         df[k] = v
     if ell_prior == 'lognormal':
@@ -1863,7 +1930,7 @@ def emp_ell_bounds(emp_type, log_ell_bounds, eps=1e-3):
     'emp' keeps the full range, as before. The split types carve it at log
     ell=0 (ell=1): 'emp_lo' takes the compressive region (ell<1, breadth of
     reachable outcomes), 'emp_hi' the expansive one (ell>1, control over
-    individual outcomes), and 'emp_1' pins log ell=0 so only temp is free.
+    individual outcomes), and 'emp_1' pins log ell=0 so only beta is free.
     `eps` keeps the two open types strictly off 0, so a fit that runs to the
     boundary stays distinguishable from 'emp_1'.
 
@@ -1908,14 +1975,14 @@ def fit_emp(df_ppt,
     -----------
     df_ppt : pd.DataFrame
         Participant data
-    param_bounds : (log_ell_bounds, temp_bounds)
+    param_bounds : (log_ell_bounds, beta_bounds)
         Parameter bounds, each a (lo, hi) tuple. The empowerment agent's free
         parameter is log ell, so its bounds are in log ell. `log_ell_bounds`
         may be None (or have a None side) for no bound, with
-        optimizer='lbfgsb'; `temp_bounds` must be finite.
+        optimizer='lbfgsb'; `beta_bounds` must be finite.
     agent_types : list of str
         Models to fit, one row per subject each. 'info' is the info-seeking
-        agent (temp only); 'emp' the empowerment agent over the full log-ell range.
+        agent (beta only); 'emp' the empowerment agent over the full log-ell range.
         Passing 'emp_lo' / 'emp_1' / 'emp_hi' instead of 'emp' splits it into
         three types by ell<1, ell=1 (a one-parameter model) and ell>1; see
         `emp_ell_bounds`.
@@ -1936,7 +2003,7 @@ def fit_emp(df_ppt,
         'de': differential evolution, which needs finite bounds throughout.
     n_starts : int
         Starting points for 'lbfgsb': log ell from the N(0, 2) prior over the
-        type's slice, temp and alpha uniform over `temp_bounds` / `alpha_bounds`.
+        type's slice, beta and alpha uniform over `beta_bounds` / `alpha_bounds`.
     alpha_bounds : (lo, hi) or None
         If given, every agent type also fits the Dirichlet concentration it
         makes posterior inferences with, within these (finite, positive)
@@ -1958,10 +2025,10 @@ def fit_emp(df_ppt,
     df_fits = pd.DataFrame()
     for i_type, agent_type in enumerate(agent_types):
         if agent_type == 'info':
-            log_ell_bounds, temp_bounds = None, param_bounds[1]
+            log_ell_bounds, beta_bounds = None, param_bounds[1]
         else:
             log_ell_bounds = emp_ell_bounds(agent_type, param_bounds[0], eps=ell_eps)
-            temp_bounds = param_bounds[1]
+            beta_bounds = param_bounds[1]
         with tqdm_joblib(tqdm(total=len(pids), desc=f"Fitting {agent_type}",
                               disable=not verbose)):
             results = Parallel(n_jobs=n_jobs)(
@@ -1969,7 +2036,7 @@ def fit_emp(df_ppt,
                     pid=pid,
                     df_ppt=df_ppt.loc[df_ppt['subject_id'] == pid],
                     log_ell_bounds=log_ell_bounds,
-                    temp_bounds=temp_bounds,
+                    beta_bounds=beta_bounds,
                     horizon=horizon,
                     init_t=init_t,
                     maxiter=maxiter,
@@ -1988,7 +2055,7 @@ def fit_emp(df_ppt,
         else:
             df_fits = pd.concat([df_fits, pd.DataFrame(results)], ignore_index=True)
     return df_fits
-def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
+def _fit_ppt(pid, df_ppt, log_ell_bounds, beta_bounds, horizon,
              init_t, maxiter, tol, verbose, agent_type=None,
              optimizer='lbfgsb', n_starts=10, alpha_bounds=None,
              popsize=15, mutation=(0.5, 1), recombination=0.7, seed=None):
@@ -2016,12 +2083,12 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
         agent_type = 'info' if log_ell_bounds is None else 'emp'
     fixed_log_ell = None
     if agent_type == 'info':
-        bounds = [temp_bounds]
+        bounds = [beta_bounds]
     elif log_ell_bounds[0] == log_ell_bounds[1]: ## ell pinned, e.g. 'emp_1'
         fixed_log_ell = float(log_ell_bounds[0])
-        bounds = [temp_bounds]
+        bounds = [beta_bounds]
     else:
-        bounds = [log_ell_bounds, temp_bounds]
+        bounds = [log_ell_bounds, beta_bounds]
     fixed_ell = None if fixed_log_ell is None else np.exp(fixed_log_ell)
     free_ell = len(bounds) == 2
     fit_alpha = alpha_bounds is not None
@@ -2035,19 +2102,19 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
         params = list(params)
         alpha = params.pop() if fit_alpha else design['alpha']
         if free_ell: ## empowerment agent
-            log_ell, temp = params
+            log_ell, beta = params
             ell = np.exp(log_ell)
         else: ## info-seeking agent, or emp with ell pinned
             ell = fixed_ell
-            temp = params[0]
-        return ell, temp, alpha
+            beta = params[0]
+        return ell, beta, alpha
 
     def compute_nll(params):
-        ell, temp, alpha = unpack(params)
+        ell, beta, alpha = unpack(params)
         if design['expt'] == 'rooms':
-            return _nll_from_rooms(rooms, design, ell, temp, alpha=alpha)
+            return _nll_from_rooms(rooms, design, ell, beta, alpha=alpha)
         elif design['expt'] == 'arms':
-            return _nll_from_arms(arms, design, ell, temp, horizon, init_t, alpha=alpha)
+            return _nll_from_arms(arms, design, ell, beta, horizon, init_t, alpha=alpha)
 
     rng = np.random.default_rng(seed)
     if optimizer == 'de':
@@ -2069,8 +2136,8 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
             disp=False
         )
     else:
-        ## starting points: log ell from its (truncated) prior, temp and alpha uniform
-        starts = rng.uniform(*temp_bounds, size=(n_starts, 1))
+        ## starting points: log ell from its (truncated) prior, beta and alpha uniform
+        starts = rng.uniform(*beta_bounds, size=(n_starts, 1))
         if free_ell:
             log_ell_0 = log_ell_prior(agent_type, bounds[0])[0].rvs(size=n_starts, random_state=rng)
             starts = np.column_stack([log_ell_0, starts])
@@ -2085,7 +2152,7 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
                          tol=tol, options={'maxiter': maxiter})
             if res is None or r.fun < res.fun:
                 res = r
-    ell_hat, temp_hat, alpha_hat = unpack(res.x)
+    ell_hat, beta_hat, alpha_hat = unpack(res.x)
     ell_hat = None if ell_hat is None else float(ell_hat)
     log_ell_hat = None if ell_hat is None else float(np.log(ell_hat))
     nll = res.fun
@@ -2096,14 +2163,14 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, temp_bounds, horizon,
         n_fit_trials = len(rooms)
     else:
         n_fit_trials = len(df_ppt.loc[df_ppt['trial'] >= init_t])
-    n_free_params = len(bounds) ## temp, plus ell and alpha wherever they are free
+    n_free_params = len(bounds) ## beta, plus ell and alpha wherever they are free
     BIC = n_free_params*np.log(n_fit_trials) + 2*nll
 
     return {
         'subject_id': pid,
         'log_ell': log_ell_hat,
         'ell': ell_hat,
-        'temp': temp_hat,
+        'beta': beta_hat,
         'agent_alpha': float(alpha_hat),
         'fit_alpha': fit_alpha,
         'nll': nll,
@@ -2184,7 +2251,7 @@ def _arms_from_df(df_ppt):
 
 
 # NLL of the choices under, given parameterised model
-def _nll_from_arms(arms, design, ell, temp, horizon, init_t, alpha=None):
+def _nll_from_arms(arms, design, ell, beta, horizon, init_t, alpha=None):
 
     n_arms = design['n_arms']
     n_outcomes = design['n_outcomes']
@@ -2219,7 +2286,7 @@ def _nll_from_arms(arms, design, ell, temp, horizon, init_t, alpha=None):
 
             h = (n_trials - t) if horizon is None else min(horizon, n_trials - t)
             Q = agent.Q(counts, h)[0]
-            probs = _softmax(Q / temp)
+            probs = _softmax(Q * beta)
 
             if terminated[i]:
                 NLL -= np.log(probs[n_arms])
@@ -2258,7 +2325,7 @@ def _rooms_from_df(df_ppt):
 
 
 # NLL of the room choices, given parameterised model
-def _nll_from_rooms(rooms, design, ell, temp, alpha=None):
+def _nll_from_rooms(rooms, design, ell, beta, alpha=None):
 
     n_arms = design['n_arms']
     n_outcomes = design['n_outcomes']
@@ -2275,14 +2342,14 @@ def _nll_from_rooms(rooms, design, ell, temp, alpha=None):
 
         ## Q = emp of each room's belief state
         Q = np.array([agent.leaf_value(counts)[0] for counts in counts_array])
-        probs = _softmax(Q / temp)
+        probs = _softmax(Q * beta)
 
         NLL -= np.log(probs[action])
     return NLL
 
 
-def nll_emp(df_ppt, ell=1, horizon=None, init_t=0, temp=1, alpha=None):
-    """NLL of the yoked choices in `df_ppt` under (ell, temp), for an agent
+def nll_emp(df_ppt, ell=1, horizon=None, init_t=0, beta=1, alpha=None):
+    """NLL of the yoked choices in `df_ppt` under (ell, beta), for an agent
     inferring with concentration `alpha` (default: the design's). Returns a float.
 
     The scoring counterpart to `run_emp`. Extracts the sequence and the task
@@ -2292,10 +2359,10 @@ def nll_emp(df_ppt, ell=1, horizon=None, init_t=0, temp=1, alpha=None):
     """
     design = _design_from_df(df_ppt)
     if design['expt'] == 'rooms':
-        return _nll_from_rooms(_rooms_from_df(df_ppt), design, ell, temp, alpha=alpha)
+        return _nll_from_rooms(_rooms_from_df(df_ppt), design, ell, beta, alpha=alpha)
     elif design['expt'] == 'arms':
         return _nll_from_arms(_arms_from_df(df_ppt), design,
-                            ell, temp, horizon, init_t, alpha=alpha)
+                            ell, beta, horizon, init_t, alpha=alpha)
 
 ### calculate PFs for info-seeking agent
 def pareto_run(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),

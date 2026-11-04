@@ -19,7 +19,7 @@ import argparse
 import os
 
 
-def fit_data(df, agent_types, log_ell_bounds, temp_bounds, horizon=3, init_t=1,
+def fit_data(df, agent_types, log_ell_bounds, inv_temp_bounds, horizon=3, init_t=1,
              n_jobs=-1, optimizer='lbfgsb', n_starts=10, verbose=True):
     """Fit `agent_types` to one dataframe of participant trials.
 
@@ -30,7 +30,7 @@ def fit_data(df, agent_types, log_ell_bounds, temp_bounds, horizon=3, init_t=1,
     df_fits = fit_emp(
         df_ppt=df,
         agent_types=agent_types,
-        param_bounds=[log_ell_bounds, temp_bounds],
+        param_bounds=[log_ell_bounds, inv_temp_bounds],
         horizon=horizon,
         init_t=init_t,
         n_jobs=n_jobs,
@@ -66,7 +66,7 @@ def main():
                              "'de': differential evolution, needs finite bounds.")
     parser.add_argument('--n_starts', type=int, default=10,
                         help='starting points for --optimizer lbfgsb')
-    parser.add_argument('--temp_bounds', type=float, default=(0.001, 0.1), nargs=2)
+    parser.add_argument('--inv_temp_bounds', type=float, default=(0.001, 100), nargs=2)
     parser.add_argument('--horizon', type=int, default=1)
     parser.add_argument('--init_t', type=int, default=1,
                         help='leading trials used to warm the belief without being scored')
@@ -114,7 +114,7 @@ def main():
     df_fits = fit_emp(
         df_ppt=df,
         agent_types=args.agent_types,
-        param_bounds=[args.log_ell_bounds and tuple(args.log_ell_bounds), tuple(args.temp_bounds)],
+        param_bounds=[args.log_ell_bounds and tuple(args.log_ell_bounds), tuple(args.inv_temp_bounds)],
         horizon=args.horizon,
         init_t=args.init_t,
         n_jobs=args.n_jobs,

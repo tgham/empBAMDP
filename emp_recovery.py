@@ -115,7 +115,7 @@ def main():
                              "'de': differential evolution, needs finite bounds.")
     parser.add_argument('--n_starts', type=int, default=10,
                         help='starting points for --optimizer lbfgsb')
-    parser.add_argument('--temp_bounds', type=float, default=(0.001, 0.2), nargs=2)
+    parser.add_argument('--beta_bounds', type=float, default=(0.001, 100), nargs=2)
     parser.add_argument('--fit_alpha', action='store_true',
                         help="Whether to fit the agent's alpha (Dirichlet concentration) or keep it fixed at "
                              "the generative value")
@@ -253,7 +253,7 @@ def main():
                     dist = log_ell_prior(agent_type, args.log_ell_bounds, args.ell_prior)[0]
                     log_ell = dist.rvs(random_state=rng)
                 ell = float(np.exp(log_ell))
-            temp = rng.uniform(*args.temp_bounds)
+            beta = rng.uniform(*args.beta_bounds)
 
             ## the alpha the agent infers with: the bandits' own, or a misspecified one
             if args.fit_alpha:
@@ -271,7 +271,7 @@ def main():
                     alpha=args.alpha,
                     ell=ell,
                     cost=args.cost,
-                    temp=temp,
+                    beta=beta,
                     termination_arm=args.termination_arm,
                     diag_histories=diag_histories,
                     agent_alpha=agent_alpha,
@@ -286,7 +286,7 @@ def main():
                     ell=ell,
                     horizon=args.horizon,
                     cost = args.cost,
-                    temp=temp,
+                    beta=beta,
                     termination_arm=args.termination_arm,
 
                     ## horizons task
@@ -359,7 +359,7 @@ def main():
     if not args.skip_recovery:
         param_bounds = [
             args.log_ell_bounds,
-            args.temp_bounds
+            args.beta_bounds
         ]
         print('fitting')
         df_fits = fit_emp(
@@ -380,7 +380,7 @@ def main():
         for sim in range(len(df_sim['subject_id'].unique())):
             df_fits.loc[df_fits['subject_id']==sim, 'gen_agent_type'] = df_sim.loc[df_sim['subject_id']==sim, 'agent_type'].iloc[0]
             df_fits.loc[df_fits['subject_id']==sim, 'gen_ell'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_ell'].iloc[0]
-            df_fits.loc[df_fits['subject_id']==sim, 'gen_temp'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_temp'].iloc[0]
+            df_fits.loc[df_fits['subject_id']==sim, 'gen_beta'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_beta'].iloc[0]
             ## data generated before agent alpha existed came from agents inferring with --alpha
             df_fits.loc[df_fits['subject_id']==sim, 'gen_agent_alpha'] = (
                 df_sim.loc[df_sim['subject_id']==sim, 'gen_agent_alpha'].iloc[0]

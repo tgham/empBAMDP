@@ -9,75 +9,108 @@
 // (globals: quiz_passed, quiz_attempts).
 //----------------------------------------------------------------------------//
 
-// Each question: prompt, the correct option, and the distractors. `costOnly`
-// marks a question that only makes sense when testing costs something -- see the
-// filter below.
+// Each question: prompt, the correct option, and the distractors. `costOnly`,
+// `tickOnly`, `goldOnly` and `controlOnly` mark questions that only make sense
+// under some settings -- see the filter below. Distractors that would mention
+// gold are swapped for a neutral alternative when OBJECTIVE is "control", since
+// those participants never hear about gold.
+const ROOM_SET = N_AFC === 2 ? "pair" : "set";
 const ALL_QUIZ_QUESTIONS = [
     {
         name: "buttons",
-        prompt: "In each room, what do the buttons let you do?",
-        correct: "Pressing a button moves me to one of the locations, tending to reach some locations more often than others.",
+        prompt: "In each room, what happens when a button is pressed?",
+        correct: "It leads to one of the locations, tending to reach some locations more often than others.",
         distractors: [
-            "Pressing a button always moves me to the same single, fixed location.",
-            "The buttons let me pick up gold coins directly."
+            "It always leads to the same single, fixed location.",
+            OBJECTIVE === "gold"
+                ? "It picks up a gold coin directly."
+                : "It reaches every location equally often."
         ]
     },
     {
         name: "blue_up",
-        prompt: "Suppose you press the blue button and it takes you to the upward location. What can you infer about the upward location?",
+        prompt: "Suppose the blue button is pressed and it leads to the upward location. What can you infer about the upward location?",
         correct: "It's evidence that blue is fairly likely to lead upward, but not a certainty.",
         distractors: [
             "Blue will now always lead upward.",
-            "The gold coin must be in the upward location."
+            OBJECTIVE === "gold"
+                ? "The gold coin must be in the upward location."
+                : "The other buttons will now also lead upward."
         ]
     },
     {
         name: "red_left",
-        prompt: "Suppose you press the red button and it takes you to the leftward location. What can you infer about the up, down and rightward locations?",
+        prompt: "Suppose the red button is pressed and it leads to the leftward location. What can you infer about the up, down and rightward locations?",
         correct: "It's evidence that red is a little less likely to lead to those locations (though they're still possible).",
         distractors: [
             "Those locations are impossible to reach with the red button.",
-            "The blue button will definitely lead me to one of those locations."
+            "The blue button will definitely lead to one of those locations."
         ]
     },
     {
         name: "relationship",
-        prompt: "What is the relationship between the buttons?",
-        correct: "They all control movement in the same room, but the locations they reach are independent of each other.",
+        prompt: `What is the relationship between the buttons in each ${ROOM_SET} of rooms?`,
+        correct: "They all control movement in that room, and the locations they reach are independent of each other. The buttons in one room are also unrelated to the buttons in the other room(s).",
         distractors: [
-            "They always reach the same locations as each other.",
-            "They operate in completely separate rooms."
+            "The buttons in one room are always more reliable than those in the other room(s).",
+            "A button in one room works the same way as the button of the same colour in the other room(s)."
         ]
     },
     {
         name: "heatmap",
         prompt: "What information does a button's tokens show?",
-        correct: "The number of times each location has been reached by that button during testing.",
+        correct: "The number of times each location has been reached by that button in that room during testing.",
         distractors: [
-            "How likely it is that a gold coin will appear in each location.",
-            "How many points I have earned by pressing that button."
+            OBJECTIVE === "gold"
+                ? "How likely it is that a gold coin will appear in each location."
+                : "The order in which the locations were reached.",
+            "How many points have been earned by pressing that button."
         ]
     },
     {
         name: "new_room",
-        prompt: "Suppose you haven't tried one of the buttons yet. What can you assume about this button, based on your current knowledge?",
-        correct: "Since I haven't tried it, it's reasonable to assume it has a similar chance of reaching each location.",
+        prompt: "Suppose one of the buttons hasn't been tried yet. What can you assume about this button, based on your current knowledge?",
+        correct: "Since it hasn't been tried, it's reasonable to assume it has a similar chance of reaching each location.",
         distractors: [
-            "Since I haven't tried it yet, it is almost definitely a reliable button.",
-            "Since I haven't tried it yet, it is almost definitely an unreliable button."
+            "Since it hasn't been tried yet, it is almost definitely a reliable button.",
+            "Since it hasn't been tried yet, it is almost definitely an unreliable button."
         ]
     },
     {
         name: "auto_presses",
-        prompt: "When you enter a new room, what happens first?",
-        correct: `Some presses are made for me to watch, and then I get ${N_REMAINING_TRIALS} press${N_REMAINING_TRIALS === 1 ? "" : "es"} of my own.`,
+        prompt: `When you encounter a new ${ROOM_SET} of rooms, which buttons are automatically pressed?`,
+        correct: "The number and colour of the button presses in each room vary from trial to trial.",
         distractors: [
-            "I get to press the buttons as many times as I like.",
-            "The gold coin appears straight away, before any button has been pressed."
+            "Each button of each room is pressed evenly.",
+            "The most reliable buttons are pressed."
+        ]
+    },
+    {
+        name: "room_choice",
+        prompt: "Which room should you select?",
+        correct: OBJECTIVE === "gold"
+            ? "The room in which I think I have the best chance of reaching the gold coin."
+            : "The room in which I feel the strongest sense of control.",
+        distractors: [
+            "The room in which the buttons have been pressed the most times.",
+            OBJECTIVE === "gold"
+                ? "The room with the most tokens in any single location."
+                : "The room with the fewest tokens."
+        ]
+    },
+    {
+        name: "control",
+        controlOnly: true,
+        prompt: "Which room provides the strongest sense of control?",
+        correct: "It is open to interpretation - I should answer as honestly as possible.",
+        distractors: [
+            "The room with more buttons.",
+            "The room on the left side of the screen."
         ]
     },
     {
         name: "cost",
+        goldOnly: true,
         costOnly: true,
         prompt: "What is the cost of testing a button?",
         correct: "Testing a button reduces the size, and therefore value, of the gold coin that I can possibly collect in the current room.",
@@ -88,6 +121,7 @@ const ALL_QUIZ_QUESTIONS = [
     },
     {
         name: "tick",
+        goldOnly: true,
         tickOnly: true,
         prompt: "What happens if you press the orange tick button?",
         correct: "I stop testing early and move straight on to the gold collection phase.",
@@ -98,6 +132,7 @@ const ALL_QUIZ_QUESTIONS = [
     },
     {
         name: "coin_size",
+        goldOnly: true,
         costOnly: true,
         prompt: "In the gold collection phase, what is the value of the gold coin that can possibly be collected?",
         correct: "The value depends on the size of the coin, which is determined by the number of buttons pressed.",
@@ -108,6 +143,7 @@ const ALL_QUIZ_QUESTIONS = [
     },
     {
         name: "coin",
+        goldOnly: true,
         prompt: "In the gold collection phase, which button should you choose?",
         correct: "The button that I believe will most likely lead to the location with the coin.",
         distractors: [
@@ -117,6 +153,7 @@ const ALL_QUIZ_QUESTIONS = [
     },
     {
         name: "coin_correct",
+        goldOnly: true,
         prompt: "In the gold collection phase, is there a button that guarantees leading to the location with the coin?",
         correct: "Not necessarily - sometimes no button reliably leads to the location with the coin.",
         distractors: [
@@ -128,10 +165,12 @@ const ALL_QUIZ_QUESTIONS = [
 
 // With SAMPLE_COST = 0 nothing depletes the coin, so the two cost questions have
 // no right answer for a participant who understood the task. Same for the tick
-// question when TERMINATE is off and there is no tick to press. Drop them rather
-// than grade people on a rule the instructions (correctly) never taught.
+// question when TERMINATE is off and there is no tick to press, and for the gold
+// questions under the "control" objective (no gold phase). Drop them rather than
+// grade people on a rule the instructions (correctly) never taught.
 const QUIZ_QUESTIONS = ALL_QUIZ_QUESTIONS.filter(
-    q => (SAMPLE_COST > 0 || !q.costOnly) && (TERMINATE || !q.tickOnly)
+    q => (SAMPLE_COST > 0 || !q.costOnly) && (TERMINATE || !q.tickOnly) &&
+         (OBJECTIVE === "gold" || !q.goldOnly) && (OBJECTIVE === "control" || !q.controlOnly)
 );
 
 const QUIZ_PASS_FRACTION = 2/3;
