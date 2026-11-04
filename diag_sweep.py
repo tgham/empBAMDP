@@ -68,7 +68,6 @@ def main():
         stem += f'_{args.n_AFC}AFC'
     stem += f'_{args.target}'
     stem += f'_{args.ell_prior}'
-    stem += f'_tempEmp{args.temp_emp}_tempInfo{args.temp_info}'
     if args.emp_type != ['emp']:
         stem += '_' + '_'.join(args.emp_type)
     if args.normalise_q:
