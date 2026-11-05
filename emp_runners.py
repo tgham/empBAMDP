@@ -1485,8 +1485,10 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                         termination_arm, horizon, cost, beta_emp)
                 args = args + ((beta_info, p_model, tie_tol) if target == 'model'
                                else (tie_tol,))
-                q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples, ell_w0s,
-                                          mode=normalise_q)
+                ## deepest leaf valued: rooms at their own state (t <= n_trials - 1); arms one pull past the last choice (t = n_trials)
+                max_leaf_t = n_trials - (expt == 'rooms')
+                q_bounds = (leaf_q_bounds(n_arms, n_outcomes, max_leaf_t, alpha, cost,
+                                          ell_samples, ell_w0s, mode=normalise_q)
                             if normalise_q else (None, None))
                 block = _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s, q_bounds)
                 if normalise_q == 'prior':
@@ -1529,8 +1531,7 @@ def _diag_ell_grid(target, emp_type, n_samples, log_ell_bounds, ell_prior):
                              log_ell_bounds=log_ell_bounds, prior=ell_prior)
 
 
-def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells, ell_w0s, mode='prior',
-                  bounds_dir='useful_saves/diag/bounds'):
+def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells, ell_w0s, mode='prior'):
     """Value bounds for the emp agent and the info agent (none), by `mode`.
 
     mode='analytic': each ell's own range of Emp = sum_o m_o^ell, m_o = max_a p(o|a),
@@ -1549,17 +1550,16 @@ def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells, ell_w0s, mode
     ell < 1 max loses its powers: (N - r) q + r (q+1) = K). Returns ((0, K), None).
 
     mode='prior': for each ell, the best leaf value (`current_emp`) over every canonical history
-    of 0..n_trials pulls -- every belief state a diag Q can reach, since its
-    look-ahead stops at n_trials. The emp normaliser N is the average of these
+    of 0..n_trials pulls. Pass the deepest leaf the task values as `n_trials`:
+    the task's n_trials for arms (the one-step look-ahead from the last choice
+    reaches it), n_trials - 1 for rooms (each room is valued at its own state).
+    The emp normaliser N is the average of these
     maxes weighted by the ell prior `ell_w0s` (an array over `ells`, or the
     {emp_type: weights} dict of `model_ell_grid`, whose types count equally), so
     every ell's values map to v / N and `beta` means the same at every ell.
 
     The info agent's leaf, 1 - Var(h) / Var(h_0), is already normalised by the
     variance of the empty prior, so it gets no bounds.
-
-    Cached in `bounds_dir`, one file per (task, alpha, cost) with a row per ell;
-    ells not yet in the file are computed and added.
 
     Returns ((0, N), None) for `make_agent`'s `q_bounds`.
     """
@@ -1580,31 +1580,12 @@ def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells, ell_w0s, mode
     if mode != 'prior':
         raise ValueError(f"mode must be 'prior', 'analytic' or 'analytic_max', got {mode!r}")
 
-    path =os.path.join(bounds_dir, f'{n_arms}arms_{n_outcomes}outcomes_{n_trials}trials_'
-                                    f'alpha{float(alpha)}_cost{float(cost)}.csv')
-    df = pd.read_csv(path) if os.path.exists(path) else pd.DataFrame(columns=['model', 'ell', 'lo', 'hi'])
+    ## otherwise, prior-weighted average of empirical maxima
 
-    ## which ells still need computing
-    emp_df = df[df['model'] == 'emp']
-    have = emp_df['ell'].to_numpy(dtype=float)
-    todo = np.array([e for e in ells if not np.isclose(have, e, rtol=1e-9, atol=0).any()])
-
-    if len(todo):
-
-        ## leaf values of every history up to n_trials pulls (canonical_states stops one short)
-        states = canonical_states(n_arms, n_outcomes, n_trials + 1)
-        emp_agent = make_agent(n_arms, n_outcomes, alpha, todo, cost=cost)
-        V = np.stack([emp_agent.leaf_value(C) for (_, C, _, _, _) in states]) # (n_states, n_todo)
-        new = pd.DataFrame({'model': 'emp', 'ell': todo, 'lo': V.min(axis=0), 'hi': V.max(axis=0)})
-        df = pd.concat([df, new], ignore_index=True)
-        os.makedirs(bounds_dir, exist_ok=True)
-        df.to_csv(path, index=False)
-        emp_df = df[df['model'] == 'emp']
-
-    ## look up each ell exactly
-    have = emp_df['ell'].to_numpy(dtype=float)
-    idx = [np.flatnonzero(np.isclose(have, e, rtol=1e-9, atol=0))[0] for e in ells]
-    hi = emp_df['hi'].to_numpy(dtype=float)[idx]
+    ## each ell's best leaf value over every history of 0..n_trials pulls (canonical_states stops one short, hence +1)
+    states = canonical_states(n_arms, n_outcomes, n_trials + 1)
+    emp_agent = make_agent(n_arms, n_outcomes, alpha, ells, cost=cost)
+    hi = np.max([emp_agent.leaf_value(C) for (_, C, _, _, _) in states], axis=0) # (n_ells,)
 
     ## prior-weighted average of the per-ell maxes
     w = (np.mean([np.asarray(v, dtype=float) for v in ell_w0s.values()], axis=0)
@@ -1835,8 +1816,10 @@ def greedy_design(n_select, n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     rows = []
     for alpha in alphas:
         for cost in costs:
-            q_bounds = (leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ell_samples, ell_w0s,
-                                      mode=normalise_q)
+            ## deepest leaf valued: rooms at their own state (t <= n_trials - 1); arms one pull past the last choice (t = n_trials)
+            max_leaf_t = n_trials - (expt == 'rooms')
+            q_bounds = (leaf_q_bounds(n_arms, n_outcomes, max_leaf_t, alpha, cost,
+                                      ell_samples, ell_w0s, mode=normalise_q)
                         if normalise_q else (None, None))
             emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost, q_bounds=q_bounds[0])
             info_agent = (make_agent(n_arms, n_outcomes, alpha, None, termination_arm, cost, q_bounds=q_bounds[1])
