@@ -746,7 +746,7 @@ function make_instructions_timeline() {
         title: "Tokens",
         outcomes: ["up", "up", "up", "right", "up", "up", "left"],
         lines: [
-            `For example, a button may have a single preferred direction, reliably leading you to one location.`,
+            `For example, a button may have a single preferred direction, consistently leading you to one location.`,
             `See how this <strong>blue</strong> button often takes you <strong>upwards</strong> &mdash; although not all the time.`
         ]
     }];
@@ -833,7 +833,7 @@ function make_instructions_timeline() {
         screenHTML({
             title: `Choosing between rooms`,
             lines: [
-                `You will encounter a series of ${roomSets} of rooms, each containing <strong>${N_BUTTONS} buttons</strong>.`,
+                `You will encounter a series of <strong>${roomSets}</strong> of rooms, each containing the ${N_BUTTONS} buttons you have just seen.`,
                 `These rooms are <strong>unrelated</strong> to one another &mdash; how the buttons work in one room has nothing to do with how they work in the other room.`
             ],
             stage: roomsStaticHTML(testDemo, true)
@@ -841,7 +841,7 @@ function make_instructions_timeline() {
         screenHTML({
             title: `Choosing between rooms`,
             lines: [
-                `In fact, when you are shown these ${N_AFC === 2 ? "two" : N_AFC} rooms, the buttons in each will be <strong>tested automatically</strong> &mdash; that is, they will be pressed for you, and you will observe their outcomes.`,
+                `In fact, when you are shown these ${N_AFC === 2 ? "two" : N_AFC} rooms, the buttons in each will be <strong>tested automatically</strong> &mdash; that is, they will be randomly pressed for you, and you will observe their outcomes.`,
                 `Click Next to watch the rooms being tested.`
             ],
             stage: roomsStaticHTML(testDemo, true)
@@ -974,7 +974,7 @@ function make_instructions_timeline() {
             ],
             note: `(Note that in the real experiment, you will not see whether or not you actually reached the gold.)`,
             revealLines: [
-                `There's <strong>no guarantee</strong> the gold coin will appear somewhere any button can reliably reach.`,
+                `There's <strong>no guarantee</strong> the gold coin will appear somewhere any button can consistently reach.`,
                 `The best you can do is to choose the button you think is most likely to reach the gold coin`
             ]
         }));

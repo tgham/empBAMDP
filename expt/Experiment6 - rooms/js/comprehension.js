@@ -79,7 +79,7 @@ const ALL_QUIZ_QUESTIONS = [
     {
         name: "auto_presses",
         prompt: `When you encounter a new ${ROOM_SET} of rooms, which buttons are automatically pressed?`,
-        correct: "The number and colour of the button presses in each room vary from trial to trial.",
+        correct: "The number and colour of the button presses in each room are random, and vary from trial to trial.",
         distractors: [
             "Each button of each room is pressed evenly.",
             "The most consistent buttons are pressed."
