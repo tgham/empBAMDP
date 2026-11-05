@@ -42,8 +42,8 @@ def main():
 
 
     # Define the worker function
-    def _gen_single_sim(sim_id, ell, temp, args):
-        
+    def _gen_single_sim(sim_id, ell, inv_temp, args):
+
 
         # Generate data
         sim_tmp = gen_emp(
@@ -55,7 +55,7 @@ def main():
             ell=ell,
             horizon=args.horizon,
             cost=args.cost,
-            temp=temp,
+            inv_temp=inv_temp,
             greedy=args.greedy,
             termination_arm=args.termination_arm
         )
@@ -72,12 +72,12 @@ def main():
     if len(ell_values) < args.n_sims:
         missing = args.n_sims - len(ell_values)
         ell_values += np.random.choice(ell_values, size=missing, replace=True).tolist()
-    temp = 0.1
+    inv_temp = 0.1
 
     ## parallellise
     with tqdm_joblib(tqdm(desc="Generating datasets", total=args.n_sims, ncols=100, unit='sim', mininterval=1)):
         results = Parallel(n_jobs=args.n_jobs)(
-            delayed(_gen_single_sim)(sim_id, ell_values[sim_id], temp, args)
+            delayed(_gen_single_sim)(sim_id, ell_values[sim_id], inv_temp, args)
             for sim_id in range(args.n_sims)
         )
 

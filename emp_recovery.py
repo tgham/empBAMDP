@@ -29,6 +29,9 @@ def load_diag_histories(args, term):
     `greedy_design`), taken in the order they were chosen rather than ranked by
     `--diag_cols`.
 
+    `--normalise_q [prior|analytic|analytic_max]` reads the matching `diag_sweep.py --normalise_q`
+    output instead, i.e. trials scored with the emp Q-values normalised.
+
     Returns a list of histories, each `(((arm, outcome), count), ...)`, or for
     rooms a list of tuples of them.
     """
@@ -38,6 +41,8 @@ def load_diag_histories(args, term):
     if 'emp' not in args.agent_types:
         emp_types = [t for t in args.agent_types if t.startswith('emp')]
         path += '_' + '_'.join(emp_types)
+    if args.normalise_q:
+        path += '_normQ' + ('' if args.normalise_q == 'prior' else args.normalise_q)
     path += f'_{args.top_n}greedy.csv' if args.diag_source == 'greedy' else '_diag.csv'
     df_diag = pd.read_csv(path)
 
@@ -115,7 +120,7 @@ def main():
                              "'de': differential evolution, needs finite bounds.")
     parser.add_argument('--n_starts', type=int, default=10,
                         help='starting points for --optimizer lbfgsb')
-    parser.add_argument('--temp_bounds', type=float, default=(0.001, 0.2), nargs=2)
+    parser.add_argument('--beta_bounds', type=float, default=(0.001, 100), nargs=2)
     parser.add_argument('--fit_alpha', action='store_true',
                         help="Whether to fit the agent's alpha (Dirichlet concentration) or keep it fixed at "
                              "the generative value")
@@ -158,6 +163,8 @@ def main():
                              "'greedy': the jointly diagnostic set of `diag_sweep.py --greedy`, in order.")
     parser.add_argument('--diag_cols', nargs='+', default=['mi_model'],
                         help='Diagnosticity columns to maximise jointly (Pareto layers) when picking preset histories.')
+    parser.add_argument('--normalise_q', nargs='?', const='prior', default=None, choices=['prior', 'analytic', 'analytic_max'],
+                        help='Use the diagnostic trials of `diag_sweep.py --normalise_q [prior|analytic|analytic_max]` (preset histories only).')
     parser.add_argument('--top_n', type=int, default=None,
                         help='Number of distinct preset histories to pick, by Pareto rank; repeated cyclically '
                              'up to --n_rooms. Required for a single objective; with several, '
@@ -189,9 +196,11 @@ def main():
             stem += f'_preset_{args.n_rooms}rooms_{args.n_subseq_trials}subseq_{args.diag_target}target'
     if args.preset_histories:
         if args.diag_source == 'greedy':
-            stem += f'_greedy{args.top_n}'
+            stem += f'_{args.top_n}greedy'
         else:
             stem += f'_top{args.top_n or "front"}_{"-".join(args.diag_cols)}'
+        if args.normalise_q:
+            stem += '_normQ' + ('' if args.normalise_q == 'prior' else args.normalise_q)
     stem += f'_{args.ell_prior}'
     if args.fit_alpha:
         stem += f'_fitAlpha'
@@ -216,6 +225,7 @@ def main():
         print(f'  - Agent types: {args.agent_types}')
         print(f'  - Preset histories: {args.preset_histories}')
         print(f'  - N subsequent trials: {args.n_subseq_trials}')
+        print(f'  - Normalised-Q diagnostic trials: {args.normalise_q}')
 
         ## load preset histories with the largest diagnosticity scores
         if args.preset_histories:
@@ -253,7 +263,7 @@ def main():
                     dist = log_ell_prior(agent_type, args.log_ell_bounds, args.ell_prior)[0]
                     log_ell = dist.rvs(random_state=rng)
                 ell = float(np.exp(log_ell))
-            temp = rng.uniform(*args.temp_bounds)
+            beta = rng.uniform(*args.beta_bounds)
 
             ## the alpha the agent infers with: the bandits' own, or a misspecified one
             if args.fit_alpha:
@@ -271,7 +281,7 @@ def main():
                     alpha=args.alpha,
                     ell=ell,
                     cost=args.cost,
-                    temp=temp,
+                    beta=beta,
                     termination_arm=args.termination_arm,
                     diag_histories=diag_histories,
                     agent_alpha=agent_alpha,
@@ -286,7 +296,7 @@ def main():
                     ell=ell,
                     horizon=args.horizon,
                     cost = args.cost,
-                    temp=temp,
+                    beta=beta,
                     termination_arm=args.termination_arm,
 
                     ## horizons task
@@ -359,7 +369,7 @@ def main():
     if not args.skip_recovery:
         param_bounds = [
             args.log_ell_bounds,
-            args.temp_bounds
+            args.beta_bounds
         ]
         print('fitting')
         df_fits = fit_emp(
@@ -380,7 +390,7 @@ def main():
         for sim in range(len(df_sim['subject_id'].unique())):
             df_fits.loc[df_fits['subject_id']==sim, 'gen_agent_type'] = df_sim.loc[df_sim['subject_id']==sim, 'agent_type'].iloc[0]
             df_fits.loc[df_fits['subject_id']==sim, 'gen_ell'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_ell'].iloc[0]
-            df_fits.loc[df_fits['subject_id']==sim, 'gen_temp'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_temp'].iloc[0]
+            df_fits.loc[df_fits['subject_id']==sim, 'gen_beta'] = df_sim.loc[df_sim['subject_id']==sim, 'gen_beta'].iloc[0]
             ## data generated before agent alpha existed came from agents inferring with --alpha
             df_fits.loc[df_fits['subject_id']==sim, 'gen_agent_alpha'] = (
                 df_sim.loc[df_sim['subject_id']==sim, 'gen_agent_alpha'].iloc[0]

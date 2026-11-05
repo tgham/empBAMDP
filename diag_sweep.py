@@ -20,8 +20,13 @@ def main():
 
     ## diagnosticity-specific: the ell prior and the choice policy
     parser.add_argument('--n_ell_samples', type=int, default=200)
-    parser.add_argument('--temp_emp', type=float, default=1.0)
-    parser.add_argument('--temp_info', type=float, default=1.0)
+    parser.add_argument('--beta_emp', type=float, default=1.0)
+    parser.add_argument('--beta_info', type=float, default=1.0)
+    parser.add_argument('--normalise_q', nargs='?', const='prior', default=None, choices=['prior', 'analytic', 'analytic_max'],
+                        help="Normalise emp values (see `leaf_q_bounds`): 'prior' (the default when given bare) maps onto the "
+                             "ell-prior-weighted means of each ell's worst and best leaf values over the task's histories; 'analytic' maps "
+                             "each ell onto [0, 1] with its analytic min and max; 'analytic_max' divides every ell by "
+                             "the largest analytic max, K (the number of outcomes). Info values: mapped onto their own min-max range in 'prior' mode, otherwise already normalised by the empty prior's variance.")
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--emp_type', type=str, nargs='+', default=['emp'],
                         choices=['emp', 'emp_lo', 'emp_1', 'emp_hi'],
@@ -43,7 +48,7 @@ def main():
     parser.add_argument('--greedy', type=int, default=None,
                         help="Greedily choose this many trials, each conditioned on the choices "
                              "on the trials before it, instead of scoring every trial under the prior.")
-    parser.add_argument('--max_branches', type=int, default=1024,
+    parser.add_argument('--max_branches', type=int, default=4096,
                         help="--greedy only: branches (possible choice sequences) kept exactly "
                              "before they are resampled.")
     parser.add_argument('--repeats', default='no_elements', choices=['allow', 'no_pairs', 'no_elements'],
@@ -67,6 +72,8 @@ def main():
     stem += f'_{args.ell_prior}'
     if args.emp_type != ['emp']:
         stem += '_' + '_'.join(args.emp_type)
+    if args.normalise_q:
+        stem += '_normQ' + ('' if args.normalise_q == 'prior' else args.normalise_q)
     os.makedirs('useful_saves/diag', exist_ok=True)
 
     ## run expt
@@ -79,7 +86,7 @@ def main():
             args.greedy,
             n_arms=args.n_arms, n_outcomes=args.n_outcomes, n_trials=args.n_trials,
             alphas=args.alphas,
-            termination_arm=args.termination_arm, temp_emp=args.temp_emp, temp_info=args.temp_info,
+            termination_arm=args.termination_arm, beta_emp=args.beta_emp, beta_info=args.beta_info,
             costs=args.costs,
             n_ell_samples=args.n_ell_samples,
             seed=args.seed,
@@ -92,6 +99,7 @@ def main():
             expt=args.expt, n_AFC=getattr(args, 'n_AFC', 2),
             n_room_samples=getattr(args, 'n_room_samples', None),
             repeats=args.repeats, max_branches=args.max_branches,
+            normalise_q=args.normalise_q,
         )
         out = f'{stem}_{args.greedy}greedy.csv'
         print(f'Saving df_greedy to {out}')
@@ -101,7 +109,7 @@ def main():
     df_diag = enumerate_diagnosticity(
         n_arms=args.n_arms, n_outcomes=args.n_outcomes, n_trials=args.n_trials,
         alphas=args.alphas,
-        termination_arm=args.termination_arm, temp_emp=args.temp_emp,
+        termination_arm=args.termination_arm, beta_emp=args.beta_emp,
         horizons=args.horizons, costs=args.costs,
         n_ell_samples=args.n_ell_samples,
         seed=args.seed,
@@ -109,10 +117,11 @@ def main():
         log_ell_bounds=args.log_ell_bounds and tuple(args.log_ell_bounds),
         ell_prior=args.ell_prior,
         init_t=args.init_t, n_jobs=args.n_jobs,
-        target=args.target, temp_info=args.temp_info,
+        target=args.target, beta_info=args.beta_info,
         p_model=None if args.p_model is None else tuple(args.p_model),
         expt=args.expt, n_AFC=getattr(args, 'n_AFC', 2),
-        n_room_samples=getattr(args, 'n_room_samples', None)
+        n_room_samples=getattr(args, 'n_room_samples', None),
+        normalise_q=args.normalise_q,
     )
 
     ## save
