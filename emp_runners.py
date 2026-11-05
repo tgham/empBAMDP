@@ -19,7 +19,7 @@ warnings.filterwarnings('ignore')
 
 def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, beta = 1, verbose=False):
     """Simulate an empowerment-bandit agent yoked to participants' actual trial
-    sequences. Returns a tidy DataFrame, one row per (subject_id, room, trial),
+    sequences. Returns a tidy DataFrame, one row per (id, room, trial),
     tagged with `ell`, so results from several ell-agents can be pd.concat'd.
     """
     ## extract info from df_ppt
@@ -38,13 +38,13 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, beta = 1, verbose=False):
     ## emp agent at this ell, or info-seeking agent if ell is None; memo shared across subjects and rooms
     agent = make_agent(n_arms, n_outcomes, alpha, ell, termination_arm, cost)
 
-    # for pid in df_ppt['subject_id'].unique():
+    # for pid in df_ppt['id'].unique():
     if verbose:
         print(f'Running run_emp for ell={ell}, horizon={horizon}, cost={cost}, termination_arm={termination_arm}, init_t={init_t}, beta={beta}')
-        pbar = tqdm(range(len(df_ppt['subject_id'].unique())), desc='Subjects')
-    for p in range(len(df_ppt['subject_id'].unique())):
-        pid = df_ppt['subject_id'].unique()[p]
-        df_p = df_ppt.loc[df_ppt['subject_id'] == pid]
+        pbar = tqdm(range(len(df_ppt['id'].unique())), desc='Subjects')
+    for p in range(len(df_ppt['id'].unique())):
+        pid = df_ppt['id'].unique()[p]
+        df_p = df_ppt.loc[df_ppt['id'] == pid]
 
         for r in range(n_rooms):
             df_pr = df_p.loc[df_p['room'] == r]
@@ -73,7 +73,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, beta = 1, verbose=False):
                         chose_a2 = np.nan
                     current_emp = np.nan
                     row = {
-                        'subject_id': pid, 'room': r, 'trial': t, 'ell': ell,
+                        'id': pid, 'room': r, 'trial': t, 'ell': ell,
                         'chose_a0': chose_a0, 'chose_a1': chose_a1,
                         'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
                         'current_emp': current_emp,
@@ -163,44 +163,44 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, beta = 1, verbose=False):
                         ### map onto each of a0, a1 etc.
 
                         ## a0
-                        if df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a0'].values[0] == 'blue':
+                        if df_ppt.loc[(df_ppt['id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a0'].values[0] == 'blue':
                             Q_a0 = Q[0]
                             p_a0 = probs[0]
                             chose_a0 = action == 0
-                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a0'].values[0] == 'red':
+                        elif df_ppt.loc[(df_ppt['id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a0'].values[0] == 'red':
                             Q_a0 = Q[1]
                             p_a0 = probs[1]
                             chose_a0 = action == 1
-                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a0'].values[0] == 'green':
+                        elif df_ppt.loc[(df_ppt['id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a0'].values[0] == 'green':
                             Q_a0 = Q[2]
                             p_a0 = probs[2]
                             chose_a0 = action == 2
 
                         ## a1
-                        if df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a1'].values[0] == 'blue':
+                        if df_ppt.loc[(df_ppt['id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a1'].values[0] == 'blue':
                             Q_a1 = Q[0]
                             p_a1 = probs[0]
                             chose_a1 = action == 0
-                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a1'].values[0] == 'red':
+                        elif df_ppt.loc[(df_ppt['id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a1'].values[0] == 'red':
                             Q_a1 = Q[1]
                             p_a1 = probs[1]
                             chose_a1 = action == 1
-                        elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a1'].values[0] == 'green':
+                        elif df_ppt.loc[(df_ppt['id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a1'].values[0] == 'green':
                             Q_a1 = Q[2]
                             p_a1 = probs[2]
                             chose_a1 = action == 2
 
                         ## a2
                         if n_arms ==3:
-                            if df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'blue':
+                            if df_ppt.loc[(df_ppt['id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'blue':
                                 Q_a2 = Q[0]
                                 p_a2 = probs[0]
                                 chose_a2 = action == 0
-                            elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'red':
+                            elif df_ppt.loc[(df_ppt['id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'red':
                                 Q_a2 = Q[1]
                                 p_a2 = probs[1]
                                 chose_a2 = action == 1
-                            elif df_ppt.loc[(df_ppt['subject_id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'green':
+                            elif df_ppt.loc[(df_ppt['id'] == pid) & (df_ppt['room'] == r) & (df_ppt['trial'] == t), 'a2'].values[0] == 'green':
                                 Q_a2 = Q[2]
                                 p_a2 = probs[2]
                                 chose_a2 = action == 2
@@ -209,7 +209,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, beta = 1, verbose=False):
                     
                     ## record the row
                     row = {
-                        'subject_id': pid, 'room': r, 'trial': t, 'ell': ell,
+                        'id': pid, 'room': r, 'trial': t, 'ell': ell,
                         'chose_a0': chose_a0, 'chose_a1': chose_a1,
                         'p_choice_a0': p_a0, 'p_choice_a1': p_a1,
                         'current_emp': current_emp,
@@ -269,7 +269,7 @@ def run_emp(df_ppt, ell=1, horizon = None, init_t = 0, beta = 1, verbose=False):
     #                                 'Q_a2': 'ell_Q_a2' if n_arms > 2 else np.nan,
     #                                 'current_emp': 'ell_current_emp',
     #                                 'Q_terminate': 'ell_Q_terminate', 'p_terminate': 'ell_p_terminate'})
-    # df_full = df_ppt.merge(df_ell, on=['subject_id', 'room', 'trial'], how='left')
+    # df_full = df_ppt.merge(df_ell, on=['id', 'room', 'trial'], how='left')
     return df_full
     
 
@@ -2071,7 +2071,7 @@ def fit_emp(df_ppt,
     """
     if optimizer not in ('lbfgsb', 'de'):
         raise ValueError(f"optimizer must be 'lbfgsb' or 'de', got {optimizer!r}")
-    pids = df_ppt['subject_id'].unique()
+    pids = df_ppt['id'].unique()
     seeds = np.random.SeedSequence(seed).spawn(len(agent_types) * len(pids))
     df_fits = pd.DataFrame()
     for i_type, agent_type in enumerate(agent_types):
@@ -2085,7 +2085,7 @@ def fit_emp(df_ppt,
             results = Parallel(n_jobs=n_jobs)(
                 delayed(_fit_ppt)(
                     pid=pid,
-                    df_ppt=df_ppt.loc[df_ppt['subject_id'] == pid],
+                    df_ppt=df_ppt.loc[df_ppt['id'] == pid],
                     log_ell_bounds=log_ell_bounds,
                     beta_bounds=beta_bounds,
                     horizon=horizon,
@@ -2218,7 +2218,7 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, beta_bounds, horizon,
     BIC = n_free_params*np.log(n_fit_trials) + 2*nll
 
     return {
-        'subject_id': pid,
+        'id': pid,
         'log_ell': log_ell_hat,
         'ell': ell_hat,
         'beta': beta_hat,
@@ -2277,7 +2277,7 @@ def _arms_from_df(df_ppt):
     ("horizons") task each room opens with an instructed history, carried in the
     `preset_history` column, and only the choices that follow it are scored.
     """
-    cols = ['subject_id', 'room', 'trial', 'action', 'outcome', 'terminated']
+    cols = ['id', 'room', 'trial', 'action', 'outcome', 'terminated']
     has_history_0 = 'history_0' in df_ppt.columns
     if has_history_0:
         cols = cols + ['history_0']
@@ -2286,9 +2286,9 @@ def _arms_from_df(df_ppt):
 
     ## get trial info
     df = df_ppt[cols]
-    df = df.sort_values(['subject_id', 'room', 'trial'])
+    df = df.sort_values(['id', 'room', 'trial'])
     rooms = []
-    for _, d in df.groupby(['subject_id', 'room'], sort=True):
+    for _, d in df.groupby(['id', 'room'], sort=True):
         init_counts = (_counts_from_preset(d['history_0'].iloc[0], n_arms, n_outcomes)
                        if has_history_0 else None)
         rooms.append((
@@ -2360,7 +2360,7 @@ def _rooms_from_df(df_ppt):
     n_AFC = int(df_ppt['n_AFC'].values[0])
 
     ## get choice info
-    df = df_ppt.sort_values(['subject_id', 'room'])
+    df = df_ppt.sort_values(['id', 'room'])
     rooms = []
     for _, row in df.iterrows():
         counts_array = np.zeros((n_AFC, n_arms, n_outcomes), dtype=int)

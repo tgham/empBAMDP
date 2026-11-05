@@ -5,7 +5,7 @@ can be run headlessly (e.g. under run.sh) rather than in the notebook.
 
     python fit_model.py --data_dir expt/Experiment4/data/3a4k --n_arms 3
 
-Writes one row per (subject_id, agent_type) to
+Writes one row per (id, agent_type) to
 `useful_saves/fits/{n_arms}a{n_outcomes}k_fits.csv`, which is what the
 downstream notebook cells (BIC comparison, ell histograms, simulating agents
 under the fitted ells) read back in.
@@ -105,10 +105,10 @@ def main():
     df['cost'] = cost
     if args.alpha is not None:
         df['alpha'] = args.alpha
-    df['n_rooms'] = df.groupby('subject_id')['room'].transform('nunique')
+    df['n_rooms'] = df.groupby('id')['room'].transform('nunique')
 
     print(f'Loaded {len(df)} trials from '
-          f'{df["subject_id"].nunique()} participants')
+          f'{df["id"].nunique()} participants')
 
     ## fit
     df_fits = fit_emp(
