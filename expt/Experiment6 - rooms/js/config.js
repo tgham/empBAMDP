@@ -9,10 +9,21 @@
 const DEBUGGING = false;
 
 //----------------------------------------------------------------------------//
+// DEBUGGING: only run the first N_DEBUG_TRIALS trials (N_AFC choices, taken in
+// run order, i.e. after any SHUFFLE_TRIALS shuffle), so a dev run reaches the end
+// of the experiment -- congratulations, questionnaires, bonus, data upload -- in
+// a couple of minutes. Independent of DEBUGGING above: combine both to skip the
+// instructions too, or set only this one to check the full flow end to end.
+// 0 = off (run every trial in the presets file).
+// MUST be 0 for any real run.
+//----------------------------------------------------------------------------//
+const N_DEBUG_TRIALS = 0;
+
+//----------------------------------------------------------------------------//
 // Experiment parameters
 //----------------------------------------------------------------------------//
 // N buttons per room (2 or 3), K=4 outcomes (cardinal directions), Dirichlet alpha
-const N_BUTTONS = 2;
+const N_BUTTONS = 3;
 const K_OUTCOMES = 4;
 // N_AFC: how many rooms are offered on each trial. The participant watches every
 // room's preset history, then clicks the one they want to enter for the gold.
@@ -338,6 +349,13 @@ function loadPresets() {
             validatePresets(data);
             TRIAL_ORDER = data.map((_, i) => i);
             if (SHUFFLE_TRIALS) TRIAL_ORDER = shuffled(TRIAL_ORDER);
+            if (N_DEBUG_TRIALS > 0 && N_DEBUG_TRIALS < TRIAL_ORDER.length) {
+                console.warn(
+                    `N_DEBUG_TRIALS=${N_DEBUG_TRIALS}: running only ${N_DEBUG_TRIALS} ` +
+                    `of ${TRIAL_ORDER.length} trials. Set it to 0 for a real run.`
+                );
+                TRIAL_ORDER = TRIAL_ORDER.slice(0, N_DEBUG_TRIALS);
+            }
             // PRESETS (and everything derived from it below) is in run order
             PRESETS = TRIAL_ORDER.map(i => data[i]);
             N_ROOMS = PRESETS.length;

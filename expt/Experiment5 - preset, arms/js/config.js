@@ -9,6 +9,16 @@
 const DEBUGGING = false;
 
 //----------------------------------------------------------------------------//
+// DEBUGGING: only run the first N_DEBUG_TRIALS rooms (preset histories), so a
+// dev run reaches the end of the experiment -- congratulations, questionnaires,
+// bonus, data upload -- in a couple of minutes. Independent of DEBUGGING above:
+// combine both to skip the instructions too, or set only this one to check the
+// full flow end to end. 0 = off (run every room in the presets file).
+// MUST be 0 for any real run.
+//----------------------------------------------------------------------------//
+const N_DEBUG_TRIALS = 0;
+
+//----------------------------------------------------------------------------//
 // Experiment parameters
 //----------------------------------------------------------------------------//
 // N=3 buttons, K=4 outcomes (cardinal directions), T=8 trials, Dirichlet alpha
@@ -275,6 +285,13 @@ function loadPresets() {
         })
         .then(function (data) {
             validatePresets(data);
+            if (N_DEBUG_TRIALS > 0 && N_DEBUG_TRIALS < data.length) {
+                console.warn(
+                    `N_DEBUG_TRIALS=${N_DEBUG_TRIALS}: running only the first ` +
+                    `${N_DEBUG_TRIALS} of ${data.length} rooms. Set it to 0 for a real run.`
+                );
+                data = data.slice(0, N_DEBUG_TRIALS);
+            }
             PRESETS = data;
             N_ROOMS = PRESETS.length;
             ROOM_BUTTON_ORDERS = Array.from({ length: N_ROOMS }, randomButtonOrder);
