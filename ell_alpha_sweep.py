@@ -33,10 +33,11 @@ def main():
 
     parser.add_argument('--beta', type=float, default=1.0,
                         help="Softmax inverse temperature, shared by the emp and info agents.")
-    parser.add_argument('--normalise_q', nargs='?', const='prior', default=None, choices=['prior', 'analytic'],
+    parser.add_argument('--normalise_q', nargs='?', const='prior', default=None, choices=['prior', 'analytic', 'analytic_max'],
                         help="Normalise emp values (see `leaf_q_bounds`): 'prior' (the default when given bare) divides by the "
                              "ell-prior-weighted mean of each ell's best leaf value over the task's histories; 'analytic' maps "
-                             "each ell onto [0, 1] with its analytic min and max. Info values are already normalised by the empty prior's variance.")
+                             "each ell onto [0, 1] with its analytic min and max; 'analytic_max' divides every ell by "
+                             "the largest analytic max, K (the number of outcomes). Info values are already normalised by the empty prior's variance.")
 
     args = parser.parse_args()
 
@@ -53,7 +54,7 @@ def main():
         if args.log_ell_bounds is not None:
             stem += f'_logEll{args.log_ell_bounds[0]}to{args.log_ell_bounds[1]}'
     if args.normalise_q:
-        stem += '_normQ' + ('analytic' if args.normalise_q == 'analytic' else '')
+        stem += '_normQ' + ('' if args.normalise_q == 'prior' else args.normalise_q)
     if args.beta != 1:
         stem += f'_beta{args.beta}'
     max_emps_path = f'{stem}_max_emps.csv'

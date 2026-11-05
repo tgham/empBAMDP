@@ -526,7 +526,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     current_emp), with its own cost. 'prior' divides by the single normaliser --
     the prior-weighted mean of the per-ell max leaf values -- so `beta` means the
     same at every ell; 'analytic' maps each ell onto [0, 1] with its own analytic
-    min and max. Info values are already normalised by the empty prior's variance.
+    min and max; 'analytic_max' divides every ell by K, the largest analytic max. Info values are already normalised by the empty prior's variance.
 
     Returns a long-format DataFrame with one row per (history_str, t, ell,
     agent), columns: alpha, Q_0, Q_1, ..., Q_terminate (if
@@ -1435,7 +1435,7 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     by the empty prior's variance). 'prior' divides by the single normaliser --
     the prior-weighted mean of the per-ell max leaf values, saved as
     `q_norm_emp`; 'analytic' maps each ell onto [0, 1] with its own analytic
-    min and max.
+    min and max; 'analytic_max' divides every ell by K, the largest analytic max.
 
     The ell sample is drawn ONCE and reused across every history, alpha, horizon
     and cost -- common random numbers, so the resulting mi values are directly
@@ -1544,6 +1544,10 @@ def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells, ell_w0s, mode
     Values map to (v - lo) / (hi - lo); a Dirichlet posterior never reaches the
     ends, and cost is ignored. Returns ((lo, hi) arrays over `ells`, None).
 
+    mode='analytic_max': one range for every ell, from the smallest analytic min
+    (0, as ell -> inf) to the largest analytic max (K, as ell -> 0, where the
+    ell < 1 max loses its powers: (N - r) q + r (q+1) = K). Returns ((0, K), None).
+
     mode='prior': for each ell, the best leaf value (`current_emp`) over every canonical history
     of 0..n_trials pulls -- every belief state a diag Q can reach, since its
     look-ahead stops at n_trials. The emp normaliser N is the average of these
@@ -1569,8 +1573,12 @@ def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells, ell_w0s, mode
             hi = np.where(ells < 1, (n_arms - r) * float(q) ** (1 - ells) + r * float(q + 1) ** (1 - ells),
                           min(n_arms, n_outcomes))
         return (lo, hi), None
+
+    ## one range for every ell: the analytic maxima peak at K as ell -> 0, the minima fall to 0 as ell -> inf
+    if mode == 'analytic_max':
+        return (0.0, float(n_outcomes)), None
     if mode != 'prior':
-        raise ValueError(f"mode must be 'prior' or 'analytic', got {mode!r}")
+        raise ValueError(f"mode must be 'prior', 'analytic' or 'analytic_max', got {mode!r}")
 
     path =os.path.join(bounds_dir, f'{n_arms}arms_{n_outcomes}outcomes_{n_trials}trials_'
                                     f'alpha{float(alpha)}_cost{float(cost)}.csv')
