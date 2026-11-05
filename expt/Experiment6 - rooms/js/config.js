@@ -100,8 +100,8 @@ const SHOW_GOLD_OUTCOME = false;
 //   "control" -> "In which room do you feel the greatest sense of control?"; no
 //                gold selection task -- after the choice (and the confidence
 //                rating, if CONFIDENCE) it is straight on to the next trial.
-// const OBJECTIVE = "gold";
-const OBJECTIVE = "control";
+const OBJECTIVE = "gold";
+// const OBJECTIVE = "control";
 if (OBJECTIVE !== "gold" && OBJECTIVE !== "control") {
     throw new Error(`OBJECTIVE must be "gold" or "control", not ${JSON.stringify(OBJECTIVE)}`);
 }
