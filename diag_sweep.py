@@ -23,10 +23,10 @@ def main():
     parser.add_argument('--beta_emp', type=float, default=1.0)
     parser.add_argument('--beta_info', type=float, default=1.0)
     parser.add_argument('--normalise_q', nargs='?', const='prior', default=None, choices=['prior', 'analytic', 'analytic_max'],
-                        help="Normalise emp values (see `leaf_q_bounds`): 'prior' (the default when given bare) divides by the "
-                             "ell-prior-weighted mean of each ell's best leaf value over the task's histories; 'analytic' maps "
+                        help="Normalise emp values (see `leaf_q_bounds`): 'prior' (the default when given bare) maps onto the "
+                             "ell-prior-weighted means of each ell's worst and best leaf values over the task's histories; 'analytic' maps "
                              "each ell onto [0, 1] with its analytic min and max; 'analytic_max' divides every ell by "
-                             "the largest analytic max, K (the number of outcomes). Info values are already normalised by the empty prior's variance.")
+                             "the largest analytic max, K (the number of outcomes). Info values: mapped onto their own min-max range in 'prior' mode, otherwise already normalised by the empty prior's variance.")
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--emp_type', type=str, nargs='+', default=['emp'],
                         choices=['emp', 'emp_lo', 'emp_1', 'emp_hi'],

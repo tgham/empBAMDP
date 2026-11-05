@@ -503,7 +503,7 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
       Coarse but exhaustive picture of how Q/p vary with ell.
       `ells` overrides that grid, e.g. with the diagnosticity's (`_diag_ell_grid`),
       and `ell_w0s` its prior weights for the emp normaliser, so `normalise_q`
-      divides by the same N as the diagnosticity run.
+      uses the same range as the diagnosticity run.
 
     Each curve is produced by one belief agent (`EmpAgent`) per value in
     `alphas` (the agent knows its Dirichlet concentration); the `alpha` column
@@ -523,10 +523,11 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
     terminate action is free and the info-seeking columns stay cost-free.
 
     `normalise_q`: None, or a `leaf_q_bounds` mode for the emp values (Q and
-    current_emp), with its own cost. 'prior' divides by the single normaliser --
-    the prior-weighted mean of the per-ell max leaf values -- so `beta` means the
-    same at every ell; 'analytic' maps each ell onto [0, 1] with its own analytic
-    min and max; 'analytic_max' divides every ell by K, the largest analytic max. Info values are already normalised by the empty prior's variance.
+    current_emp), with its own cost. 'prior' maps onto a single range --
+    the prior-weighted means of the per-ell min and max leaf values -- shared by every ell,
+    and info values onto their own min-max leaf range; 'analytic' maps each ell onto [0, 1] with its own analytic
+    min and max; 'analytic_max' divides every ell by K, the largest analytic max. In the analytic modes, info values
+    are left as they are, already normalised by the empty prior's variance.
 
     Returns a long-format DataFrame with one row per (history_str, t, ell,
     agent), columns: alpha, Q_0, Q_1, ..., Q_terminate (if
@@ -1353,7 +1354,7 @@ def _diag_rows(target, states, args, ell_w0s=None, q_bounds=(None, None)):
     it. `args` are the row function's arguments after the history. The agents are
     built here and dropped on return, so their memo is shared by every history in
     the batch but never outlives it, in the parent process or in a worker.
-    `q_bounds` = (emp bounds, info bounds) from `leaf_q_bounds` (info is None), or Nones.
+    `q_bounds` = (emp bounds, info bounds) from `leaf_q_bounds`, or Nones.
     """
     ell_samples, n_arms, n_outcomes, _, alpha, termination_arm, _, cost = args[:8]
     emp_agent = make_agent(n_arms, n_outcomes, alpha, ell_samples, termination_arm, cost, q_bounds=q_bounds[0])
@@ -1431,11 +1432,13 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
     `log_ell_prior`).
 
     `normalise_q`: None, or a `leaf_q_bounds` mode for the emp Q-values, so
-    `beta_emp` / `beta_info` share one scale (info values are already normalised
-    by the empty prior's variance). 'prior' divides by the single normaliser --
-    the prior-weighted mean of the per-ell max leaf values, saved as
-    `q_norm_emp`; 'analytic' maps each ell onto [0, 1] with its own analytic
-    min and max; 'analytic_max' divides every ell by K, the largest analytic max.
+    `beta_emp` / `beta_info` share one scale. 'prior' maps emp onto a single
+    range -- the prior-weighted means of the per-ell min and max leaf values, saved as
+    `q_lo_emp` / `q_hi_emp` -- and info onto its own min-max leaf range, saved as
+    `q_lo_info` / `q_hi_info`;
+    'analytic' maps each ell onto [0, 1] with its own analytic
+    min and max; 'analytic_max' divides every ell by K, the largest analytic max
+    (info values are then left as they are, already normalised by the empty prior's variance).
 
     The ell sample is drawn ONCE and reused across every history, alpha, horizon
     and cost -- common random numbers, so the resulting mi values are directly
@@ -1493,7 +1496,8 @@ def enumerate_diagnosticity(n_arms=2, n_outcomes=4, n_trials=6, alphas=(0.1,),
                 block = _run_diag_rows(target, states, args, n_jobs, desc, ell_w0s, q_bounds)
                 if normalise_q == 'prior':
                     for row in block:
-                        row['q_norm_emp'] = q_bounds[0][1]
+                        row['q_lo_emp'], row['q_hi_emp'] = q_bounds[0]
+                        row['q_lo_info'], row['q_hi_info'] = q_bounds[1]
 
                 ## rooms: index the tuples, and carry each room's orbit size
                 if expt == 'rooms':
@@ -1549,19 +1553,23 @@ def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells, ell_w0s, mode
     (0, as ell -> inf) to the largest analytic max (K, as ell -> 0, where the
     ell < 1 max loses its powers: (N - r) q + r (q+1) = K). Returns ((0, K), None).
 
-    mode='prior': for each ell, the best leaf value (`current_emp`) over every canonical history
-    of 0..n_trials pulls. Pass the deepest leaf the task values as `n_trials`:
+    mode='prior': for each ell, the worst and best leaf values (`current_emp`) over every
+    canonical history of 0..n_trials pulls. Pass the deepest leaf the task values as `n_trials`:
     the task's n_trials for arms (the one-step look-ahead from the last choice
     reaches it), n_trials - 1 for rooms (each room is valued at its own state).
-    The emp normaliser N is the average of these
-    maxes weighted by the ell prior `ell_w0s` (an array over `ells`, or the
-    {emp_type: weights} dict of `model_ell_grid`, whose types count equally), so
-    every ell's values map to v / N and `beta` means the same at every ell.
+    The emp range (lo, hi) is the average of these mins and maxes, weighted by
+    the ell prior `ell_w0s` (an array over `ells`, or the {emp_type: weights}
+    dict of `model_ell_grid`, whose types count equally). Every ell shares it,
+    so hi - lo is the prior-average per-ell range. Softmax ignores the shift lo,
+    so only that range sets the scale of `beta`.
 
-    The info agent's leaf, 1 - Var(h) / Var(h_0), is already normalised by the
+    The info agent's range is its own worst and best leaf value,
+    1 - Var(h) / Var(h_0), over the same histories (the worst is 0, at the empty prior).
+    In the analytic modes, the info agent's leaf is left as it is, already normalised by the
     variance of the empty prior, so it gets no bounds.
 
-    Returns ((0, N), None) for `make_agent`'s `q_bounds`.
+    Returns ((lo, hi), (lo_info, hi_info)) in 'prior' mode, ((lo, hi), None) otherwise,
+    as (emp, info) `q_bounds` for `make_agent`.
     """
     ells = np.asarray(ells, dtype=float)
 
@@ -1585,13 +1593,19 @@ def leaf_q_bounds(n_arms, n_outcomes, n_trials, alpha, cost, ells, ell_w0s, mode
     ## each ell's best leaf value over every history of 0..n_trials pulls (canonical_states stops one short, hence +1)
     states = canonical_states(n_arms, n_outcomes, n_trials + 1)
     emp_agent = make_agent(n_arms, n_outcomes, alpha, ells, cost=cost)
-    hi = np.max([emp_agent.leaf_value(C) for (_, C, _, _, _) in states], axis=0) # (n_ells,)
+    emp_leaves = np.array([emp_agent.leaf_value(C) for (_, C, _, _, _) in states]) # (n_states, n_ells)
+    lo, hi = emp_leaves.min(axis=0), emp_leaves.max(axis=0) # (n_ells,)
 
-    ## prior-weighted average of the per-ell maxes
+    ## prior-weighted average of the per-ell mins and maxes
     w = (np.mean([np.asarray(v, dtype=float) for v in ell_w0s.values()], axis=0)
          if isinstance(ell_w0s, dict) else np.asarray(ell_w0s, dtype=float))
-    N = float(w @ hi / w.sum())
-    return (0.0, N), None
+    w = w / w.sum()
+    emp_lo, emp_hi = float(w @ lo), float(w @ hi)
+
+    ## info agent's worst and best leaf values over the same histories (no ell, so no averaging)
+    info_agent = make_agent(n_arms, n_outcomes, alpha, None, cost=cost)
+    info_leaves = np.array([info_agent.leaf_value(C)[0] for (_, C, _, _, _) in states])
+    return (emp_lo, emp_hi), (float(info_leaves.min()), float(info_leaves.max()))
 
 
 def _emp_type_cols(emp_type, log_ell_bounds):
