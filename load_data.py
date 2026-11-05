@@ -575,6 +575,10 @@ def load_participant(path):
         for key in ['sample', 'coin', 'attention'] + list(QUESTIONNAIRES):
             dfs[key]['subject_id'] = id
         print(f"subject_id missing from {path}, using source_file instead: {dfs['sample']['subject_id'].values[0]}")
+
+    ## rename subject_id to id in all, as in load_data_rooms and the fitting code
+    for df in dfs.values():
+        df.rename(columns={"subject_id": "id"}, inplace=True)
     return dfs
 
 
@@ -587,7 +591,7 @@ def load_directory(data_dir, pattern="*.json"):
 
     Returns:
         dict of dataframes keyed by phase, as load_participant, with all
-        participants stacked. Use `source_file` or `subject_id` to split them.
+        participants stacked. Use `source_file` or `id` to split them.
     """
     paths = sorted(Path(data_dir).glob(pattern))
     if not paths:
@@ -613,25 +617,62 @@ def load_directory(data_dir, pattern="*.json"):
     feedback_path = Path(data_dir) / 'feedback.csv'
     out['feedback'].to_csv(feedback_path, index=False)
     out.pop('feedback', None)
+
+    ## bonuses, from the pid_map.json in the same folder
+    out['bonuses'] = bonus_df(out['meta'], data_dir)
     return out
 
 
 ## get bonus info
-def load_reversed_pid_map(df):
-    json_path = 'expt/Experiment4/data/3a4k/pid_map.json'
+def load_reversed_pid_map(df, data_dir='expt/Experiment4/data/3a4k'):
+    """id -> prolific_id, from the pid_map.json saved alongside the data."""
+    json_path = Path(data_dir) / 'pid_map.json'
     with open(json_path, 'r') as f:
         pid_map = json.load(f)  # prolific_id -> subject_id
-    
+
     # reverse: subject_id -> prolific_id
-    reversed_map = {subject_id: prolific_id for prolific_id, subject_id in pid_map.items() if subject_id in df['subject_id'].values}
+    reversed_map = {subject_id: prolific_id for prolific_id, subject_id in pid_map.items() if subject_id in df['id'].values}
 
     return reversed_map
 
+
+class Bonuses(pd.DataFrame):
+    """DataFrame of (prolific_id, bonus_gbp) that prints as Prolific's bulk-bonus format.
+
+    Displays as a normal table in a notebook; `print(bonuses)` (or str()) gives
+    "prolific_id,bonus" lines ready to paste into Prolific.
+    """
+    @property
+    def _constructor(self):
+        return Bonuses
+
+    def __str__(self):
+        return self[['prolific_id', 'bonus_gbp']].to_csv(index=False, header=False).strip()
+
+
+def bonus_df(df, data_dir):
+    """One row per participant with a bonus: id, prolific_id, bonus_gbp.
+
+    Args:
+        df: any dataframe with session-level `id` and `bonus_gbp` (e.g. meta).
+        data_dir: the data folder, which also holds pid_map.json.
+
+    Participants with no bonus (did not finish) are left out, as in print_bonuses.
+    Returns an empty table if data_dir has no pid_map.json.
+    """
+    cols = ['id', 'prolific_id', 'bonus_gbp']
+    if df.empty or not (Path(data_dir) / 'pid_map.json').exists():
+        print(f"no pid_map.json in {data_dir}: bonuses not computed")
+        return Bonuses(columns=cols)
+    reversed_map = load_reversed_pid_map(df, data_dir)
+    out = df[['id', 'bonus_gbp']].drop_duplicates('id').dropna(subset=['bonus_gbp'])
+    out['prolific_id'] = out['id'].map(reversed_map)
+    missing = out['prolific_id'].isna().sum()
+    if missing:
+        print(f"{missing} participant(s) with a bonus are not in pid_map.json")
+    return Bonuses(out[cols].reset_index(drop=True))
+
+
 ## print bonuses
-def print_bonuses(df):
-    reversed_map = load_reversed_pid_map(df)
-    for subject_id in df['subject_id'].unique():
-        bonus = df.loc[df['subject_id'] == subject_id, 'bonus_gbp'].values[0]
-        pid = reversed_map.get(subject_id, None)
-        if bonus is not None:
-            print(f"{pid},{bonus}")
+def print_bonuses(df, data_dir='expt/Experiment4/data/3a4k'):
+    print(bonus_df(df, data_dir))
