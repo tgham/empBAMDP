@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from emp_utils import canonical_count_matrix, array_to_hist
+from emp_models import make_agent
 from load_data import (
     _read_trials, _flatten, _by_task, _session as _session_exp4,
     _attention_df, _feedback_df, _coin_df as _coin_df_exp4, dirichlet_entropy,
@@ -155,6 +156,7 @@ def _choice_df(trials, session):
     room's generative T only -- the unchosen room's is never drawn.
     """
     rows = []
+    ell_1_agent = None  # built on the first trial, once the room size is known
     for t in _by_task(trials, "room_choice"):
         option_order = t.get("option_order")
         chosen = t.get("chosen_option")
@@ -181,7 +183,12 @@ def _choice_df(trials, session):
             # the preset history in the encoding gen_rooms / fit_emp use: repr of (((a, o), count), ...)
             row[f"room_history_{j}"] = repr(tuple(((a, o), n) for (a, o), n in preset))
             row[f"t_{j}"] = int(C.sum())
+            # Q-value under ell = 1 (expected reward of the room's belief state), as gen_rooms' ell_1
+            if ell_1_agent is None:
+                ell_1_agent = make_agent(*C.shape, session["alpha"], 1.0)
+            row[f"Q_ell_1_{j}"] = ell_1_agent.leaf_value(C)[0]
             row.update(_room_summary(C, session["alpha"], j))
+        row[f"history_str_pair"] = row["history_str_0"]+'  |  '+row["history_str_1"]
         row.update(_flatten(t.get("true_T"), "true_T"))
         rows.append(row)
 
@@ -198,6 +205,15 @@ def _choice_df(trials, session):
     df["n_AFC"] = n_opt
     df["n_arms"], df["n_outcomes"] = df[f"counts_array_0"].iloc[0].shape
     df["expt"] = "rooms"
+
+    # trial identity: the pair of preset histories. The presets file runs in a
+    # fixed order of shuffled blocks, each containing every unique pair once, so
+    # trial_id (numbered by first appearance) is the same across participants,
+    # `repeat` counts earlier presentations, and block = choice // block size.
+    pair = df[[f"room_history_{j}" for j in range(n_opt)]].apply(tuple, axis=1)
+    df["trial_id"] = pd.factorize(pair)[0]
+    df["repeat"] = df.groupby("trial_id").cumcount()
+    df["block"] = df["choice"] // df["trial_id"].nunique()
 
     def per_option(stat):
         return df[[f"{stat}_{j}" for j in range(n_opt)]].to_numpy()
@@ -216,6 +232,11 @@ def _choice_df(trials, session):
     tie = (presses == presses.max(axis=1, keepdims=True)).all(axis=1)
     df["chose_more_presses"] = np.where(tie, np.nan, df.chosen_n_presses == presses.max(axis=1))
     df["chose_fewer_presses"] = np.where(tie, np.nan, df.chosen_n_presses == presses.min(axis=1))
+
+    # did they pick the truly optimal room, i.e. the highest Q under ell = 1? NaN when the rooms tie
+    Q1 = per_option("Q_ell_1")
+    best = np.isclose(Q1, Q1.max(axis=1, keepdims=True))
+    df["chose_ell_1"] = np.where(best.all(axis=1), np.nan, best[idx, chosen])
 
     return df
 
