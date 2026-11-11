@@ -2016,6 +2016,7 @@ def emp_ell_bounds(emp_type, log_ell_bounds, eps=1e-3):
 def fit_emp(df_ppt,
             param_bounds, agent_types=['emp', 'info'],
                            horizon=None, init_t=0,
+                           param_0s = None,
                            maxiter=200, tol=1e-6, n_jobs=-1,
                            ell_eps=1e-3, optimizer='lbfgsb', n_starts=10,
                            alpha_bounds=None, seed=None, verbose=True):
@@ -2043,6 +2044,12 @@ def fit_emp(df_ppt,
         Leading trials used to warm the belief without being scored. Preset
         ("horizons") rooms need init_t=0: their warm-up is the instructed
         history in `preset_history`, which is already in the belief.
+    param_0s : (log_ell_0, beta_0) or None
+        Optional initialisation. For 'lbfgsb' it replaces the first of the
+        `n_starts` random starts (so n_starts=1 starts only from here); for
+        'de' it is passed as `x0`. Either entry may be None to draw it at
+        random as usual. Values are clipped into each type's bounds (e.g.
+        log_ell_0 is ignored for 'info' and 'emp_1'); alpha is always drawn.
     maxiter : int
     tol : float
     n_jobs : int
@@ -2077,9 +2084,18 @@ def fit_emp(df_ppt,
     for i_type, agent_type in enumerate(agent_types):
         if agent_type == 'info':
             log_ell_bounds, beta_bounds = None, param_bounds[1]
+            if param_0s is not None:
+                log_ell_0, beta_0 = None, param_0s[1]
+            else:
+                log_ell_0, beta_0 = None, None
         else:
             log_ell_bounds = emp_ell_bounds(agent_type, param_bounds[0], eps=ell_eps)
             beta_bounds = param_bounds[1]
+            if param_0s is not None:
+                log_ell_0, beta_0 = param_0s[0], param_0s[1]
+            else:
+                log_ell_0, beta_0 = None, None
+
         with tqdm_joblib(tqdm(total=len(pids), desc=f"Fitting {agent_type}",
                               disable=not verbose)):
             results = Parallel(n_jobs=n_jobs)(
@@ -2088,6 +2104,8 @@ def fit_emp(df_ppt,
                     df_ppt=df_ppt.loc[df_ppt['id'] == pid],
                     log_ell_bounds=log_ell_bounds,
                     beta_bounds=beta_bounds,
+                    log_ell_0=log_ell_0,
+                    beta_0=beta_0,
                     horizon=horizon,
                     init_t=init_t,
                     maxiter=maxiter,
@@ -2109,6 +2127,7 @@ def fit_emp(df_ppt,
 def _fit_ppt(pid, df_ppt, log_ell_bounds, beta_bounds, horizon,
              init_t, maxiter, tol, verbose, agent_type=None,
              optimizer='lbfgsb', n_starts=10, alpha_bounds=None,
+             log_ell_0=None, beta_0=None,
              popsize=15, mutation=(0.5, 1), recombination=0.7, seed=None):
     """
     Fit model for a single subject, by multi-start L-BFGS-B ('lbfgsb') or
@@ -2167,8 +2186,18 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, beta_bounds, horizon,
         elif design['expt'] == 'arms':
             return _nll_from_arms(arms, design, ell, beta, horizon, init_t, alpha=alpha)
 
+    ## user-supplied starting point, in the optimiser's parameter order
+    ## (log ell if free, beta, alpha if free); a None entry is drawn at random below
+    x_init = ([log_ell_0] if free_ell else []) + [beta_0] + ([None] if fit_alpha else [])
+    has_init = any(x is not None for x in x_init)
+
     rng = np.random.default_rng(seed)
     if optimizer == 'de':
+        x0_de = None
+        if has_init:
+            ## DE needs a full x0 inside the bounds: fill gaps with bound midpoints
+            x0_de = [np.clip(x, *bd) if x is not None else np.mean(bd)
+                     for x, bd in zip(x_init, bounds)]
         if not np.all(np.isfinite(bounds)):
             raise ValueError(f"optimizer='de' needs finite bounds, got {bounds}; "
                              f"use optimizer='lbfgsb' for open bounds")
@@ -2181,6 +2210,7 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, beta_bounds, horizon,
             mutation=mutation,
             recombination=recombination,
             seed=rng,
+            x0=x0_de,
             polish=True,
             workers=1,
             updating='deferred',
@@ -2190,10 +2220,16 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, beta_bounds, horizon,
         ## starting points: log ell from its (truncated) prior, beta and alpha uniform
         starts = rng.uniform(*beta_bounds, size=(n_starts, 1))
         if free_ell:
-            log_ell_0 = log_ell_prior(agent_type, bounds[0])[0].rvs(size=n_starts, random_state=rng)
-            starts = np.column_stack([log_ell_0, starts])
+            log_ell_starts = log_ell_prior(agent_type, bounds[0])[0].rvs(size=n_starts, random_state=rng)
+            starts = np.column_stack([log_ell_starts, starts])
         if fit_alpha:
             starts = np.column_stack([starts, rng.uniform(*alpha_bounds, size=n_starts)])
+
+        ## the first start is the user's initialisation (clipped into this type's bounds)
+        if has_init:
+            for j, (x, bd) in enumerate(zip(x_init, bounds)):
+                if x is not None:
+                    starts[0, j] = np.clip(x, *bd)
 
         ## L-BFGS-B from each, keeping the best; open sides go in as None
         lbfgsb_bounds = [tuple(None if np.isinf(b) else b for b in bd) for bd in bounds]
