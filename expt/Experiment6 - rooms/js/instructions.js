@@ -160,7 +160,7 @@ function outcomeByTokenCount(which) {
 //----------------------------------------------------------------------------//
 // Auto-play demo: the computer presses one button `cfg.outcomes.length` times,
 // showing the agent move to each (fixed) outcome and return to the centre. Used
-// to illustrate how reliable vs variable a button can be. A coloured token is
+// to illustrate how consistent vs variable a button can be. A coloured token is
 // placed on each location the agent reaches, so the tally builds up as the demo
 // plays (the tally starts empty). The Next button appears after `cfg.revealAfter`
 // observations (default 5) so the participant may continue early while the rest
@@ -729,7 +729,7 @@ function make_instructions_timeline() {
                 lines: [
                     `Whenever a button is pressed, a <strong>coloured token</strong> will be placed on the location that you reached.`,
                     `Hence, the tokens in each location reflect the <strong>number of times</strong> each button has taken you there.`,
-                    `While there is <strong>always some degree of randomness</strong> in where a button leads, buttons can vary in how <strong>reliable</strong> they are.`,
+                    `While there is <strong>always some degree of randomness</strong> in where a button leads, buttons can vary in how <strong>consistent</strong> they are.`,
                     `Let's look at ${BUTTONS.length === 2 ? "two" : "three"} examples.`
                 ],
                 stage: taskDisplayStaticHTML(counts)
@@ -738,15 +738,15 @@ function make_instructions_timeline() {
     }));
 
     // ---- Reliability animations (computer presses each button; Next after 5).
-    //      One per button: with 3, reliable (blue) / two directions (red) /
-    //      variable (green); with 2, the reliable and the variable demo, the
+    //      One per button: with 3, consistent (blue) / two directions (red) /
+    //      variable (green); with 2, the consistent and the variable demo, the
     //      latter on red. ----
     const tokenDemos = [{
         button: "blue",
         title: "Tokens",
         outcomes: ["up", "up", "up", "right", "up", "up", "left"],
         lines: [
-            `For example, a button may have a single preferred direction, reliably leading you to one location.`,
+            `For example, a button may have a single preferred direction, consistently leading you to one location.`,
             `See how this <strong>blue</strong> button often takes you <strong>upwards</strong> &mdash; although not all the time.`
         ]
     }];
@@ -833,7 +833,7 @@ function make_instructions_timeline() {
         screenHTML({
             title: `Choosing between rooms`,
             lines: [
-                `You will encounter a series of ${roomSets} of rooms, each containing <strong>${N_BUTTONS} buttons</strong>.`,
+                `You will encounter a series of <strong>${roomSets}</strong> of rooms, each containing the ${N_BUTTONS} buttons you have just seen.`,
                 `These rooms are <strong>unrelated</strong> to one another &mdash; how the buttons work in one room has nothing to do with how they work in the other room.`
             ],
             stage: roomsStaticHTML(testDemo, true)
@@ -841,7 +841,7 @@ function make_instructions_timeline() {
         screenHTML({
             title: `Choosing between rooms`,
             lines: [
-                `In fact, when you are shown these ${N_AFC === 2 ? "two" : N_AFC} rooms, the buttons in each will be <strong>tested automatically</strong> &mdash; that is, they will be pressed for you, and you will observe their outcomes.`,
+                `In fact, when you are shown these ${N_AFC === 2 ? "two" : N_AFC} rooms, the buttons in each will be <strong>tested automatically</strong> &mdash; that is, they will be randomly pressed for you, and you will observe their outcomes.`,
                 `Click Next to watch the rooms being tested.`
             ],
             stage: roomsStaticHTML(testDemo, true)
@@ -857,7 +857,8 @@ function make_instructions_timeline() {
         screenHTML({
             title: `Which buttons are tested in each room?`,
             lines: [
-                `The number of times the buttons are pressed for you before you select your room, and which buttons are pressed, <strong>varies between trials</strong>.`
+                `The number of times the buttons are pressed for you before you select your room, and which buttons are pressed, <strong>varies between trials</strong>.`,
+                `This is decided <strong>at random</strong> &mdash; the computer does <strong>not</strong> know how well any of the buttons work.`
             ],
             stage: roomsStaticHTML(testDemo)
         }),
@@ -973,7 +974,7 @@ function make_instructions_timeline() {
             ],
             note: `(Note that in the real experiment, you will not see whether or not you actually reached the gold.)`,
             revealLines: [
-                `There's <strong>no guarantee</strong> the gold coin will appear somewhere any button can reliably reach.`,
+                `There's <strong>no guarantee</strong> the gold coin will appear somewhere any button can consistently reach.`,
                 `The best you can do is to choose the button you think is most likely to reach the gold coin`
             ]
         }));
