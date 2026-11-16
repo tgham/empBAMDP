@@ -2017,8 +2017,8 @@ def fit_emp(df_ppt,
             param_bounds, agent_types=['emp', 'info'],
                            horizon=None, init_t=0,
                            param_0s = None,
-                           maxiter=200, tol=1e-6, n_jobs=-1,
-                           ell_eps=1e-3, optimizer='lbfgsb', n_starts=10,
+                           maxiter=500, tol=1e-6, n_jobs=-1,
+                           ell_eps=1e-3, optimizer='lbfgsb', n_starts=25,
                            alpha_bounds=None, seed=None, verbose=True):
     """
     Parallelized version of fit_emp_model using joblib.
