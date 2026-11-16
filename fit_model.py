@@ -18,9 +18,10 @@ simulating agents under the fitted ells) read back in.
 With --mode loocv (or both), also runs leave-one-block-out cross-validation:
 one fold per value of the data's `block` column, fitting to every other block
 and scoring the held-out block's trials under the fitted parameters. Writes one
-row per (id, agent_type, held-out block) to the same path with `_fits.csv`
-replaced by `_loocv.csv`; summing `test_nll` over blocks gives each subject's
-cross-validated NLL.
+row per (id, agent_type) to the fits path with `_fits.csv` swapped for
+`_loocv.csv`: each fold's fitted parameters, train_nll and test_nll as
+`{col}_block{b}` columns (b = held-out block), plus `test_nll` and
+`n_test_trials` totalled over folds.
 """
 
 from emp_runners import fit_emp, nll_emp
@@ -205,14 +206,22 @@ def main():
         if 'block' not in df.columns:
             raise ValueError("--mode loocv needs a 'block' column in the data")
         df_cv = loocv_emp(df, fit_kwargs, init_t=args.init_t, verbose=True)
-        out_cv = out[:-len('_fits.csv')] + '_loocv.csv' if out.endswith('_fits.csv') \
-            else os.path.splitext(out)[0] + '_loocv.csv'
-        df_cv.to_csv(out_cv, index=False)
-        print(f'Saved {len(df_cv)} fold fits to {out_cv}')
+        stem = out[:-len('_fits.csv')] if out.endswith('_fits.csv') else os.path.splitext(out)[0]
 
-        ## cross-validated NLL: summed over held-out blocks per subject, then averaged
-        cv_nll = df_cv.groupby(['agent_type', 'id'])['test_nll'].sum()
-        print(cv_nll.groupby('agent_type').mean().rename('mean summed test_nll'))
+        ## one row per (id, agent_type): each fold's fit and held-out NLL as
+        ## `{col}_block{b}` columns (b = held-out block), then the totals over folds
+        fold_cols = ['log_ell', 'ell', 'beta', 'agent_alpha', 'success',
+                     'train_nll', 'test_nll', 'n_test_trials']
+        keys = ['id', 'agent_type']
+        df_wide = df_cv.pivot(index=keys, columns='block', values=fold_cols)
+        df_wide.columns = [f'{col}_block{b}' for col, b in df_wide.columns]
+        totals = df_cv.groupby(keys)[['test_nll', 'n_test_trials']].sum()
+        df_wide = df_wide.join(totals).reset_index()
+        df_wide.to_csv(f'{stem}_loocv.csv', index=False)
+        print(f'Saved {len(df_wide)} cross-validated fits to {stem}_loocv.csv')
+
+        ## quick look: summed held-out NLL, averaged over subjects
+        print(df_wide.groupby('agent_type')['test_nll'].mean().rename('mean summed test_nll'))
 
 
 if __name__ == '__main__':
