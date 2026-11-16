@@ -6,7 +6,7 @@ import pandas as pd
 from emp_utils import *
 from scipy.optimize import bisect, brentq, minimize, differential_evolution
 from scipy.special import softmax as _softmax
-from scipy.special import logsumexp
+from scipy.special import logsumexp, log_softmax
 from joblib import Parallel, delayed, effective_n_jobs
 import warnings
 from tqdm_joblib import tqdm_joblib
@@ -646,6 +646,10 @@ def enumerate_curves(n_arms, n_outcomes, n_trials, alphas = [0.1],
 ## split type's slice of log ell (see `emp_ell_bounds`) -- the same prior
 ## parameter recovery samples generative ells from
 LOG_ELL_PRIOR = (0.0, np.sqrt(2.0))
+
+## prior over beta for the grid fits: N(0, 10) (mean, variance) truncated to
+## beta > 0, i.e. half-normal with sd sqrt(10); stored as (loc, scale) for scipy
+BETA_PRIOR = (0.0, np.sqrt(10.0))
 ELL_PRIORS = ('lognormal', 'loguniform')
 
 
@@ -2056,9 +2060,14 @@ def fit_emp(df_ppt,
         Number of parallel jobs (-1 = all cores)
     ell_eps : float
         Margin (in log ell) keeping 'emp_lo'/'emp_hi' off ell=1.
-    optimizer : 'lbfgsb' or 'de'
+    optimizer : 'lbfgsb', 'de' or 'grid'
         'lbfgsb' (default): multi-start L-BFGS-B, which allows open bounds.
         'de': differential evolution, which needs finite bounds throughout.
+        'grid': Bayesian fit by grid approximation over (log ell, beta), with
+        the ell prior `log_ell_prior` and the half-normal beta prior
+        `BETA_PRIOR`; see `_fit_ppt`. Not combinable with `alpha_bounds`.
+    n_ell_grid, n_beta_grid : int
+        Grid sizes for optimizer='grid'.
     n_starts : int
         Starting points for 'lbfgsb': log ell from the N(0, 2) prior over the
         type's slice, beta and alpha uniform over `beta_bounds` / `alpha_bounds`.
@@ -2076,8 +2085,8 @@ def fit_emp(df_ppt,
     --------
     pd.DataFrame with fitted parameters per subject
     """
-    if optimizer not in ('lbfgsb', 'de'):
-        raise ValueError(f"optimizer must be 'lbfgsb' or 'de', got {optimizer!r}")
+    if optimizer not in ('lbfgsb', 'de', 'grid'):
+        raise ValueError(f"optimizer must be 'lbfgsb', 'de' or 'grid', got {optimizer!r}")
     pids = df_ppt['id'].unique()
     seeds = np.random.SeedSequence(seed).spawn(len(agent_types) * len(pids))
     df_fits = pd.DataFrame()
@@ -2115,7 +2124,9 @@ def fit_emp(df_ppt,
                     optimizer=optimizer,
                     n_starts=n_starts,
                     alpha_bounds=alpha_bounds,
-                    seed=np.random.default_rng(seeds[i_type * len(pids) + i_pid])
+                    seed=np.random.default_rng(seeds[i_type * len(pids) + i_pid]),
+                    n_ell_grid=n_ell_grid,
+                    n_beta_grid=n_beta_grid,
                 )
                 for i_pid, pid in enumerate(pids)
             )
@@ -2128,10 +2139,19 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, beta_bounds, horizon,
              init_t, maxiter, tol, verbose, agent_type=None,
              optimizer='lbfgsb', n_starts=10, alpha_bounds=None,
              log_ell_0=None, beta_0=None,
-             popsize=15, mutation=(0.5, 1), recombination=0.7, seed=None):
+             popsize=15, mutation=(0.5, 1), recombination=0.7, seed=None,
+             n_ell_grid=100, n_beta_grid=100):
     """
-    Fit model for a single subject, by multi-start L-BFGS-B ('lbfgsb') or
-    differential evolution ('de').
+    Fit model for a single subject, by multi-start L-BFGS-B ('lbfgsb'),
+    differential evolution ('de'), or a Bayesian grid approximation ('grid').
+
+    'grid': prior weights w_ij = pi(log ell_i) pi(beta_j) on an evenly spaced
+    grid, NLL_ij from one broadcast pass of `_nll_from_rooms` / `_nll_from_arms`,
+    then log evidence = logsumexp(log w - NLL) and log posterior = log w - NLL -
+    log evidence. `log_ell` / `beta` are then posterior means (`ell` =
+    exp(mean log ell)), `nll` the grid's minimum NLL (so `BIC` keeps its
+    meaning), plus `log_evidence`, posterior sds, MAP cell, the posterior mass
+    in the edge cells, and `_post` (grid axes and log posterior).
 
     The empowerment agent is optimised over log ell (bounds `log_ell_bounds`,
     +/-inf where open -- 'lbfgsb' only); the agent itself is run at
@@ -2192,7 +2212,59 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, beta_bounds, horizon,
     has_init = any(x is not None for x in x_init)
 
     rng = np.random.default_rng(seed)
-    if optimizer == 'de':
+    grid_out = {}
+    if optimizer == 'grid':
+        if fit_alpha:
+            raise ValueError("optimizer='grid' does not fit alpha; drop alpha_bounds")
+
+        ## ell grid with its prior weights: none for info, the single point ell=1 for emp_1
+        if agent_type == 'info':
+            ells, ell_w = None, np.ones(1)
+        else:
+            ells, ell_w = model_ell_grid(n_ell_grid, (agent_type,), log_ell_bounds)
+            ell_w = ell_w[agent_type]
+        log_ells = None if ells is None else np.log(ells)
+
+        ## beta grid, out to 4 prior sds, with its half-normal prior weights
+        loc, scale = BETA_PRIOR
+        betas = np.linspace(beta_bounds[0], min(beta_bounds[1], loc + 4 * scale), n_beta_grid)
+        beta_w = ell_weights(betas, truncnorm(-loc / scale, np.inf, loc=loc, scale=scale))
+
+        ## NLL of every cell, then posterior and evidence
+        if design['expt'] == 'rooms':
+            NLL = _nll_from_rooms(rooms, design, ells, betas)
+        else:
+            NLL = _nll_from_arms(arms, design, ells, betas, horizon, init_t)
+        log_joint = np.log(ell_w)[:, None] + np.log(beta_w)[None, :] - NLL
+        log_evidence = logsumexp(log_joint)
+        log_post = log_joint - log_evidence
+        post = np.exp(log_post)
+        p_ell, p_beta = post.sum(axis=1), post.sum(axis=0)
+
+        ## posterior summaries
+        beta_hat = float(p_beta @ betas)
+        i_map, j_map = np.unravel_index(np.argmax(log_post), log_post.shape)
+        grid_out = {
+            'log_evidence': float(log_evidence),
+            'beta_sd': float(np.sqrt(p_beta @ (betas - beta_hat) ** 2)),
+            'beta_map': float(betas[j_map]),
+            'beta_edge_mass': float(p_beta[-1]), ## mass at the top of the beta grid
+            '_post': {'log_ells': log_ells, 'betas': betas, 'log_post': log_post},
+        }
+        if log_ells is None:
+            ell_hat = None
+        else:
+            log_ell_mean = float(p_ell @ log_ells)
+            ell_hat = np.exp(log_ell_mean)
+            grid_out.update({
+                'log_ell_sd': float(np.sqrt(p_ell @ (log_ells - log_ell_mean) ** 2)),
+                'log_ell_map': float(log_ells[i_map]),
+                'log_ell_edge_mass': float(p_ell[0] + p_ell[-1]) if len(log_ells) > 1 else 0.0,
+            })
+        alpha_hat = design['alpha']
+        nll = float(NLL.min()) ## grid MLE
+        success = True
+    elif optimizer == 'de':
         x0_de = None
         if has_init:
             ## DE needs a full x0 inside the bounds: fill gaps with bound midpoints
@@ -2239,11 +2311,12 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, beta_bounds, horizon,
                          tol=tol, options={'maxiter': maxiter})
             if res is None or r.fun < res.fun:
                 res = r
-    ell_hat, beta_hat, alpha_hat = unpack(res.x)
+    if optimizer != 'grid':
+        ell_hat, beta_hat, alpha_hat = unpack(res.x)
+        nll = res.fun
+        success = res.success
     ell_hat = None if ell_hat is None else float(ell_hat)
     log_ell_hat = None if ell_hat is None else float(np.log(ell_hat))
-    nll = res.fun
-    success = res.success
 
     ## calculate n_trials from the scored count
     if design['expt'] == 'rooms':
@@ -2264,7 +2337,8 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, beta_bounds, horizon,
         'BIC': BIC,
         'success': success,
         'n_trials': n_fit_trials,
-        'agent_type': agent_type
+        'agent_type': agent_type,
+        **grid_out,
     }
 
 ## efficient hoisting of important info for fitting
@@ -2337,8 +2411,18 @@ def _arms_from_df(df_ppt):
     return rooms
 
 
+def _grid_nll_result(NLL, scalar):
+    """The (n_ell, n_beta) NLL accumulated by `_nll_from_arms` / `_nll_from_rooms`,
+    returned as a float when both ell and beta were scalars."""
+    return float(NLL[0, 0]) if scalar else NLL
+
+
 # NLL of the choices under, given parameterised model
 def _nll_from_arms(arms, design, ell, beta, horizon, init_t, alpha=None):
+    """NLL of each room's choices. `ell` (scalar, 1-D grid, or None for the
+    info agent) and `beta` (scalar or 1-D grid) broadcast: grids return an
+    (n_ell, n_beta) array, one agent pass serving every cell since Q does not
+    depend on beta. Scalars return a float."""
 
     n_arms = design['n_arms']
     n_outcomes = design['n_outcomes']
@@ -2350,8 +2434,10 @@ def _nll_from_arms(arms, design, ell, beta, horizon, init_t, alpha=None):
 
     ## fresh agent per evaluation: the optimiser moves ell on every call, so a shared cache would never be reused
     agent = make_agent(n_arms, n_outcomes, alpha, ell, termination_arm, cost)
+    scalar = np.ndim(ell) == 0 and np.ndim(beta) == 0
+    betas = np.atleast_1d(np.asarray(beta, dtype=float))
 
-    NLL = 0.0
+    NLL = np.zeros((agent.n_params, len(betas)))
     for trials, actions, outcomes, terminated, init_counts in arms:
 
         ## flat prior for the full task
@@ -2372,16 +2458,16 @@ def _nll_from_arms(arms, design, ell, beta, horizon, init_t, alpha=None):
                 continue
 
             h = (n_trials - t) if horizon is None else min(horizon, n_trials - t)
-            Q = agent.Q(counts, h)[0]
-            probs = _softmax(Q * beta)
+            Q = agent.Q(counts, h) ## (n_ell, n_actions)
+            log_probs = log_softmax(Q[:, None, :] * betas[None, :, None], axis=-1) ## (n_ell, n_beta, n_actions)
 
             if terminated[i]:
-                NLL -= np.log(probs[n_arms])
+                NLL -= log_probs[..., n_arms]
                 break
 
-            NLL -= np.log(probs[actions[i]])
+            NLL -= log_probs[..., actions[i]]
             counts[actions[i], outcomes[i]] += 1
-    return NLL
+    return _grid_nll_result(NLL, scalar)
 
 
 def _rooms_from_df(df_ppt):
@@ -2413,6 +2499,8 @@ def _rooms_from_df(df_ppt):
 
 # NLL of the room choices, given parameterised model
 def _nll_from_rooms(rooms, design, ell, beta, alpha=None):
+    """NLL of the room choices; `ell` and `beta` broadcast over grids as in
+    `_nll_from_arms`."""
 
     n_arms = design['n_arms']
     n_outcomes = design['n_outcomes']
@@ -2423,16 +2511,18 @@ def _nll_from_rooms(rooms, design, ell, beta, alpha=None):
 
     ## fresh agent per evaluation, as in _nll_from_arms
     agent = make_agent(n_arms, n_outcomes, alpha, ell, termination_arm, cost)
+    scalar = np.ndim(ell) == 0 and np.ndim(beta) == 0
+    betas = np.atleast_1d(np.asarray(beta, dtype=float))
 
-    NLL = 0.0
+    NLL = np.zeros((agent.n_params, len(betas)))
     for counts_array, action in rooms:
 
-        ## Q = emp of each room's belief state
-        Q = np.array([agent.leaf_value(counts)[0] for counts in counts_array])
-        probs = _softmax(Q * beta)
+        ## Q = emp of each room's belief state, (n_ell, n_AFC)
+        Q = np.stack([agent.leaf_value(counts) for counts in counts_array], axis=-1)
+        log_probs = log_softmax(Q[:, None, :] * betas[None, :, None], axis=-1) ## (n_ell, n_beta, n_AFC)
 
-        NLL -= np.log(probs[action])
-    return NLL
+        NLL -= log_probs[..., action]
+    return _grid_nll_result(NLL, scalar)
 
 
 def nll_emp(df_ppt, ell=1, horizon=None, init_t=0, beta=1, alpha=None):
