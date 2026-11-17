@@ -2066,7 +2066,7 @@ def fit_emp(df_ppt,
         'grid': Bayesian fit by grid approximation over (log ell, beta), with
         the ell prior `log_ell_prior` and the half-normal beta prior
         `BETA_PRIOR`; see `_fit_ppt`. Not combinable with `alpha_bounds`.
-    n_ell_grid, n_beta_grid : int
+    n_ell_samples, n_beta_samples : int
         Grid sizes for optimizer='grid'.
     n_starts : int
         Starting points for 'lbfgsb': log ell from the N(0, 2) prior over the
@@ -2125,8 +2125,8 @@ def fit_emp(df_ppt,
                     n_starts=n_starts,
                     alpha_bounds=alpha_bounds,
                     seed=np.random.default_rng(seeds[i_type * len(pids) + i_pid]),
-                    n_ell_grid=n_ell_grid,
-                    n_beta_grid=n_beta_grid,
+                    n_ell_samples=n_ell_samples,
+                    n_beta_samples=n_beta_samples,
                 )
                 for i_pid, pid in enumerate(pids)
             )
@@ -2140,7 +2140,7 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, beta_bounds, horizon,
              optimizer='lbfgsb', n_starts=10, alpha_bounds=None,
              log_ell_0=None, beta_0=None,
              popsize=15, mutation=(0.5, 1), recombination=0.7, seed=None,
-             n_ell_grid=100, n_beta_grid=100):
+             n_ell_samples=100, n_beta_samples=100):
     """
     Fit model for a single subject, by multi-start L-BFGS-B ('lbfgsb'),
     differential evolution ('de'), or a Bayesian grid approximation ('grid').
@@ -2221,13 +2221,13 @@ def _fit_ppt(pid, df_ppt, log_ell_bounds, beta_bounds, horizon,
         if agent_type == 'info':
             ells, ell_w = None, np.ones(1)
         else:
-            ells, ell_w = model_ell_grid(n_ell_grid, (agent_type,), log_ell_bounds)
+            ells, ell_w = model_ell_grid(n_ell_samples, (agent_type,), log_ell_bounds)
             ell_w = ell_w[agent_type]
         log_ells = None if ells is None else np.log(ells)
 
         ## beta grid, out to 4 prior sds, with its half-normal prior weights
         loc, scale = BETA_PRIOR
-        betas = np.linspace(beta_bounds[0], min(beta_bounds[1], loc + 4 * scale), n_beta_grid)
+        betas = np.linspace(beta_bounds[0], min(beta_bounds[1], loc + 4 * scale), n_beta_samples)
         beta_w = ell_weights(betas, truncnorm(-loc / scale, np.inf, loc=loc, scale=scale))
 
         ## NLL of every cell, then posterior and evidence

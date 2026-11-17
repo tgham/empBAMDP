@@ -138,8 +138,8 @@ def main():
                         help="'lbfgsb': multi-start L-BFGS-B, allows open --log_ell_bounds; "
                              "'de': differential evolution, needs finite bounds; "
                              "'grid': Bayesian grid approximation over (log ell, beta).")
-    parser.add_argument('--n_ell_grid', type=int, default= 200, help='log-ell grid size for --optimizer grid')
-    parser.add_argument('--n_beta_grid', type=int, default=200, help='beta grid size for --optimizer grid')
+    parser.add_argument('--n_ell_samples', type=int, default= 200, help='log-ell grid size for --optimizer grid')
+    parser.add_argument('--n_beta_samples', type=int, default=200, help='beta grid size for --optimizer grid')
     parser.add_argument('--n_starts', type=int, default=10,
                         help='starting points for --optimizer lbfgsb')
     parser.add_argument('--inv_temp_bounds', type=float, default=(0.001, 100), nargs=2)
@@ -214,8 +214,8 @@ def main():
         n_starts=args.n_starts,
         alpha_bounds=args.alpha_bounds and tuple(args.alpha_bounds),
         seed=args.seed,
-        n_ell_grid=args.n_ell_grid,
-        n_beta_grid=args.n_beta_grid,
+        n_ell_samples=args.n_ell_samples,
+        n_beta_samples=args.n_beta_samples,
     )
     if os.path.dirname(out):
         os.makedirs(os.path.dirname(out), exist_ok=True)
